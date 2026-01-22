@@ -5,7 +5,6 @@
 *.db-shm
 node_modules/
 dist/
-build/
 bin/
 lib/
 linux_amd64/
