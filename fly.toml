@@ -1,0 +1,42 @@
+# fly.io configuration for bchat with LanceDB RAG support
+app = "bchat"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile.fly"
+
+[env]
+  MEMOS_MODE = "prod"
+  MEMOS_PORT = "5230"
+  TZ = "UTC"
+
+  # RAG Pipeline Configuration
+  RAG_PIPELINE_ENABLED = "true"
+  LANCEDB_STORAGE_PROVIDER = "s3"
+  LANCEDB_S3_ENDPOINT = "fly.storage.tigris.dev"
+  LANCEDB_S3_REGION = "auto"
+  EMBEDDING_PROVIDER = "openrouter"
+  EMBEDDING_MODEL = "openai/text-embedding-3-small"
+  LLM_VERIFIER_ENABLED = "false"
+
+[http_service]
+  internal_port = 5230
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 25
+    soft_limit = 20
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
+
+[mounts]
+  source = "memos_data"
+  destination = "/var/opt/memos"
