@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+  <link rel="icon" type="image/webp" href="/logo.webp" />
+  <link rel="manifest" href="/site.webmanifest" />
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f4f4f5" />
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#18181b" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+  <!-- memos.metadata.head -->
+  <title>Memos</title>
+  <!-- Datastar for real-time SSE notifications -->
+  <script type="module"
+    src="https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.0-beta.11/bundles/datastar.js"></script>
+  <style>
+    /* SSE Notification Toast Styles */
+    #sse-toast-container {
+      position: fixed;
+      top: 1rem;
+      right: 1rem;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      max-width: 320px;
+    }
+
+    .sse-notification-toast {
+      background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+      color: white;
+      padding: 12px 16px;
+      border-radius: 12px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+      animation: slideIn 0.3s ease-out;
+      transition: transform 0.2s, opacity 0.2s;
+    }
+
+    .sse-notification-toast:hover {
+      transform: translateX(-5px);
+    }
+
+    .sse-toast-icon {
+      font-size: 1.5rem;
+    }
+
+    .sse-toast-content {
+      flex: 1;
+      font-size: 0.9rem;
+    }
+
+    .sse-toast-close {
+      background: rgba(255, 255, 255, 0.2);
+      border: none;
+      color: white;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      cursor: pointer;
+      font-size: 1rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .sse-toast-close:hover {
+      background: rgba(255, 255, 255, 0.3);
+    }
+
+    @keyframes slideIn {
+      from {
+        transform: translateX(100%);
+        opacity: 0;
+      }
+
+      to {
+        transform: translateX(0);
+        opacity: 1;
+      }
+    }
+
+    /* SSE Notification List Item Styles */
+    .sse-notification-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 12px;
+      border-radius: 8px;
+      background: #f0f9ff;
+      border-left: 4px solid #3b82f6;
+      margin-bottom: 8px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .sse-notification-item:hover {
+      background: #e0f2fe;
+    }
+
+    .sse-notification-item.unread {
+      background: #dbeafe;
+      font-weight: 500;
+    }
+
+    .sse-notification-icon {
+      font-size: 1.25rem;
+    }
+
+    .sse-notification-content {
+      flex: 1;
+    }
+
+    .sse-notification-message {
+      margin: 0 0 4px 0;
+      color: #1e3a5f;
+    }
+
+    .sse-notification-time {
+      font-size: 0.75rem;
+      color: #64748b;
+    }
+
+    /* Dark mode */
+    @media (prefers-color-scheme: dark) {
+      .sse-notification-toast {
+        background: linear-gradient(135deg, #1e40af 0%, #1e3a8a 100%);
+      }
+
+      .sse-notification-item {
+        background: #1e293b;
+        border-left-color: #3b82f6;
+      }
+
+      .sse-notification-item:hover {
+        background: #334155;
+      }
+
+      .sse-notification-item.unread {
+        background: #1e3a5f;
+      }
+
+      .sse-notification-message {
+        color: #e2e8f0;
+      }
+    }
+  </style>
+</head>
+
+<body class="text-base w-full min-h-[100svh] bg-zinc-50 dark:bg-zinc-900">
+  <!-- SSE Toast Container (for real-time popup notifications) -->
+  <div id="sse-toast-container"></div>
+
+  <div id="root" class="relative w-full min-h-full"></div>
+  <script type="module" src="/src/main.tsx"></script>
+  <!-- memos.metadata.body -->
+</body>
+
+</html>

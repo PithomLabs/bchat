@@ -1,0 +1,335 @@
+# Bulovas Restorations Knowledge Base
+
+> **Purpose:** Factual information only. For behavioral rules, see POLICY.MD. For conversation flow, see SCRIPT.MD.
+> **Last Updated:** January 2026
+
+---
+
+## Company Overview
+<!-- @section: company_overview -->
+
+**Bulovas Restorations Inc.** is Long Island's premier full-service property damage and disaster restoration company.
+
+| Attribute | Details |
+|-----------|---------|
+| **Company Name** | Bulovas Restorations Inc. |
+| **Service Type** | Property Damage & Disaster Restoration |
+| **Certifications** | IICRC Certified (Water, Fire, Mold) |
+| **Availability** | 24/7/365 Emergency Service |
+
+### Our Commitment
+
+We are in the business of helping people. We know how devastating a disaster can be and are committed to providing whatever it takes to minimize physical damage and get your life back to normal.
+
+---
+
+## Contact Information
+<!-- @section: contact_info -->
+
+| Type | Value |
+|------|-------|
+| **Emergency Phone** | **(631) 358-5200** |
+| **Toll-Free** | 855-DRYITNOW (855-379-4866) |
+| **Email** | info@bulovasrestorations.com |
+| **Address** | 85-7 Air Park Drive, Ronkonkoma, NY 11779 |
+
+---
+
+## Services We Provide
+
+### Water Damage Restoration
+<!-- @service: water_damage, emergency: true -->
+
+24/7 emergency water damage restoration including extraction, drying, and complete restoration.
+
+**Common Causes:** Floods, storms, burst pipes, sewage backups, appliance failures
+
+**Why Act Fast:** Mold can grow within 24-48 hours of water damage.
+
+**Response Time:** 30 minutes for emergencies
+
+---
+
+### Fire & Smoke Damage Restoration
+<!-- @service: fire_damage, emergency: true -->
+
+Complete restoration from fire, smoke, and soot damage including structural repairs and content restoration.
+
+**What We Handle:** Structural fire damage, smoke/soot removal, odor elimination, water damage from firefighting, content restoration
+
+**Response Time:** Same day
+
+---
+
+### Mold Remediation
+<!-- @service: mold_remediation, emergency: false -->
+
+Safe, thorough mold removal without harmful chemicals.
+
+**Our Process:**
+1. Visual examination
+2. Air quality and moisture testing
+3. Laboratory testing
+4. Isolation of infected areas
+5. Safe removal and remediation
+6. Prevention recommendations
+
+**Health Note:** Mold exposure can cause sneezing, coughs, headaches, and flu-like symptoms.
+
+**Common Scenarios We Handle:**
+- Water damage leading to mold
+- Flooding/leak aftermath
+- Pet accidents with moisture penetration (if carpet padding is wet, mold can develop within 24-48 hours)
+- Biological contamination with persistent odor
+
+**Key Question:** Is there moisture trapped in flooring/padding? → Mold risk → We can help.
+
+---
+
+### Sewage Cleanup
+<!-- @service: sewage_cleanup, emergency: true -->
+
+Professional sewage backup cleanup and sanitization. This is a biohazard requiring professional handling.
+
+**Response Time:** Immediate
+
+---
+
+### Puffback & Soot Cleanup
+<!-- @service: puffback_cleanup, emergency: true -->
+
+24-hour emergency soot and puffback cleanup.
+
+**What is Puffback?** When a furnace or boiler malfunctions and discharges soot throughout your home.
+
+**Why Act Fast:** Soot turns from powdery to sticky form quickly.
+
+---
+
+### Emergency Board Up
+<!-- @service: board_up, emergency: true -->
+
+Immediate property securing after damage to protect against weather and intruders.
+
+---
+
+### Air Duct Cleaning
+<!-- @service: duct_cleaning, emergency: false -->
+
+Professional HVAC air duct cleaning.
+
+**Benefits:** Better air quality, lower energy costs, reduced allergens, longer HVAC life
+
+---
+
+### Commercial Restoration
+<!-- @service: commercial_restoration, emergency: true -->
+
+Complete restoration services for commercial properties including offices, hospitals, malls, restaurants, and factories.
+
+---
+
+## Services We Don't Provide
+
+### General Plumbing
+<!-- @exclusion: general_plumbing -->
+
+We specialize in water damage restoration, not routine plumbing repairs.
+
+**Recommendation:** Contact a licensed plumber.
+
+**Exception:** We handle plumbing-related water damage restoration.
+
+---
+
+### General Construction
+<!-- @exclusion: general_construction -->
+
+We focus on restoration after damage, not new construction or renovations.
+
+**Recommendation:** Contact a general contractor.
+
+---
+
+### Pest Control
+<!-- @exclusion: pest_control -->
+
+We do not provide pest extermination.
+
+**Recommendation:** Contact a licensed pest control company.
+
+**Note:** We DO handle cleanup after wildlife damage (raccoon damage, bird waste).
+
+---
+
+## Service Areas
+
+### Areas We Serve
+<!-- @coverage: include -->
+
+**Nassau County, NY:**
+Albertson, Atlantic Beach, Baldwin, Bayville, Bellmore, Bethpage, Carle Place, East Meadow, Floral Park, Franklin Square, Freeport, Garden City, Glen Cove, Great Neck, Hempstead, Hicksville, Jericho, Lawrence, Levittown, Long Beach, Lynbrook, Manhasset, Massapequa, Merrick, Mineola, New Hyde Park, Oceanside, Oyster Bay, Plainview, Port Washington, Rockville Centre, Roosevelt, Seaford, Uniondale, Valley Stream, Wantagh, Westbury
+
+**Suffolk County, NY:**
+Amityville, Babylon, Bay Shore, Bohemia, Brentwood, Brookhaven, Centereach, Central Islip, Commack, Coram, Deer Park, Dix Hills, East Hampton, East Islip, Farmingville, Hampton Bays, Hauppauge, Holbrook, Huntington, Islip, Lake Grove, Lindenhurst, Medford, Melville, Montauk, Northport, Patchogue, Port Jefferson, Riverhead, Ronkonkoma, Sayville, Smithtown, Southampton, Stony Brook, West Babylon, West Islip
+
+---
+
+### Areas Outside Our Coverage
+<!-- @coverage: exclude -->
+
+We do not service:
+- Queens
+- Brooklyn
+- Bronx
+- Manhattan
+- Staten Island
+- New Jersey
+- Connecticut
+- Westchester
+
+---
+
+## Frequently Asked Questions
+
+### How quickly can you respond?
+<!-- @faq: response_time -->
+
+For emergencies in Nassau and Suffolk County: **30-minute response time**. Available 24/7/365.
+
+---
+
+### Do you work with insurance?
+<!-- @faq: insurance -->
+
+Yes, we work with **all insurance carriers**. We handle the paperwork and communicate directly with your insurance company.
+
+**Important:** You have the right to choose your own restoration company.
+
+---
+
+### How much does it cost?
+<!-- @faq: pricing -->
+
+Every situation is unique. We provide **free estimates** after a certified technician inspects the damage.
+
+---
+
+### Do I need to be home?
+<!-- @faq: presence -->
+
+Yes, we recommend an authorized adult be present during the initial inspection.
+
+---
+
+## Emergency Safety Procedures
+
+### Water Emergency
+<!-- @safety: water_emergency -->
+
+**If you have active water damage:**
+
+1. Turn off the main water valve if safe
+2. Turn off electricity to affected areas at the breaker
+3. Stay away from standing water near outlets
+4. Do NOT use electrical appliances near water
+5. Do NOT use a regular vacuum
+6. Call: **(631) 358-5200**
+
+**Sewage?** This is a biohazard. Keep everyone away.
+
+---
+
+### Fire/Smoke Emergency
+<!-- @safety: fire_emergency -->
+
+**After a fire or puffback:**
+
+1. Ensure everyone is safe and evacuated
+2. Do NOT re-enter until cleared
+3. Do NOT touch soot-covered surfaces
+4. Do NOT try to clean yourself
+5. Open windows if safe
+6. Document damage with photos
+7. Call: **(631) 358-5200**
+
+---
+
+### Mold Discovery
+<!-- @safety: mold_emergency -->
+
+**If you've discovered mold:**
+
+1. Do NOT disturb it (spreads spores)
+2. Avoid the affected area
+3. Do NOT use bleach
+4. Note any health symptoms
+5. Call: **(631) 358-5200**
+
+---
+
+### General Odor Safety
+<!-- @safety: odor_general -->
+
+**For any strong odor situation (pet accidents, musty smells, unknown sources):**
+
+1. Ventilate the area - open windows, run fans
+2. Keep pets and children away from the affected area
+3. Do NOT use harsh chemicals to mask the odor
+4. If odor persists 24-48 hours, moisture may be trapped underneath
+5. Persistent moisture = mold risk → Call us: **(631) 358-5200**
+
+**Important:** Strong, persistent odors often indicate hidden moisture problems that can lead to mold growth.
+
+---
+
+## Payment Information
+<!-- @section: payment -->
+
+### Payment Methods
+
+| Type | Accepted |
+|------|----------|
+| Credit Cards | Visa, MasterCard, AmEx, Discover |
+| Checks | Personal and business |
+| Insurance | Direct billing |
+| Financing | Payment plans available |
+
+### Payment Terms
+
+| Service Type | Terms |
+|--------------|-------|
+| Emergency Services | No upfront deposit |
+| Standard Projects | 25-50% deposit may apply |
+| Insurance Claims | Direct billing, no out-of-pocket wait |
+| Estimates | Free |
+
+---
+
+## Escalation Contact
+<!-- @section: escalation_contact -->
+
+For escalations and complaints:
+
+| Contact | Details |
+|---------|---------|
+| **Email** | info@bulovasrestorations.com |
+| **Phone** | (631) 358-5200 |
+
+> **Note:** For escalation handling protocols, see POLICY.MD
+
+---
+
+## Company Guarantees
+<!-- @section: guarantees -->
+
+- 100% Satisfaction Guaranteed
+- IICRC Certified Technicians
+- Licensed and Fully Insured
+- Locally Owned & Operated
+- Most Up-to-Date Equipment
+- Free Estimates
+
+---
+
+*Bulovas Restorations Inc. - Long Island's Premier Restoration Company*
