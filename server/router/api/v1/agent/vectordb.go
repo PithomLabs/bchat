@@ -81,16 +81,26 @@ type SearchQuery struct {
 	ActiveOnly   bool     // Only return active chunks
 
 	// Pagination
-	TopK   int     // Number of results to return
+	TopK     int     // Number of results to return
 	MinScore float64 // Minimum similarity score (0-1)
+
+	// Hybrid search parameters
+	UseHybridSearch bool    // Enable hybrid mode (vector + BM25)
+	VectorWeight    float64 // Weight for vector score (0-1, default: 0.7)
+	TextWeight      float64 // Weight for BM25 score (0-1, default: 0.3)
 }
 
 // SearchResult holds the search results.
 type SearchResult struct {
 	Chunks  []DocumentChunk
-	Scores  []float64 // Similarity scores (0-1, higher is better)
+	Scores  []float64 // Combined hybrid scores (or vector-only if hybrid disabled)
 	Total   int       // Total matching documents
 	Latency time.Duration
+
+	// Hybrid search debug/analysis fields
+	SearchMode   string    // "vector", "hybrid", or "fts"
+	VectorScores []float64 // Raw vector similarity scores (optional)
+	BM25Scores   []float64 // Raw BM25 scores (optional)
 }
 
 // VectorDBStats holds database statistics.
@@ -208,7 +218,7 @@ func (db *MemoryVectorDB) Delete(ctx context.Context, tenantID int32, audienceTy
 	return nil
 }
 
-// Search performs hybrid search.
+// Search performs vector or hybrid search based on query parameters.
 func (db *MemoryVectorDB) Search(ctx context.Context, query SearchQuery) (*SearchResult, error) {
 	start := time.Now()
 
@@ -230,14 +240,43 @@ func (db *MemoryVectorDB) Search(ctx context.Context, query SearchQuery) (*Searc
 	defer db.mu.RUnlock()
 
 	type scoredChunk struct {
-		chunk DocumentChunk
-		score float64
+		chunk       DocumentChunk
+		score       float64
+		vectorScore float64
+		bm25Score   float64
 	}
 
 	var scored []scoredChunk
 
+	// Determine weights for hybrid search
+	vectorWeight := query.VectorWeight
+	textWeight := query.TextWeight
+	if query.UseHybridSearch && vectorWeight == 0 && textWeight == 0 {
+		vectorWeight = 0.7
+		textWeight = 0.3
+	}
+
+	// Build BM25 index if hybrid search is enabled
+	var bm25Scorer *BM25Scorer
+	if query.UseHybridSearch && query.QueryText != "" {
+		bm25Scorer = NewBM25Scorer()
+		for id, chunk := range db.chunks {
+			// Only index chunks that pass filters
+			if chunk.TenantID != query.TenantID {
+				continue
+			}
+			if query.AudienceType != "" && chunk.AudienceType != query.AudienceType {
+				continue
+			}
+			if query.ActiveOnly && !chunk.IsActive {
+				continue
+			}
+			bm25Scorer.AddDocument(id, chunk.Title+" "+chunk.Content)
+		}
+	}
+
 	// Filter and score chunks
-	for _, chunk := range db.chunks {
+	for id, chunk := range db.chunks {
 		// Apply filters
 		if chunk.TenantID != query.TenantID {
 			continue
@@ -263,9 +302,27 @@ func (db *MemoryVectorDB) Search(ctx context.Context, query SearchQuery) (*Searc
 
 		// Calculate similarity score
 		if len(chunk.Embedding) > 0 {
-			score := cosineSimilarity(queryEmbedding, chunk.Embedding)
-			if score >= query.MinScore {
-				scored = append(scored, scoredChunk{chunk: chunk, score: score})
+			vectorScore := cosineSimilarity(queryEmbedding, chunk.Embedding)
+
+			var finalScore float64
+			var bm25Score float64
+
+			if query.UseHybridSearch && bm25Scorer != nil {
+				// Calculate BM25 score
+				bm25Score = bm25Scorer.Score(query.QueryText, id)
+				// Linear combination of vector and BM25 scores
+				finalScore = vectorWeight*vectorScore + textWeight*bm25Score
+			} else {
+				finalScore = vectorScore
+			}
+
+			if finalScore >= query.MinScore {
+				scored = append(scored, scoredChunk{
+					chunk:       chunk,
+					score:       finalScore,
+					vectorScore: vectorScore,
+					bm25Score:   bm25Score,
+				})
 			}
 		}
 	}
@@ -284,17 +341,34 @@ func (db *MemoryVectorDB) Search(ctx context.Context, query SearchQuery) (*Searc
 		scored = scored[:topK]
 	}
 
+	// Determine search mode
+	searchMode := "vector"
+	if query.UseHybridSearch {
+		searchMode = "hybrid"
+	}
+
 	// Build result
 	result := &SearchResult{
-		Chunks:  make([]DocumentChunk, len(scored)),
-		Scores:  make([]float64, len(scored)),
-		Total:   len(scored),
-		Latency: time.Since(start),
+		Chunks:     make([]DocumentChunk, len(scored)),
+		Scores:     make([]float64, len(scored)),
+		Total:      len(scored),
+		Latency:    time.Since(start),
+		SearchMode: searchMode,
+	}
+
+	// Include component scores for hybrid search
+	if query.UseHybridSearch {
+		result.VectorScores = make([]float64, len(scored))
+		result.BM25Scores = make([]float64, len(scored))
 	}
 
 	for i, sc := range scored {
 		result.Chunks[i] = sc.chunk
 		result.Scores[i] = sc.score
+		if query.UseHybridSearch {
+			result.VectorScores[i] = sc.vectorScore
+			result.BM25Scores[i] = sc.bm25Score
+		}
 	}
 
 	return result, nil
@@ -396,6 +470,126 @@ func cosineSimilarity(a, b []float32) float64 {
 	}
 
 	return dotProduct / (math.Sqrt(normA) * math.Sqrt(normB))
+}
+
+// ============================================================================
+// BM25 SCORER (for Hybrid Search)
+// ============================================================================
+
+// BM25Scorer implements BM25 scoring for in-memory search.
+// BM25 (Best Matching 25) is a ranking function used in information retrieval.
+type BM25Scorer struct {
+	k1        float64            // Term frequency saturation parameter (default: 1.2)
+	b         float64            // Length normalization parameter (default: 0.75)
+	docs      map[string][]string // Document ID -> tokenized words
+	docFreq   map[string]int     // Term -> number of documents containing term
+	avgLen    float64            // Average document length
+	totalDocs int                // Total number of documents
+}
+
+// NewBM25Scorer creates a new BM25 scorer with standard parameters.
+func NewBM25Scorer() *BM25Scorer {
+	return &BM25Scorer{
+		k1:      1.2,
+		b:       0.75,
+		docs:    make(map[string][]string),
+		docFreq: make(map[string]int),
+	}
+}
+
+// AddDocument adds a document to the BM25 index.
+func (s *BM25Scorer) AddDocument(id, text string) {
+	tokens := tokenize(text)
+	s.docs[id] = tokens
+	s.totalDocs++
+
+	// Track which terms appear in this document (for IDF calculation)
+	seen := make(map[string]bool)
+	for _, token := range tokens {
+		if !seen[token] {
+			s.docFreq[token]++
+			seen[token] = true
+		}
+	}
+
+	// Recalculate average document length
+	var totalLen int
+	for _, docTokens := range s.docs {
+		totalLen += len(docTokens)
+	}
+	s.avgLen = float64(totalLen) / float64(s.totalDocs)
+}
+
+// Score calculates the BM25 score for a query against a document.
+// Returns a normalized score between 0 and 1.
+func (s *BM25Scorer) Score(query, docID string) float64 {
+	docTokens, exists := s.docs[docID]
+	if !exists || s.totalDocs == 0 {
+		return 0
+	}
+
+	queryTokens := tokenize(query)
+	if len(queryTokens) == 0 {
+		return 0
+	}
+
+	// Count term frequencies in document
+	termFreq := make(map[string]int)
+	for _, token := range docTokens {
+		termFreq[token]++
+	}
+
+	docLen := float64(len(docTokens))
+	var score float64
+
+	for _, term := range queryTokens {
+		tf := float64(termFreq[term])
+		if tf == 0 {
+			continue
+		}
+
+		// IDF: log((N - n + 0.5) / (n + 0.5) + 1)
+		// where N = total docs, n = docs containing term
+		n := float64(s.docFreq[term])
+		idf := math.Log((float64(s.totalDocs)-n+0.5)/(n+0.5) + 1)
+
+		// BM25 term score: IDF * (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * docLen/avgLen))
+		numerator := tf * (s.k1 + 1)
+		denominator := tf + s.k1*(1-s.b+s.b*docLen/s.avgLen)
+		score += idf * numerator / denominator
+	}
+
+	// Normalize score to 0-1 range using sigmoid-like function
+	// This ensures BM25 scores are comparable to cosine similarity scores
+	normalized := score / (score + 1)
+	return normalized
+}
+
+// tokenize splits text into lowercase tokens, removing common punctuation.
+func tokenize(text string) []string {
+	// Convert to lowercase and split on whitespace/punctuation
+	text = strings.ToLower(text)
+
+	// Replace common punctuation with spaces
+	replacer := strings.NewReplacer(
+		".", " ", ",", " ", "!", " ", "?", " ", ";", " ", ":", " ",
+		"(", " ", ")", " ", "[", " ", "]", " ", "{", " ", "}", " ",
+		"\"", " ", "'", " ", "-", " ", "_", " ", "/", " ", "\\", " ",
+	)
+	text = replacer.Replace(text)
+
+	// Split and filter empty strings
+	words := strings.Fields(text)
+
+	// Filter out very short words (likely noise)
+	var tokens []string
+	for _, word := range words {
+		if len(word) >= 2 {
+			tokens = append(tokens, word)
+		}
+	}
+
+	return tokens
 }
 
 // ============================================================================

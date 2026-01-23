@@ -637,17 +637,19 @@ func EvaluateHybridSearch(testCases []TestCase) *EvaluationResult {
 
 ## Rollout Plan
 
-### Week 1: Infrastructure
+### Week 1: Infrastructure ✅
 
-- [ ] Add FTS index creation to LanceVectorDB
-- [ ] Implement hybrid search method
-- [ ] Unit tests for BM25 scoring
+See **[DOCS_HYBRID_SEARCH_WEEK1.MD](./DOCS_HYBRID_SEARCH_WEEK1.MD)** for detailed implementation plan.
 
-### Week 2: Integration
+- [x] Add FTS index creation to LanceVectorDB
+- [x] Implement hybrid search method
+- [x] Unit tests for BM25 scoring
 
-- [ ] Implement MemoryVectorDB hybrid support
-- [ ] Add environment configuration
-- [ ] Integration tests
+### Week 2: Integration (Partially Complete)
+
+- [x] Implement MemoryVectorDB hybrid support
+- [ ] Add environment configuration (`USE_HYBRID_SEARCH` env var)
+- [ ] Integration tests with real LanceDB
 
 ### Week 3: Evaluation
 

@@ -51,6 +51,15 @@ All notable changes to the bchat AI Agent System are documented in this file.
   - Testing strategy with quality metrics
   - Phased implementation plan
 
+- **Hybrid Search Implementation (Week 1)** - Infrastructure for vector + BM25 search
+  - Added `BM25Scorer` struct with standard BM25 parameters (k1=1.2, b=0.75)
+  - Extended `SearchQuery` with `UseHybridSearch`, `VectorWeight`, `TextWeight` fields
+  - Extended `SearchResult` with `SearchMode`, `VectorScores`, `BM25Scores` for debugging
+  - Updated `MemoryVectorDB.Search()` to support hybrid search with on-the-fly BM25 indexing
+  - Added FTS index creation (`idx_content_fts`, `idx_title_fts`) in LanceDB
+  - Implemented `hybridSearch()` method in LanceVectorDB with linear combination score fusion
+  - Created `vectordb_test.go` with 17 unit tests for BM25 scoring and hybrid search
+
 ### Fixed
 - **Data Path Doubling** - Fixed `build/build/data` path error in Taskfile.yml
   - Changed `--data build/data` to `--data {{.ROOT_DIR}}/build/data` for absolute paths

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -183,6 +184,17 @@ func (db *LanceVectorDB) createIndexes(ctx context.Context) error {
 	// Create BTree index for tenant filtering
 	if err := db.table.CreateIndexWithName(ctx, []string{"tenant_id"}, contracts.IndexTypeBTree, "idx_tenant"); err != nil {
 		slog.Warn("Failed to create tenant index", "error", err)
+	}
+
+	// Create FTS (Full-Text Search) index for BM25 keyword search
+	// This enables hybrid search combining vector similarity with keyword matching
+	if err := db.table.CreateIndexWithName(ctx, []string{"content"}, contracts.IndexTypeFts, "idx_content_fts"); err != nil {
+		slog.Warn("Failed to create FTS index on content", "error", err)
+	}
+
+	// Create FTS index on title for title-based keyword search
+	if err := db.table.CreateIndexWithName(ctx, []string{"title"}, contracts.IndexTypeFts, "idx_title_fts"); err != nil {
+		slog.Warn("Failed to create FTS index on title", "error", err)
 	}
 
 	return nil
@@ -372,7 +384,7 @@ func (db *LanceVectorDB) Delete(ctx context.Context, tenantID int32, audienceTyp
 	return nil
 }
 
-// Search performs hybrid search.
+// Search performs vector or hybrid search based on query parameters.
 func (db *LanceVectorDB) Search(ctx context.Context, query SearchQuery) (*SearchResult, error) {
 	start := time.Now()
 
@@ -394,6 +406,33 @@ func (db *LanceVectorDB) Search(ctx context.Context, query SearchQuery) (*Search
 	}
 
 	// Build filter
+	filter := db.buildFilter(query)
+
+	// Determine topK
+	topK := query.TopK
+	if topK <= 0 {
+		topK = 10
+	}
+
+	// Determine weights for hybrid search
+	vectorWeight := query.VectorWeight
+	textWeight := query.TextWeight
+	if query.UseHybridSearch && vectorWeight == 0 && textWeight == 0 {
+		vectorWeight = 0.7
+		textWeight = 0.3
+	}
+
+	// Execute search based on mode
+	if query.UseHybridSearch && query.QueryText != "" {
+		return db.hybridSearch(ctx, query.QueryText, queryEmbedding, filter, topK, query.MinScore, vectorWeight, textWeight, start)
+	}
+
+	// Vector-only search (default)
+	return db.vectorOnlySearch(ctx, queryEmbedding, filter, topK, query.MinScore, start)
+}
+
+// buildFilter constructs the SQL filter string from query parameters.
+func (db *LanceVectorDB) buildFilter(query SearchQuery) string {
 	var filterParts []string
 	filterParts = append(filterParts, fmt.Sprintf("tenant_id = %d", query.TenantID))
 
@@ -413,49 +452,157 @@ func (db *LanceVectorDB) Search(ctx context.Context, query SearchQuery) (*Search
 		filterParts = append(filterParts, fmt.Sprintf("content_type IN (%s)", strings.Join(types, ", ")))
 	}
 
-	filter := strings.Join(filterParts, " AND ")
+	return strings.Join(filterParts, " AND ")
+}
 
-	// Determine topK
-	topK := query.TopK
-	if topK <= 0 {
-		topK = 10
-	}
-
-	// Execute vector search with filter
+// vectorOnlySearch performs pure vector similarity search.
+func (db *LanceVectorDB) vectorOnlySearch(ctx context.Context, queryEmbedding []float32, filter string, topK int, minScore float64, start time.Time) (*SearchResult, error) {
 	results, err := db.table.VectorSearchWithFilter(ctx, "embedding", queryEmbedding, topK, filter)
 	if err != nil {
 		return nil, fmt.Errorf("vector search failed: %w", err)
 	}
 
-	// Parse results
 	chunks := make([]DocumentChunk, 0, len(results))
 	scores := make([]float64, 0, len(results))
 
 	for _, row := range results {
 		chunk := db.rowToDocumentChunk(row)
+		score := db.distanceToScore(row)
 
-		// Calculate similarity score from distance
-		// LanceDB returns L2 distance, convert to similarity
-		var score float64 = 1.0
-		if dist, ok := row["_distance"].(float64); ok {
-			// Convert L2 distance to similarity score (0-1)
-			score = 1.0 / (1.0 + dist)
-		} else if dist, ok := row["_distance"].(float32); ok {
-			score = 1.0 / (1.0 + float64(dist))
-		}
-
-		if score >= query.MinScore {
+		if score >= minScore {
 			chunks = append(chunks, chunk)
 			scores = append(scores, score)
 		}
 	}
 
 	return &SearchResult{
-		Chunks:  chunks,
-		Scores:  scores,
-		Total:   len(chunks),
-		Latency: time.Since(start),
+		Chunks:     chunks,
+		Scores:     scores,
+		Total:      len(chunks),
+		Latency:    time.Since(start),
+		SearchMode: "vector",
 	}, nil
+}
+
+// hybridSearch performs combined vector + FTS search with score fusion.
+func (db *LanceVectorDB) hybridSearch(ctx context.Context, queryText string, queryEmbedding []float32, filter string, topK int, minScore float64, vectorWeight, textWeight float64, start time.Time) (*SearchResult, error) {
+	// Fetch more candidates for fusion (2x topK from each source)
+	candidateK := topK * 2
+
+	// Run vector search
+	vectorResults, err := db.table.VectorSearchWithFilter(ctx, "embedding", queryEmbedding, candidateK, filter)
+	if err != nil {
+		slog.Warn("Vector search failed in hybrid mode", "error", err)
+		vectorResults = nil
+	}
+
+	// Run FTS search on content column
+	ftsResults, err := db.table.FullTextSearchWithFilter(ctx, "content", queryText, filter)
+	if err != nil {
+		// FTS may not be supported - fall back to vector-only
+		slog.Debug("FTS search failed, falling back to vector-only", "error", err)
+		return db.vectorOnlySearch(ctx, queryEmbedding, filter, topK, minScore, start)
+	}
+
+	// Build score maps for fusion
+	type scoredDoc struct {
+		chunk       DocumentChunk
+		vectorScore float64
+		ftsScore    float64
+		hybridScore float64
+	}
+
+	docMap := make(map[string]*scoredDoc)
+
+	// Process vector results
+	for i, row := range vectorResults {
+		chunk := db.rowToDocumentChunk(row)
+		score := db.distanceToScore(row)
+
+		if _, exists := docMap[chunk.ID]; !exists {
+			docMap[chunk.ID] = &scoredDoc{chunk: chunk}
+		}
+		docMap[chunk.ID].vectorScore = score
+
+		// Track rank for potential RRF fusion (not currently used, but available)
+		_ = i
+	}
+
+	// Process FTS results
+	for i, row := range ftsResults {
+		chunk := db.rowToDocumentChunk(row)
+
+		// FTS score from LanceDB (if available)
+		var ftsScore float64 = 1.0
+		if score, ok := row["_score"].(float64); ok {
+			// Normalize FTS score to 0-1 range
+			ftsScore = score / (score + 1)
+		} else if score, ok := row["_score"].(float32); ok {
+			ftsScore = float64(score) / (float64(score) + 1)
+		} else {
+			// Use rank-based score if no _score available
+			ftsScore = 1.0 / float64(i+1)
+		}
+
+		if _, exists := docMap[chunk.ID]; !exists {
+			docMap[chunk.ID] = &scoredDoc{chunk: chunk}
+		}
+		docMap[chunk.ID].ftsScore = ftsScore
+	}
+
+	// Calculate hybrid scores using linear combination
+	for _, doc := range docMap {
+		doc.hybridScore = vectorWeight*doc.vectorScore + textWeight*doc.ftsScore
+	}
+
+	// Convert to slice and sort by hybrid score
+	docs := make([]*scoredDoc, 0, len(docMap))
+	for _, doc := range docMap {
+		if doc.hybridScore >= minScore {
+			docs = append(docs, doc)
+		}
+	}
+
+	sort.Slice(docs, func(i, j int) bool {
+		return docs[i].hybridScore > docs[j].hybridScore
+	})
+
+	// Apply topK limit
+	if len(docs) > topK {
+		docs = docs[:topK]
+	}
+
+	// Build result
+	result := &SearchResult{
+		Chunks:       make([]DocumentChunk, len(docs)),
+		Scores:       make([]float64, len(docs)),
+		Total:        len(docs),
+		Latency:      time.Since(start),
+		SearchMode:   "hybrid",
+		VectorScores: make([]float64, len(docs)),
+		BM25Scores:   make([]float64, len(docs)),
+	}
+
+	for i, doc := range docs {
+		result.Chunks[i] = doc.chunk
+		result.Scores[i] = doc.hybridScore
+		result.VectorScores[i] = doc.vectorScore
+		result.BM25Scores[i] = doc.ftsScore
+	}
+
+	return result, nil
+}
+
+// distanceToScore converts LanceDB distance to similarity score (0-1).
+func (db *LanceVectorDB) distanceToScore(row map[string]interface{}) float64 {
+	// LanceDB returns L2 distance, convert to similarity
+	if dist, ok := row["_distance"].(float64); ok {
+		return 1.0 / (1.0 + dist)
+	}
+	if dist, ok := row["_distance"].(float32); ok {
+		return 1.0 / (1.0 + float64(dist))
+	}
+	return 1.0
 }
 
 // rowToDocumentChunk converts a LanceDB result row to a DocumentChunk.
