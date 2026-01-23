@@ -495,15 +495,13 @@ fly secrets set LANCEDB_STORAGE_PROVIDER=s3
 
 2. **SQLite Default** - While PostgreSQL and MySQL drivers exist, SQLite is the primary tested database.
 
-3. **RAG Phase 2** - RAG indexing is complete but retrieval integration into prompts (Phase 3) is pending.
+3. **No Batch Operations** - Simulations run one at a time. Batch simulation support is planned.
 
-4. **No External Widget** - The chat widget is admin-only. External embeddable widget is planned.
+4. **English Only** - i18n infrastructure exists but only English translations are complete.
 
-5. **No Batch Operations** - Simulations run one at a time. Batch simulation support is planned.
+5. **No Analytics Dashboard** - Analysis results are per-transcript. Historical trends dashboard is planned.
 
-6. **English Only** - i18n infrastructure exists but only English translations are complete.
-
-7. **No Analytics Dashboard** - Analysis results are per-transcript. Historical trends dashboard is planned.
+6. **Widget Limitations** - External widget exists but has limited customization (see [DOCS_WIDGET.MD](./DOCS_WIDGET.MD)).
 
 ### Known Issues
 
@@ -530,6 +528,7 @@ fly secrets set LANCEDB_STORAGE_PROVIDER=s3
 | [CHANGELOG.MD](./CHANGELOG.MD) | Project changelog |
 | [DOCS_ENV_VAR.MD](./DOCS_ENV_VAR.MD) | Environment variables reference |
 | [DOCS_TASKFILE.MD](./DOCS_TASKFILE.MD) | Build commands reference |
+| [DOCS_WIDGET.MD](./DOCS_WIDGET.MD) | External chat widget integration |
 | [DOCS_RAG_PIPELINE.MD](./DOCS_RAG_PIPELINE.MD) | RAG architecture details |
 | [DOCS_SIMULATION.MD](./DOCS_SIMULATION.MD) | Simulation feature specification |
 | [DOCS_LANCEDB.MD](./DOCS_LANCEDB.MD) | LanceDB implementation plan |

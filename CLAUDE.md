@@ -11,6 +11,7 @@ See `docs/DOCS_CHAT_DESIGN_4_IMP_2-PROGRESS.MD` for detailed progress report.
 - `docs/CHANGELOG.MD` - Project changelog with dated entries
 - `docs/DOCS_ENV_VAR.MD` - Environment variables reference
 - `docs/DOCS_TASKFILE.MD` - Build and run commands reference
+- `docs/DOCS_WIDGET.MD` - External chat widget integration guide
 
 ## Design Documents
 - `docs/DOCS_CHAT_DESIGN_4_IMP_2.MD` - Main implementation specification
@@ -360,6 +361,8 @@ LANCEDB_STORAGE_PROVIDER=local|s3
 4. Fixed data path handling in Taskfile.yml (absolute paths with {{.ROOT_DIR}})
 5. Added MockEmbedding provider for testing without API keys
 6. Added REINDEX_RAG startup flag for bulk re-indexing
+7. Created DOCS_WIDGET.MD for external chat widget integration
+8. Completed RAG Phases 3-5 (retrieval pipeline, prompt simplification, cleanup)
 
 ### Previous Work (2026-01-20)
 1. Added Agent Simulation feature with SSE streaming
@@ -384,9 +387,9 @@ RAG (Retrieval-Augmented Generation) pipeline using LanceDB-Go to improve respon
 |-------|-------------|--------|
 | Phase 1 | Foundation - LanceDB dependencies, vectordb.go, schema, chunker, embedding service | ✅ Complete |
 | Phase 2 | Indexing Pipeline - Index on KB/Policy upload, batch embedding | ✅ Complete |
-| Phase 3 | Retrieval Pipeline - Hybrid search, intent-aware retrieval | 🔶 Pending |
-| Phase 4 | Prompt Simplification - New template, refactor buildSystemPrompt() | 🔶 Pending |
-| Phase 5 | Cleanup & Optimization - Remove compliance.go, grounding.go, optional verifier | 🔶 Pending |
+| Phase 3 | Retrieval Pipeline - Hybrid search, intent-aware retrieval | ✅ Complete |
+| Phase 4 | Prompt Simplification - New template, refactor buildSystemPrompt() | ✅ Complete |
+| Phase 5 | Cleanup & Optimization - Remove compliance.go, grounding.go, optional verifier | ✅ Complete |
 
 ### Phase 1 Files Created
 - `server/router/api/v1/agent/vectordb.go` - LanceDB connection and operations
@@ -433,12 +436,10 @@ LLM_VERIFIER_ENABLED=true|false  # Default: false
 ---
 
 ## Pending Work
-- External chat widget React component
 - Comprehensive test suite
 - API documentation (OpenAPI/Swagger)
 - Batch simulation runs
 - Analysis history dashboard
-- LanceDB RAG Phase 3-5 implementation (retrieval, prompt simplification, cleanup)
 
 ---
 

@@ -31,6 +31,13 @@ All notable changes to the bchat AI Agent System are documented in this file.
   - LanceDB storage configuration
   - RAG pipeline feature flags
 
+- **DOCS_WIDGET.MD** - External chat widget integration guide
+  - JavaScript embed approach documentation
+  - API reference for widget.js and chat/ext endpoints
+  - Customization options and CSS override examples
+  - Security considerations and troubleshooting
+  - React integration example
+
 ### Fixed
 - **Data Path Doubling** - Fixed `build/build/data` path error in Taskfile.yml
   - Changed `--data build/data` to `--data {{.ROOT_DIR}}/build/data` for absolute paths
