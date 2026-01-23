@@ -100,6 +100,16 @@ All notable changes to the bchat AI Agent System are documented in this file.
   - Interpretation guidelines for tuning weights
   - Future capabilities roadmap (hallucination detection, A/B testing)
 
+- **DOCS_HALLUCINATION_GROUNDING.MD** - Hallucination detection and grounding guide
+  - Three-layer validation system (regex, sanitization, LLM verification)
+  - Output sanitizer patterns and contact correction
+  - LLM-based semantic verification against KB
+  - Violation types and severity levels (critical/high/medium/low)
+  - Grounding score calculation methodology
+  - VerificationMetrics for monitoring
+  - Configuration guide for enabling verification
+  - Integration points in service.go
+
 ### Fixed
 - **Data Path Doubling** - Fixed `build/build/data` path error in Taskfile.yml
   - Changed `--data build/data` to `--data {{.ROOT_DIR}}/build/data` for absolute paths
