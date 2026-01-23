@@ -6,10 +6,17 @@ This is a Memos-based application with an AI Chat Agent system for multi-tenant 
 ## Current Implementation Status
 See `docs/DOCS_CHAT_DESIGN_4_IMP_2-PROGRESS.MD` for detailed progress report.
 
-## Key Design Documents
+## Key Documentation
+- `docs/DOCS_README.MD` - **Comprehensive project documentation** (start here)
+- `docs/CHANGELOG.MD` - Project changelog with dated entries
+- `docs/DOCS_ENV_VAR.MD` - Environment variables reference
+- `docs/DOCS_TASKFILE.MD` - Build and run commands reference
+
+## Design Documents
 - `docs/DOCS_CHAT_DESIGN_4_IMP_2.MD` - Main implementation specification
 - `docs/DOCS_CHAT_DESIGN_4_IMP_2-PROGRESS.MD` - Implementation progress and pending items
 - `docs/DOCS_SIMULATION.MD` - Agent simulation feature specification
+- `docs/DOCS_RAG_PIPELINE.MD` - RAG pipeline architecture and configuration
 - `docs/DOCS_LANCEDB.MD` - LanceDB RAG implementation plan
 - `docs/DOCS_LANCEDB_PHASE1.MD` - Phase 1: Foundation (complete)
 - `docs/DOCS_LANCEDB_PHASE2.MD` - Phase 2: Indexing Pipeline (complete)
@@ -272,13 +279,23 @@ if !hasPermission {
 
 ## Environment Variables
 
+See `docs/DOCS_ENV_VAR.MD` for complete documentation including configuration priority.
+
 ```bash
 # Required
 OPENROUTER_API_KEY=<your-key>
 
-# Optional (defaults shown)
+# LLM (optional)
 LLM_MODEL=openai/gpt-4o-mini
+
+# RAG Pipeline (optional)
+RAG_PIPELINE_ENABLED=true|false
+EMBEDDING_PROVIDER=local|openrouter|mock
+EMBEDDING_MODEL=text-embedding-3-small
+LANCEDB_STORAGE_PROVIDER=local|s3
 ```
+
+**Configuration Priority:** Tenant Config (Agent Admin) > Environment Variable > Hardcoded Default
 
 ---
 
@@ -336,7 +353,15 @@ LLM_MODEL=openai/gpt-4o-mini
 
 ---
 
-## Recent Work (2026-01-20)
+## Recent Work (2026-01-23)
+1. Added "Rebuild Index" button to Agent Admin for per-tenant RAG reindexing
+2. Added `task run:rag` and `task run:rag:mock` Taskfile commands
+3. Created DOCS_ENV_VAR.MD, DOCS_TASKFILE.MD, CHANGELOG.MD, DOCS_README.MD
+4. Fixed data path handling in Taskfile.yml (absolute paths with {{.ROOT_DIR}})
+5. Added MockEmbedding provider for testing without API keys
+6. Added REINDEX_RAG startup flag for bulk re-indexing
+
+### Previous Work (2026-01-20)
 1. Added Agent Simulation feature with SSE streaming
 2. Added conversation history dropdown (simulations + real chats)
 3. Added SCRIPT.MD support for conversation flow guides
@@ -370,9 +395,14 @@ RAG (Retrieval-Augmented Generation) pipeline using LanceDB-Go to improve respon
 
 ### Phase 2 Changes
 - `server/router/api/v1/agent/vectordb.go` - Added full `LanceVectorDB` implementation with Insert, Delete, Search, Close, Stats
-- `server/router/api/v1/agent/service.go` - Added VectorDB and Chunker to Service struct, initialized in NewService
-- `server/router/api/v1/agent/handlers.go` - Added `indexContentForRAG()` function, called after KB/Policy import
+- `server/router/api/v1/agent/service.go` - Added VectorDB and Chunker to Service struct, initialized in NewService; added `ReindexTenantContent()` and `ReindexAllContent()`
+- `server/router/api/v1/agent/handlers.go` - Added `indexContentForRAG()` function, called after KB/Policy import; added `HandleReindexTenant` endpoint
 - `Taskfile.yml` - Fixed Linux build to use shared library (.so) instead of static (.a) due to BSD/GNU ar incompatibility
+
+### RAG Admin Features
+- **Rebuild Index Button** - Agent Admin UI button to trigger per-tenant reindexing
+- **REINDEX_RAG Startup Flag** - Set `REINDEX_RAG=true` to re-index all tenants on server start
+- **Mock Embeddings** - `EMBEDDING_PROVIDER=mock` for testing without API keys
 
 ### Key Environment Variables (RAG)
 ```bash
@@ -405,10 +435,10 @@ LLM_VERIFIER_ENABLED=true|false  # Default: false
 ## Pending Work
 - External chat widget React component
 - Comprehensive test suite
-- API documentation
+- API documentation (OpenAPI/Swagger)
 - Batch simulation runs
 - Analysis history dashboard
-- LanceDB RAG Phase 2-5 implementation
+- LanceDB RAG Phase 3-5 implementation (retrieval, prompt simplification, cleanup)
 
 ---
 

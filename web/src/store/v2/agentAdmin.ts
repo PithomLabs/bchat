@@ -547,6 +547,28 @@ const agentAdminStore = (() => {
     }
   };
 
+  const reindexTenant = async (slug: string): Promise<{ success: boolean; chunks?: number; error?: string }> => {
+    state.setPartial({ isSaving: true, error: null });
+
+    try {
+      const response = await axios.post<{ success: boolean; chunks: number; message: string }>(
+        `/api/v1/agent/${slug}/reindex`
+      );
+
+      runInAction(() => {
+        state.isSaving = false;
+      });
+
+      return { success: true, chunks: response.data.chunks };
+    } catch (error: any) {
+      runInAction(() => {
+        state.isSaving = false;
+        state.error = error.response?.data?.message || "Failed to rebuild index";
+      });
+      return { success: false, error: error.response?.data?.message || "Failed to rebuild index" };
+    }
+  };
+
   const toggleTenantActive = async (slug: string, isActive: boolean): Promise<boolean> => {
     state.setPartial({ isSaving: true, error: null });
 
@@ -772,6 +794,7 @@ const agentAdminStore = (() => {
     updateTenantFiles,
     restoreFileVersion,
     deleteTenant,
+    reindexTenant,
     toggleTenantActive,
     clearSelectedTenant,
     clearError,

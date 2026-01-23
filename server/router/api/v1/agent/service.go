@@ -186,6 +186,98 @@ func (s *Service) ReindexAllContent(ctx context.Context) error {
 	return nil
 }
 
+// ReindexTenantContent re-indexes KB and Policy content for a specific tenant.
+// Returns the number of chunks indexed.
+func (s *Service) ReindexTenantContent(ctx context.Context, tenantID int32) (int, error) {
+	if s.vectorDB == nil || s.chunker == nil {
+		return 0, fmt.Errorf("RAG pipeline not initialized")
+	}
+
+	// Check if using NoOpVectorDB
+	if _, isNoOp := s.vectorDB.(*NoOpVectorDB); isNoOp {
+		return 0, fmt.Errorf("RAG pipeline disabled (using NoOpVectorDB)")
+	}
+
+	// Get tenant info for logging
+	tenant, err := s.store.GetAgentTenant(ctx, &store.FindAgentTenant{ID: &tenantID})
+	if err != nil {
+		return 0, fmt.Errorf("failed to get tenant: %w", err)
+	}
+
+	slog.Info("Starting RAG reindex for tenant", "tenantID", tenantID, "tenant", tenant.Slug)
+
+	// Get all source files for this tenant
+	files, err := s.store.ListAgentSourceFiles(ctx, &store.FindAgentSourceFile{
+		TenantID: &tenantID,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("failed to list source files: %w", err)
+	}
+
+	// Group files by audience type
+	audienceFiles := make(map[string]map[string]string) // audience -> fileType -> content
+	for _, f := range files {
+		if _, ok := audienceFiles[f.AudienceType]; !ok {
+			audienceFiles[f.AudienceType] = make(map[string]string)
+		}
+		audienceFiles[f.AudienceType][f.FileType] = f.Content
+	}
+
+	totalChunks := 0
+
+	// Index each audience
+	for audience, fileMap := range audienceFiles {
+		var parsedKB *ParsedKB
+		var parsedPolicy *ParsedPolicy
+
+		if kbContent, ok := fileMap["kb"]; ok && kbContent != "" {
+			parsedKB, _ = s.parser.ParseKB(kbContent, tenantID, audience)
+		}
+		if policyContent, ok := fileMap["policy"]; ok && policyContent != "" {
+			parsedPolicy, _ = s.parser.ParsePolicy(policyContent, tenantID, audience)
+		}
+
+		if parsedKB == nil && parsedPolicy == nil {
+			continue
+		}
+
+		// Delete existing chunks for this tenant/audience
+		if err := s.vectorDB.Delete(ctx, tenantID, audience); err != nil {
+			slog.Warn("Failed to delete existing chunks", "tenantID", tenantID, "audience", audience, "error", err)
+		}
+
+		// Chunk content
+		var allChunks []DocumentChunk
+		if parsedKB != nil {
+			kbChunks := s.chunker.ChunkKBContent(parsedKB, tenantID, audience, 1)
+			allChunks = append(allChunks, kbChunks...)
+		}
+		if parsedPolicy != nil {
+			policyChunks := s.chunker.ChunkPolicyContent(parsedPolicy, tenantID, audience, 1)
+			allChunks = append(allChunks, policyChunks...)
+		}
+
+		if len(allChunks) == 0 {
+			continue
+		}
+
+		// Insert chunks
+		if err := s.vectorDB.Insert(ctx, allChunks); err != nil {
+			return totalChunks, fmt.Errorf("failed to insert chunks for audience %s: %w", audience, err)
+		}
+
+		totalChunks += len(allChunks)
+		slog.Info("Reindexed content for tenant",
+			"tenantID", tenantID,
+			"tenant", tenant.Slug,
+			"audience", audience,
+			"chunks", len(allChunks))
+	}
+
+	slog.Info("RAG reindex completed for tenant", "tenantID", tenantID, "tenant", tenant.Slug, "totalChunks", totalChunks)
+	return totalChunks, nil
+}
+
 // ============================================================================
 // MEMORY SESSION STORE (for external anonymous sessions)
 // ============================================================================

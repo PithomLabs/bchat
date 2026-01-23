@@ -1,0 +1,155 @@
+# Changelog
+
+All notable changes to the bchat AI Agent System are documented in this file.
+
+---
+
+## 2026-01-23
+
+### Added
+- **Rebuild Index Button** - Added "Rebuild Index" button to Agent Admin page for per-tenant RAG reindexing
+  - New `ReindexTenantContent()` function in `service.go`
+  - New `HandleReindexTenant` handler at `POST /api/v1/agent/:slug/reindex`
+  - Frontend button with loading state and success/error toast notifications
+  - Requires ADMIN role or `api:config` permission
+
+- **Taskfile Run Commands** - Added convenience commands for running with RAG enabled
+  - `task run:rag` - Run with OpenRouter embeddings (requires `OPENROUTER_API_KEY`)
+  - `task run:rag:mock` - Run with mock embeddings (no API key needed)
+  - Both commands automatically set `RAG_PIPELINE_ENABLED=true` and library paths
+
+- **DOCS_TASKFILE.MD** - Comprehensive Taskfile commands documentation
+  - Quick reference table
+  - Detailed command descriptions
+  - Common workflows
+  - Troubleshooting guide
+  - Build and Run matrices
+
+- **DOCS_ENV_VAR.MD** - Environment variables documentation
+  - Configuration priority documentation (Tenant Config > Env Var > Default)
+  - Embedding provider settings
+  - LanceDB storage configuration
+  - RAG pipeline feature flags
+
+### Fixed
+- **Data Path Doubling** - Fixed `build/build/data` path error in Taskfile.yml
+  - Changed `--data build/data` to `--data {{.ROOT_DIR}}/build/data` for absolute paths
+
+---
+
+## 2026-01-22
+
+### Added
+- **MockEmbedding Provider** - Added mock embedding implementation for testing
+  - Generates deterministic pseudo-random vectors based on text hash
+  - No API key required
+  - Configured via `EMBEDDING_PROVIDER=mock`
+
+- **REINDEX_RAG Feature** - Added re-indexing capability on startup
+  - Set `REINDEX_RAG=true` to re-index all tenant content on server start
+  - Useful when switching embedding providers
+
+- **DOCS_RAG_PIPELINE.MD** - RAG pipeline documentation
+  - Architecture overview
+  - Configuration options
+  - Provider setup guides
+
+---
+
+## 2026-01-21
+
+### Added
+- **LanceDB RAG Phase 2** - Indexing Pipeline implementation
+  - `indexContentForRAG()` function called after KB/Policy file uploads
+  - Full `LanceVectorDB` implementation with Insert, Delete, Search, Close, Stats
+  - Document chunking with metadata preservation
+  - Batch embedding support
+
+- **Dockerfile.fly** - fly.io deployment configuration
+  - Multi-stage build with LanceDB native libraries
+  - Configurable for S3 storage backend
+
+### Changed
+- **Taskfile.yml** - Fixed Linux build configuration
+  - Changed from static library (.a) to shared library (.so) for LanceDB
+  - BSD/GNU ar incompatibility workaround
+
+---
+
+## 2026-01-20
+
+### Added
+- **Agent Simulation Feature** - Full simulation system with SSE streaming
+  - Simulate conversations between agent and virtual customer
+  - Stream responses in real-time
+  - Store transcripts for analysis
+
+- **Conversation History Dropdown** - View past simulations and real chats
+  - Unified history view
+  - Quick access to transcripts
+
+- **SCRIPT.MD Support** - Conversation flow guide system
+  - Define conversation stages and transitions
+  - Configure opening scripts
+  - Stored separately from RAG (not chunked)
+
+- **Transcript Benchmark Analysis** - Analyze simulation transcripts
+  - Score conversations against criteria
+  - Identify improvement areas
+
+- **Plain Text Response Formatting** - Removed markdown from agent responses
+  - Cleaner output for chat widgets
+  - Configurable per tenant
+
+### Removed
+- **Chat Session Logs Section** - Removed from Agent Admin page (redundant with conversation history)
+
+---
+
+## 2026-01-19
+
+### Added
+- **LanceDB RAG Phase 1** - Foundation implementation
+  - `vectordb.go` - LanceDB connection and operations interface
+  - `embedding.go` - Embedding service (local + OpenRouter providers)
+  - `chunker.go` - Document chunking logic with overlap
+
+- **NoOpVectorDB** - No-operation vector database for non-RAG builds
+  - Allows code to compile without LanceDB dependencies
+  - Returns empty results for all operations
+
+---
+
+## 2026-01-18
+
+### Added
+- **Multi-tenant Agent System** - Core agent infrastructure
+  - Tenant management with slug-based routing
+  - KB.MD, POLICY.MD, SCRIPT.MD file support
+  - Permission-based access control (RBAC)
+
+- **Agent Admin Page** - Full administration interface
+  - Tenant list and detail views
+  - File upload for KB/Policy/Script
+  - LLM configuration (model selection, temperature)
+  - User permission management
+
+- **Chat API** - Real-time chat endpoint
+  - SSE streaming responses
+  - Conversation history tracking
+  - Intent extraction and logging
+
+---
+
+## Earlier Development
+
+### Core Platform
+- Memos-based application foundation
+- SQLite database with auto-migrations
+- React frontend with MobX state management
+- Go backend with Echo framework
+- OpenRouter LLM integration via `go-openrouter`
+
+---
+
+*This changelog follows a date-based format. For detailed implementation specifications, see the corresponding DOCS_*.MD files in the docs/ directory.*

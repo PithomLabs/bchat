@@ -67,7 +67,7 @@ tasks:
       - go run ./bin/memos/main.go --mode dev
 
   dev:backend:rag:
-    desc: Run backend dev server with RAG support
+    desc: Run backend dev server with RAG support (go run)
     deps: [setup:lancedb]
     env:
       CGO_ENABLED: "1"
@@ -78,6 +78,28 @@ tasks:
       EMBEDDING_PROVIDER: "local"
     cmds:
       - go run -tags rag ./bin/memos/main.go --mode dev
+
+  run:rag:
+    desc: Run compiled binary with RAG enabled (local storage, OpenRouter embeddings)
+    deps: [build:backend:rag]
+    env:
+      LD_LIBRARY_PATH: "{{.LANCEDB_LIB_DIR}}:${LD_LIBRARY_PATH}"
+      RAG_PIPELINE_ENABLED: "true"
+      LANCEDB_STORAGE_PROVIDER: "local"
+      EMBEDDING_PROVIDER: "openrouter"
+    cmds:
+      - ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
+
+  run:rag:mock:
+    desc: Run compiled binary with RAG enabled (local storage, mock embeddings)
+    deps: [build:backend:rag]
+    env:
+      LD_LIBRARY_PATH: "{{.LANCEDB_LIB_DIR}}:${LD_LIBRARY_PATH}"
+      RAG_PIPELINE_ENABLED: "true"
+      LANCEDB_STORAGE_PROVIDER: "local"
+      EMBEDDING_PROVIDER: "mock"
+    cmds:
+      - ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
 
   generate:
     desc: Run go generate

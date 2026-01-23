@@ -245,6 +245,7 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	adminGroup.PATCH("/:slug", s.agentHandler.HandleUpdateTenant)
 	adminGroup.DELETE("/:slug", s.agentHandler.HandleDeleteTenant)
 	adminGroup.POST("/:slug/import", s.agentHandler.HandleImportSingleFile)
+	adminGroup.POST("/:slug/reindex", s.agentHandler.HandleReindexTenant)
 	adminGroup.GET("/:slug/export", s.agentHandler.HandleExport)
 	adminGroup.GET("/:slug/files/:audienceType/:fileType/versions", s.agentHandler.HandleGetFileVersions)
 	adminGroup.POST("/:slug/files/:audienceType/:fileType/restore", s.agentHandler.HandleRestoreFileVersion)

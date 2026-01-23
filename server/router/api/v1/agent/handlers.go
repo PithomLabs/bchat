@@ -547,6 +547,38 @@ func (h *Handler) HandleImportSingleFile(c echo.Context) error {
 	})
 }
 
+// HandleReindexTenant triggers RAG reindexing for a specific tenant.
+// POST /api/v1/agent/:slug/reindex
+// Requires: ADMIN role OR api:config permission
+func (h *Handler) HandleReindexTenant(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	// Get tenant
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	// Check admin role OR api:config permission
+	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermAPIConfig) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or api:config permission")
+	}
+
+	// Perform reindex
+	chunks, err := h.service.ReindexTenantContent(ctx, tenant.ID)
+	if err != nil {
+		slog.Error("reindex failed", "tenantID", tenant.ID, "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Reindex failed: "+err.Error())
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"success": true,
+		"chunks":  chunks,
+		"message": fmt.Sprintf("Successfully reindexed %d chunks", chunks),
+	})
+}
+
 func stringPtr(s string) *string {
 	return &s
 }

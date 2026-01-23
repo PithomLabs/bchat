@@ -18,6 +18,7 @@ const AgentAdmin = observer(() => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState<AgentTenant | null>(null);
   const [showVersionsModal, setShowVersionsModal] = useState<{ slug: string; audienceType: string; fileType: string } | null>(null);
+  const [isRebuilding, setIsRebuilding] = useState(false);
 
   const { tenants, selectedTenant, isLoading, isSaving, error, fileVersions, llmConfig, tenantPermissions, myPermissions, script, isLoadingScript, learningMemory, isLoadingLearning } = agentAdminStore.state;
 
@@ -91,6 +92,18 @@ const AgentAdmin = observer(() => {
         toast.success(t("agent-admin.deleted-successfully"));
         setShowDeleteModal(null);
       }
+    }
+  };
+
+  const handleRebuildIndex = async () => {
+    if (!selectedTenant) return;
+    setIsRebuilding(true);
+    const result = await agentAdminStore.reindexTenant(selectedTenant.tenant.slug);
+    setIsRebuilding(false);
+    if (result.success) {
+      toast.success(t("agent-admin.rebuild-index-success", { chunks: result.chunks || 0 }));
+    } else {
+      toast.error(result.error || t("agent-admin.rebuild-index-failed"));
     }
   };
 
@@ -300,6 +313,22 @@ const AgentAdmin = observer(() => {
               canUpload={canUpload}
               canRestore={canRestore}
             />
+
+            {/* Rebuild Index - Admin or api:config permission */}
+            {(isAdmin || canConfigApi) && (
+              <div className="bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800 p-4">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h3 className="font-medium text-blue-700 dark:text-blue-300">{t("agent-admin.rebuild-index")}</h3>
+                    <p className="text-sm text-blue-600 dark:text-blue-400">{t("agent-admin.rebuild-index-desc")}</p>
+                  </div>
+                  <Button color="primary" onClick={handleRebuildIndex} loading={isRebuilding}>
+                    <RefreshCwIcon className="w-4 h-4 mr-2" />
+                    {t("agent-admin.rebuild-index")}
+                  </Button>
+                </div>
+              </div>
+            )}
 
             {/* Delete Tenant - Admin only */}
             {isAdmin && (

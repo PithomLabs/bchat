@@ -35,7 +35,9 @@ go install github.com/go-task/task/v3/cmd/task@latest
 | `task build` | Build frontend + backend |
 | `task build:rag` | Build with RAG/LanceDB support |
 | `task dev:backend` | Run dev server |
-| `task dev:backend:rag` | Run dev server with RAG enabled |
+| `task dev:backend:rag` | Run dev server with RAG (go run) |
+| `task run:rag` | Run compiled binary with RAG + OpenRouter |
+| `task run:rag:mock` | Run compiled binary with RAG + mock embeddings |
 
 ---
 
@@ -227,6 +229,61 @@ EMBEDDING_PROVIDER=local
 
 ---
 
+### task run:rag
+
+Run the compiled binary with RAG enabled using OpenRouter embeddings.
+
+```bash
+task run:rag
+```
+
+**What it does:**
+1. Builds the backend with RAG support (if needed)
+2. Sets RAG environment variables
+3. Runs the compiled binary
+
+**Environment set automatically:**
+```bash
+RAG_PIPELINE_ENABLED=true
+LANCEDB_STORAGE_PROVIDER=local
+EMBEDDING_PROVIDER=openrouter
+```
+
+**Requirements:**
+- `OPENROUTER_API_KEY` environment variable must be set
+
+**Usage:**
+```bash
+export OPENROUTER_API_KEY=sk-or-v1-xxx
+task run:rag
+```
+
+---
+
+### task run:rag:mock
+
+Run the compiled binary with RAG enabled using mock embeddings (no API key needed).
+
+```bash
+task run:rag:mock
+```
+
+**What it does:**
+1. Builds the backend with RAG support (if needed)
+2. Sets RAG environment variables with mock embeddings
+3. Runs the compiled binary
+
+**Environment set automatically:**
+```bash
+RAG_PIPELINE_ENABLED=true
+LANCEDB_STORAGE_PROVIDER=local
+EMBEDDING_PROVIDER=mock
+```
+
+**Note:** Mock embeddings generate random vectors - useful for testing the pipeline without API costs.
+
+---
+
 ## Utility Commands
 
 ### task generate
@@ -305,18 +362,17 @@ task dev:frontend
 
 ### Development with RAG (Mock Embeddings)
 
-RAG development without embedding server:
+RAG development without embedding server or API keys:
 
 ```bash
-# Build with RAG support
-task build:backend:rag
+# Single command - builds and runs with mock embeddings
+task run:rag:mock
 
-# Run with mock embeddings
-RAG_PIPELINE_ENABLED=true \
-LANCEDB_STORAGE_PROVIDER=local \
-EMBEDDING_PROVIDER=mock \
-./build/memos --mode dev
+# Terminal 2 (optional): Frontend dev server
+task dev:frontend
 ```
+
+**Note:** Mock embeddings generate random vectors - useful for testing the RAG pipeline without API costs.
 
 ---
 
@@ -325,16 +381,14 @@ EMBEDDING_PROVIDER=mock \
 RAG development with production-quality embeddings:
 
 ```bash
-# Build with RAG support
-task build:backend:rag
+# Set your API key first
+export OPENROUTER_API_KEY=sk-or-v1-xxx
 
-# Run with OpenRouter embeddings
-RAG_PIPELINE_ENABLED=true \
-LANCEDB_STORAGE_PROVIDER=local \
-EMBEDDING_PROVIDER=openrouter \
-EMBEDDING_MODEL=openai/text-embedding-3-small \
-OPENROUTER_API_KEY=sk-or-v1-xxx \
-./build/memos --mode dev --data build/data
+# Single command - builds and runs with OpenRouter embeddings
+task run:rag
+
+# Terminal 2 (optional): Frontend dev server
+task dev:frontend
 ```
 
 ---
@@ -454,5 +508,16 @@ EMBEDDING_PROVIDER=mock ./build/memos --mode dev
 
 ---
 
-*Document Version: 1.0*
-*Created: 2026-01-23*
+## Run Matrix
+
+| Command | Builds First | RAG Enabled | Embedding Provider | API Key Required |
+|---------|--------------|-------------|-------------------|------------------|
+| `task dev:backend` | No | No | - | No |
+| `task dev:backend:rag` | No | Yes | local | No (needs embedding server) |
+| `task run:rag` | Yes | Yes | openrouter | Yes |
+| `task run:rag:mock` | Yes | Yes | mock | No |
+
+---
+
+*Document Version: 1.1*
+*Updated: 2026-01-23*
