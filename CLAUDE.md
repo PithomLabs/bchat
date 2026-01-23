@@ -19,6 +19,7 @@ See `docs/DOCS_CHAT_DESIGN_4_IMP_2-PROGRESS.MD` for detailed progress report.
 - `docs/DOCS_CHAT_DESIGN_4_IMP_2-PROGRESS.MD` - Implementation progress and pending items
 - `docs/DOCS_SIMULATION.MD` - Agent simulation feature specification
 - `docs/DOCS_RAG_PIPELINE.MD` - RAG pipeline architecture and configuration
+- `docs/DOCS_HYBRID_SEARCH.MD` - Hybrid search (vector + BM25) implementation plan
 - `docs/DOCS_LANCEDB.MD` - LanceDB RAG implementation plan
 - `docs/DOCS_LANCEDB_PHASE1.MD` - Phase 1: Foundation (complete)
 - `docs/DOCS_LANCEDB_PHASE2.MD` - Phase 2: Indexing Pipeline (complete)

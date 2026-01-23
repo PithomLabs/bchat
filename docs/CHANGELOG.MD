@@ -38,6 +38,19 @@ All notable changes to the bchat AI Agent System are documented in this file.
   - Security considerations and troubleshooting
   - React integration example
 
+- **DOCS_PENDING.MD** - Pending work and known limitations tracking
+  - Technical limitations and known issues
+  - Technical debt and TODOs
+  - Security considerations
+  - Future enhancement plans
+
+- **DOCS_HYBRID_SEARCH.MD** - Hybrid search implementation plan
+  - Vector + BM25 keyword search design
+  - LanceDB Tantivy FTS integration
+  - Score fusion strategies (linear combination, RRF)
+  - Testing strategy with quality metrics
+  - Phased implementation plan
+
 ### Fixed
 - **Data Path Doubling** - Fixed `build/build/data` path error in Taskfile.yml
   - Changed `--data build/data` to `--data {{.ROOT_DIR}}/build/data` for absolute paths
