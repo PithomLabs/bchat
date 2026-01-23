@@ -1,0 +1,458 @@
+# Taskfile Commands Reference
+
+**Status:** Active
+**Date:** 2026-01-23
+**Related Documents:**
+- [DOCS_RAG_PIPELINE.MD](./DOCS_RAG_PIPELINE.MD) - RAG pipeline configuration
+- [DOCS_ENV_VAR.MD](./DOCS_ENV_VAR.MD) - Environment variables
+
+---
+
+## Overview
+
+This project uses [Task](https://taskfile.dev/) as the build tool. All commands are defined in `Taskfile.yml`.
+
+### Prerequisites
+
+Install Task:
+```bash
+# macOS
+brew install go-task
+
+# Linux
+sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+
+# Go install
+go install github.com/go-task/task/v3/cmd/task@latest
+```
+
+---
+
+## Quick Reference
+
+| Command | Description |
+|---------|-------------|
+| `task build` | Build frontend + backend |
+| `task build:rag` | Build with RAG/LanceDB support |
+| `task dev:backend` | Run dev server |
+| `task dev:backend:rag` | Run dev server with RAG enabled |
+
+---
+
+## Setup Commands
+
+### task setup
+
+Install all dependencies (npm packages and Go modules).
+
+```bash
+task setup
+```
+
+**What it does:**
+- Runs `npm install` in the `web/` directory
+- Runs `go mod download`
+
+---
+
+### task setup:lancedb
+
+Download LanceDB native libraries required for RAG pipeline.
+
+```bash
+task setup:lancedb
+```
+
+**What it does:**
+- Creates `lib/` and `include/` directories
+- Downloads platform-specific LanceDB libraries from GitHub
+- Required before building with `-tags rag`
+
+**Platform support:**
+- `linux_amd64` - Linux x86_64
+- `darwin_amd64` - macOS Intel
+- `darwin_arm64` - macOS Apple Silicon
+
+**Note:** This is automatically run as a dependency of `build:backend:rag`.
+
+---
+
+## Build Commands
+
+### task build
+
+Build everything (frontend + backend) without RAG support.
+
+```bash
+task build
+```
+
+**Output:** `build/memos`
+
+**Equivalent to:**
+```bash
+task build:frontend
+task build:backend
+```
+
+---
+
+### task build:frontend
+
+Build frontend assets only.
+
+```bash
+task build:frontend
+```
+
+**What it does:**
+- Runs `npm run release` in `web/` directory
+- Outputs to `web/dist/`
+
+---
+
+### task build:backend
+
+Build the Go binary without RAG support.
+
+```bash
+task build:backend
+```
+
+**Output:** `build/memos`
+
+**Note:** This build does NOT include LanceDB. RAG will use in-memory storage only.
+
+---
+
+### task build:backend:rag
+
+Build the Go binary with LanceDB RAG support for local disk storage.
+
+```bash
+task build:backend:rag
+```
+
+**Output:** `build/memos` (with RAG/LanceDB support)
+
+**What it does:**
+1. Automatically runs `setup:lancedb` if needed
+2. Sets CGO flags for LanceDB native library
+3. Builds with `-tags rag` flag
+
+**Requirements:**
+- CGO enabled (automatic)
+- C compiler (gcc/clang)
+- LanceDB native libraries (auto-downloaded)
+
+**Environment set during build:**
+```bash
+CGO_ENABLED=1
+CGO_CFLAGS="-I<project>/include"
+CGO_LDFLAGS="-L<project>/lib/linux_amd64 -llancedb_go ..."
+```
+
+---
+
+### task build:rag
+
+Build everything (frontend + backend) with RAG support.
+
+```bash
+task build:rag
+```
+
+**Equivalent to:**
+```bash
+task build:frontend
+task build:backend:rag
+```
+
+---
+
+## Development Commands
+
+### task dev:frontend
+
+Run the frontend development server with hot reload.
+
+```bash
+task dev:frontend
+```
+
+**URL:** http://localhost:5173 (Vite default)
+
+---
+
+### task dev:backend
+
+Run the backend development server.
+
+```bash
+task dev:backend
+```
+
+**URL:** http://localhost:8081
+
+**Equivalent to:**
+```bash
+go run ./bin/memos/main.go --mode dev
+```
+
+---
+
+### task dev:backend:rag
+
+Run the backend development server with RAG pipeline enabled.
+
+```bash
+task dev:backend:rag
+```
+
+**What it does:**
+1. Automatically runs `setup:lancedb` if needed
+2. Sets CGO and library path environment
+3. Enables RAG pipeline with local embedding provider
+4. Runs with `-tags rag` flag
+
+**Environment set automatically:**
+```bash
+CGO_ENABLED=1
+LD_LIBRARY_PATH=<project>/lib/linux_amd64
+RAG_PIPELINE_ENABLED=true
+EMBEDDING_PROVIDER=local
+```
+
+**Note:** Requires local embedding server running (`task embedding:server`).
+
+---
+
+## Utility Commands
+
+### task generate
+
+Run Go code generation.
+
+```bash
+task generate
+```
+
+**What it does:**
+- Runs `go generate ./...`
+
+---
+
+### task embedding:server
+
+Run the local embedding server (Python/FastAPI).
+
+```bash
+task embedding:server
+```
+
+**URL:** http://localhost:8001
+
+**Requirements:**
+- Python 3.8+
+- sentence-transformers
+- FastAPI
+- uvicorn
+
+**Install dependencies:**
+```bash
+pip install sentence-transformers fastapi uvicorn
+```
+
+**What it does:**
+- Creates `scripts/embedding_server.py` if not exists
+- Runs FastAPI server with sentence-transformers
+- Uses `all-MiniLM-L6-v2` model (384 dimensions)
+
+---
+
+## Common Workflows
+
+### Development (No RAG)
+
+Simple development without RAG features:
+
+```bash
+# Terminal 1: Frontend
+task dev:frontend
+
+# Terminal 2: Backend
+task dev:backend
+```
+
+---
+
+### Development with RAG (Local Embeddings)
+
+Full RAG development with local embedding server:
+
+```bash
+# Terminal 1: Embedding server
+task embedding:server
+
+# Terminal 2: Backend with RAG
+task dev:backend:rag
+
+# Terminal 3: Frontend
+task dev:frontend
+```
+
+---
+
+### Development with RAG (Mock Embeddings)
+
+RAG development without embedding server:
+
+```bash
+# Build with RAG support
+task build:backend:rag
+
+# Run with mock embeddings
+RAG_PIPELINE_ENABLED=true \
+LANCEDB_STORAGE_PROVIDER=local \
+EMBEDDING_PROVIDER=mock \
+./build/memos --mode dev
+```
+
+---
+
+### Development with RAG (OpenRouter Embeddings)
+
+RAG development with production-quality embeddings:
+
+```bash
+# Build with RAG support
+task build:backend:rag
+
+# Run with OpenRouter embeddings
+RAG_PIPELINE_ENABLED=true \
+LANCEDB_STORAGE_PROVIDER=local \
+EMBEDDING_PROVIDER=openrouter \
+EMBEDDING_MODEL=openai/text-embedding-3-small \
+OPENROUTER_API_KEY=sk-or-v1-xxx \
+./build/memos --mode dev --data build/data
+```
+
+---
+
+### Production Build
+
+Build for production deployment:
+
+```bash
+# Without RAG
+task build
+
+# With RAG
+task build:rag
+```
+
+---
+
+### Re-index RAG After Changing Embedding Provider
+
+When switching embedding providers:
+
+```bash
+task build:backend:rag
+
+REINDEX_RAG=true \
+EMBEDDING_PROVIDER=openrouter \
+OPENROUTER_API_KEY=sk-or-v1-xxx \
+LANCEDB_STORAGE_PROVIDER=local \
+RAG_PIPELINE_ENABLED=true \
+./build/memos --mode dev --data build/data
+```
+
+---
+
+## Troubleshooting
+
+### "task: command not found"
+
+Task is not installed. See Prerequisites section above.
+
+---
+
+### CGO build errors
+
+```
+cgo: C compiler "gcc" not found
+```
+
+Install a C compiler:
+```bash
+# Ubuntu/Debian
+sudo apt install build-essential
+
+# macOS
+xcode-select --install
+```
+
+---
+
+### LanceDB library not found
+
+```
+cannot find -llancedb_go
+```
+
+Run setup:
+```bash
+task setup:lancedb
+```
+
+---
+
+### Library path error at runtime
+
+```
+error while loading shared libraries: liblancedb_go.so
+```
+
+Set library path:
+```bash
+export LD_LIBRARY_PATH=$PWD/lib/linux_amd64:$LD_LIBRARY_PATH
+./build/memos --mode dev
+```
+
+Or use `task dev:backend:rag` which sets this automatically.
+
+---
+
+### Embedding server connection refused
+
+```
+local embedding request failed: dial tcp 127.0.0.1:8001: connect: connection refused
+```
+
+Start the embedding server:
+```bash
+task embedding:server
+```
+
+Or use mock/openrouter embeddings instead:
+```bash
+EMBEDDING_PROVIDER=mock ./build/memos --mode dev
+```
+
+---
+
+## Build Matrix
+
+| Command | Frontend | Backend | RAG | LanceDB |
+|---------|----------|---------|-----|---------|
+| `task build` | Yes | Yes | No | No |
+| `task build:frontend` | Yes | No | - | - |
+| `task build:backend` | No | Yes | No | No |
+| `task build:backend:rag` | No | Yes | Yes | Yes |
+| `task build:rag` | Yes | Yes | Yes | Yes |
+
+---
+
+*Document Version: 1.0*
+*Created: 2026-01-23*

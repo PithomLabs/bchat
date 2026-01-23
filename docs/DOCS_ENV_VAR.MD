@@ -1,0 +1,540 @@
+# Environment Variables Reference
+
+**Status:** Active
+**Date:** 2026-01-23
+**Related Documents:**
+- [DOCS_RAG_PIPELINE.MD](./DOCS_RAG_PIPELINE.MD) - RAG pipeline configuration
+- [DOCS_DOCKERFILE.MD](./DOCS_DOCKERFILE.MD) - Docker deployment
+
+---
+
+## Overview
+
+This document provides a comprehensive reference for all environment variables used by the application. Variables are organized by functional area.
+
+---
+
+## Quick Reference
+
+| Category | Key Variables |
+|----------|--------------|
+| **Core** | `OPENROUTER_API_KEY`, `LLM_MODEL` |
+| **Embedding** | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL` |
+| **RAG** | `RAG_PIPELINE_ENABLED`, `REINDEX_RAG` |
+| **Storage** | `LANCEDB_STORAGE_PROVIDER`, `LANCEDB_LOCAL_PATH` |
+
+---
+
+## Core Server Configuration
+
+### OPENROUTER_API_KEY
+
+**Required** for LLM functionality.
+
+| Property | Value |
+|----------|-------|
+| Type | String |
+| Default | (none - required) |
+| Example | `sk-or-v1-xxxxxxxxxxxx` |
+
+API key for OpenRouter service. Used for both chat completion and embeddings (when using openrouter provider).
+
+```bash
+export OPENROUTER_API_KEY=sk-or-v1-your-api-key-here
+```
+
+---
+
+### LLM_MODEL
+
+Model identifier for chat completion (LLM responses).
+
+| Property | Value |
+|----------|-------|
+| Type | String |
+| Default | `openai/gpt-4o-mini` |
+| Examples | `openai/gpt-4o`, `anthropic/claude-3.5-sonnet` |
+
+```bash
+export LLM_MODEL=openai/gpt-4o-mini
+```
+
+**Available Models (via OpenRouter):**
+- `openai/gpt-4o-mini` - Fast, cost-effective (default)
+- `openai/gpt-4o` - More capable
+- `anthropic/claude-3.5-sonnet` - Anthropic's model
+- See [OpenRouter Models](https://openrouter.ai/models) for full list
+
+---
+
+## Configuration Priority (Tenant vs Environment)
+
+Environment variables provide **global defaults**, but tenant-specific settings in the **Agent Admin page take priority**.
+
+### LLM Model Resolution Order
+
+```
+1. Tenant Config (Agent Admin) → Highest priority
+         ↓ (if empty)
+2. LLM_MODEL env var → Fallback
+         ↓ (if empty)
+3. Hardcoded default → "openai/gpt-oss-120b:free"
+```
+
+**Code reference:** `service.go:390-411`
+
+```go
+// 1. Try tenant-specific config (Agent Admin page)
+if config != nil && config.LLMModel != "" {
+    model = config.LLMModel  // Takes priority
+}
+
+// 2. Fallback to environment variable
+if model == "" {
+    model = s.profile.LLMModel  // LLM_MODEL env var
+}
+```
+
+### API Key Resolution Order
+
+```
+1. Tenant Config (Agent Admin, encrypted) → Highest priority
+         ↓ (if empty)
+2. OPENROUTER_API_KEY env var → Fallback
+```
+
+### Practical Usage
+
+| Scenario | Configuration Approach |
+|----------|----------------------|
+| Single tenant, simple setup | Set `LLM_MODEL` and `OPENROUTER_API_KEY` env vars |
+| Multi-tenant, shared API key | Set `OPENROUTER_API_KEY` env var, leave tenant configs empty |
+| Multi-tenant, per-tenant keys | Configure each tenant in Agent Admin page |
+| Mixed (some tenants custom) | Set env var defaults, override specific tenants in Agent Admin |
+
+**Example: Global default with tenant override**
+```bash
+# Environment (global default)
+export LLM_MODEL=openai/gpt-4o-mini
+
+# Tenant "premium-corp" in Agent Admin:
+# LLM Model: openai/gpt-4o  (overrides env var for this tenant only)
+```
+
+---
+
+### ENCRYPTION_MASTER_KEY
+
+Master key for encrypting tenant API keys (AES-256).
+
+| Property | Value |
+|----------|-------|
+| Type | String (32 bytes, hex or base64) |
+| Default | (none - optional) |
+| Example | `0123456789abcdef0123456789abcdef` |
+
+```bash
+export ENCRYPTION_MASTER_KEY=your-32-byte-key-here
+```
+
+**Note:** If not set, tenant API keys are stored unencrypted.
+
+---
+
+## Embedding Configuration
+
+### EMBEDDING_PROVIDER
+
+Selects the embedding service provider.
+
+| Property | Value |
+|----------|-------|
+| Type | String |
+| Default | `local` |
+| Options | `mock`, `local`, `openrouter` |
+
+```bash
+export EMBEDDING_PROVIDER=openrouter
+```
+
+**Provider Comparison:**
+
+| Provider | Dimensions | Cost | Use Case |
+|----------|------------|------|----------|
+| `mock` | 384 | Free | Testing pipeline flow |
+| `local` | 384 | Free | Development with real embeddings |
+| `openrouter` | 1536 | ~$0.02/1M tokens | Production |
+
+---
+
+### EMBEDDING_MODEL
+
+Model name for generating embeddings.
+
+| Property | Value |
+|----------|-------|
+| Type | String |
+| Default | Varies by provider (see below) |
+
+**Defaults by Provider:**
+
+| Provider | Default Model | Dimensions |
+|----------|---------------|------------|
+| `openrouter` | `openai/text-embedding-3-small` | 1536 |
+| `local` | `all-MiniLM-L6-v2` | 384 |
+| `mock` | N/A (random vectors) | 384 |
+
+```bash
+# For OpenRouter (production)
+export EMBEDDING_MODEL=openai/text-embedding-3-small
+
+# For local sentence-transformers
+export EMBEDDING_MODEL=all-MiniLM-L6-v2
+```
+
+**Available OpenRouter Embedding Models:**
+- `openai/text-embedding-3-small` - 1536 dimensions (default, recommended)
+- `openai/text-embedding-3-large` - 3072 dimensions (higher quality)
+- `openai/text-embedding-ada-002` - 1536 dimensions (legacy)
+
+---
+
+### EMBEDDING_LOCAL_ENDPOINT
+
+URL for local embedding server (when using `local` provider).
+
+| Property | Value |
+|----------|-------|
+| Type | URL |
+| Default | `http://localhost:8001/embed` |
+
+```bash
+export EMBEDDING_LOCAL_ENDPOINT=http://localhost:8001/embed
+```
+
+**Starting the local embedding server:**
+```bash
+task embedding:server
+```
+
+---
+
+## RAG Pipeline Configuration
+
+### RAG_PIPELINE_ENABLED
+
+Master switch to enable/disable the RAG pipeline.
+
+| Property | Value |
+|----------|-------|
+| Type | Boolean |
+| Default | `false` |
+| Options | `true`, `false` |
+
+```bash
+export RAG_PIPELINE_ENABLED=true
+```
+
+When enabled:
+- KB and Policy content is chunked and indexed
+- Chat queries retrieve relevant context
+- System prompts include retrieved information
+
+---
+
+### REINDEX_RAG
+
+Triggers re-indexing of all existing content on startup.
+
+| Property | Value |
+|----------|-------|
+| Type | Boolean |
+| Default | `false` |
+| Options | `true`, `false` |
+
+```bash
+export REINDEX_RAG=true
+```
+
+**Use cases:**
+- After changing embedding providers
+- After fresh deployment with existing database
+- After changing embedding dimensions
+
+**Note:** Set back to `false` after successful reindex.
+
+---
+
+### LLM_VERIFIER_ENABLED
+
+Enables LLM-based response verification (optional safety layer).
+
+| Property | Value |
+|----------|-------|
+| Type | Boolean |
+| Default | `false` |
+| Options | `true`, `false` |
+
+```bash
+export LLM_VERIFIER_ENABLED=true
+```
+
+When enabled, responses are verified against KB content before being sent.
+
+---
+
+## Vector Database (LanceDB) Configuration
+
+### LANCEDB_STORAGE_PROVIDER
+
+Selects the vector database storage backend.
+
+| Property | Value |
+|----------|-------|
+| Type | String |
+| Default | `memory` |
+| Options | `memory`, `local`, `s3` |
+
+```bash
+export LANCEDB_STORAGE_PROVIDER=local
+```
+
+**Storage Comparison:**
+
+| Provider | Persistence | Build Required | Use Case |
+|----------|-------------|----------------|----------|
+| `memory` | None (lost on restart) | No | Development, testing |
+| `local` | Disk | Yes (`-tags rag`) | Single-server production |
+| `s3` | S3/Tigrisdata | Yes (`-tags rag`) | Multi-server production |
+
+---
+
+### LANCEDB_LOCAL_PATH
+
+Directory path for local LanceDB storage.
+
+| Property | Value |
+|----------|-------|
+| Type | Path |
+| Default | `build/data/lancedb` |
+
+```bash
+export LANCEDB_LOCAL_PATH=/data/lancedb
+```
+
+**Note:** Only used when `LANCEDB_STORAGE_PROVIDER=local`.
+
+---
+
+### LANCEDB_S3_ENDPOINT
+
+S3-compatible endpoint URL.
+
+| Property | Value |
+|----------|-------|
+| Type | URL (hostname only) |
+| Default | `fly.storage.tigris.dev` |
+
+```bash
+export LANCEDB_S3_ENDPOINT=fly.storage.tigris.dev
+```
+
+**Note:** Only used when `LANCEDB_STORAGE_PROVIDER=s3`.
+
+---
+
+### LANCEDB_S3_BUCKET
+
+S3 bucket name for vector storage.
+
+| Property | Value |
+|----------|-------|
+| Type | String |
+| Default | (none - required for s3) |
+
+```bash
+export LANCEDB_S3_BUCKET=my-app-vectors
+```
+
+---
+
+### LANCEDB_S3_REGION
+
+S3 region identifier.
+
+| Property | Value |
+|----------|-------|
+| Type | String |
+| Default | `auto` |
+
+```bash
+export LANCEDB_S3_REGION=auto
+```
+
+---
+
+### AWS_ACCESS_KEY_ID
+
+S3 access key for authentication.
+
+| Property | Value |
+|----------|-------|
+| Type | String |
+| Default | (none - required for s3) |
+
+```bash
+export AWS_ACCESS_KEY_ID=tid_xxxxxxxxxxxxx
+```
+
+---
+
+### AWS_SECRET_ACCESS_KEY
+
+S3 secret key for authentication.
+
+| Property | Value |
+|----------|-------|
+| Type | String |
+| Default | (none - required for s3) |
+
+```bash
+export AWS_SECRET_ACCESS_KEY=tsec_xxxxxxxxxxxxx
+```
+
+---
+
+## Configuration Presets
+
+### Development (Fastest)
+
+No external dependencies, no rebuild required.
+
+```bash
+export OPENROUTER_API_KEY=sk-or-v1-your-key
+export LLM_MODEL=openai/gpt-4o-mini
+export RAG_PIPELINE_ENABLED=true
+export LANCEDB_STORAGE_PROVIDER=memory
+export EMBEDDING_PROVIDER=mock
+```
+
+### Development (Quality Embeddings)
+
+Real semantic search, requires local embedding server.
+
+```bash
+export OPENROUTER_API_KEY=sk-or-v1-your-key
+export LLM_MODEL=openai/gpt-4o-mini
+export RAG_PIPELINE_ENABLED=true
+export LANCEDB_STORAGE_PROVIDER=memory
+export EMBEDDING_PROVIDER=local
+export EMBEDDING_LOCAL_ENDPOINT=http://localhost:8001/embed
+```
+
+### Production (Local Storage)
+
+Persistent vectors on disk, requires RAG build.
+
+```bash
+export OPENROUTER_API_KEY=sk-or-v1-your-key
+export LLM_MODEL=openai/gpt-4o-mini
+export RAG_PIPELINE_ENABLED=true
+export LANCEDB_STORAGE_PROVIDER=local
+export LANCEDB_LOCAL_PATH=/data/lancedb
+export EMBEDDING_PROVIDER=openrouter
+export EMBEDDING_MODEL=openai/text-embedding-3-small
+```
+
+### Production (fly.io with Tigrisdata)
+
+Distributed storage, requires RAG build.
+
+```bash
+export OPENROUTER_API_KEY=sk-or-v1-your-key
+export LLM_MODEL=openai/gpt-4o-mini
+export RAG_PIPELINE_ENABLED=true
+export LANCEDB_STORAGE_PROVIDER=s3
+export LANCEDB_S3_ENDPOINT=fly.storage.tigris.dev
+export LANCEDB_S3_BUCKET=your-bucket-name
+export LANCEDB_S3_REGION=auto
+export AWS_ACCESS_KEY_ID=tid_xxxxxxxxxxxxx
+export AWS_SECRET_ACCESS_KEY=tsec_xxxxxxxxxxxxx
+export EMBEDDING_PROVIDER=openrouter
+export EMBEDDING_MODEL=openai/text-embedding-3-small
+```
+
+---
+
+## Environment File Example
+
+Create a `.env` file for local development:
+
+```bash
+# .env (do not commit to version control)
+
+# Core
+OPENROUTER_API_KEY=sk-or-v1-your-api-key
+
+# LLM
+LLM_MODEL=openai/gpt-4o-mini
+
+# RAG Pipeline
+RAG_PIPELINE_ENABLED=true
+LANCEDB_STORAGE_PROVIDER=local
+LANCEDB_LOCAL_PATH=build/data/lancedb
+
+# Embeddings
+EMBEDDING_PROVIDER=openrouter
+EMBEDDING_MODEL=openai/text-embedding-3-small
+```
+
+Load with:
+```bash
+source .env && ./build/memos --mode dev
+```
+
+---
+
+## Troubleshooting
+
+### "OPENROUTER_API_KEY not configured"
+
+The API key is missing or empty.
+
+```bash
+export OPENROUTER_API_KEY=sk-or-v1-your-key
+```
+
+### "OPENROUTER_API_KEY required for OpenRouter embedding provider"
+
+Using `EMBEDDING_PROVIDER=openrouter` but API key is not set.
+
+```bash
+export OPENROUTER_API_KEY=sk-or-v1-your-key
+```
+
+### "RAG pipeline disabled, using no-op vector database"
+
+RAG is not enabled.
+
+```bash
+export RAG_PIPELINE_ENABLED=true
+```
+
+### "LanceDB storage requires RAG build"
+
+Using `local` or `s3` storage without the RAG build tag.
+
+Either use memory storage:
+```bash
+export LANCEDB_STORAGE_PROVIDER=memory
+```
+
+Or rebuild with RAG support:
+```bash
+task build:backend:rag
+```
+
+---
+
+*Document Version: 1.0*
+*Created: 2026-01-23*
