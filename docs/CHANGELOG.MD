@@ -91,6 +91,15 @@ All notable changes to the bchat AI Agent System are documented in this file.
   - Configuration vs code changes guide
   - Anti-patterns to avoid
 
+- **DOCS_EVALUATION.MD** - Hybrid search evaluation guide
+  - Evaluation dataset creation with ground truth schema
+  - Quality metrics definitions (Recall@K, Precision@K, MRR, NDCG)
+  - Performance benchmarking methodology (latency, throughput, memory)
+  - Test scenarios for semantic, keyword, and mixed queries
+  - Step-by-step evaluation process
+  - Interpretation guidelines for tuning weights
+  - Future capabilities roadmap (hallucination detection, A/B testing)
+
 ### Fixed
 - **Data Path Doubling** - Fixed `build/build/data` path error in Taskfile.yml
   - Changed `--data build/data` to `--data {{.ROOT_DIR}}/build/data` for absolute paths
