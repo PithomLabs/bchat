@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,21 +50,39 @@ type VectorDBConfig struct {
 
 	// RAG feature flag
 	Enabled bool
+
+	// Hybrid search configuration
+	HybridSearchEnabled bool    // Global default for enabling hybrid search
+	HybridVectorWeight  float64 // Default weight for vector similarity (0-1)
+	HybridTextWeight    float64 // Default weight for BM25/text match (0-1)
 }
 
 // NewVectorDBConfigFromEnv creates a VectorDBConfig from environment variables.
 func NewVectorDBConfigFromEnv() *VectorDBConfig {
 	return &VectorDBConfig{
-		StorageProvider: getEnvOrDefault("LANCEDB_STORAGE_PROVIDER", "memory"),
-		LocalPath:       getEnvOrDefault("LANCEDB_LOCAL_PATH", "build/data/lancedb"),
-		S3Endpoint:      getEnvOrDefault("LANCEDB_S3_ENDPOINT", "fly.storage.tigris.dev"),
-		S3Bucket:        os.Getenv("LANCEDB_S3_BUCKET"),
-		S3Region:        getEnvOrDefault("LANCEDB_S3_REGION", "auto"),
-		S3AccessKey:     os.Getenv("AWS_ACCESS_KEY_ID"),
-		S3SecretKey:     os.Getenv("AWS_SECRET_ACCESS_KEY"),
-		EmbeddingConfig: NewEmbeddingConfigFromEnv(),
-		Enabled:         os.Getenv("RAG_PIPELINE_ENABLED") == "true",
+		StorageProvider:     getEnvOrDefault("LANCEDB_STORAGE_PROVIDER", "memory"),
+		LocalPath:           getEnvOrDefault("LANCEDB_LOCAL_PATH", "build/data/lancedb"),
+		S3Endpoint:          getEnvOrDefault("LANCEDB_S3_ENDPOINT", "fly.storage.tigris.dev"),
+		S3Bucket:            os.Getenv("LANCEDB_S3_BUCKET"),
+		S3Region:            getEnvOrDefault("LANCEDB_S3_REGION", "auto"),
+		S3AccessKey:         os.Getenv("AWS_ACCESS_KEY_ID"),
+		S3SecretKey:         os.Getenv("AWS_SECRET_ACCESS_KEY"),
+		EmbeddingConfig:     NewEmbeddingConfigFromEnv(),
+		Enabled:             os.Getenv("RAG_PIPELINE_ENABLED") == "true",
+		HybridSearchEnabled: os.Getenv("HYBRID_SEARCH_ENABLED") == "true",
+		HybridVectorWeight:  parseFloatOrDefault("HYBRID_VECTOR_WEIGHT", 0.7),
+		HybridTextWeight:    parseFloatOrDefault("HYBRID_TEXT_WEIGHT", 0.3),
 	}
+}
+
+// parseFloatOrDefault reads a float64 from an environment variable, returning default if not set or invalid.
+func parseFloatOrDefault(key string, defaultValue float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		if f, err := strconv.ParseFloat(value, 64); err == nil {
+			return f
+		}
+	}
+	return defaultValue
 }
 
 // SearchQuery represents a search request.
@@ -607,6 +626,13 @@ type RetrievedContext struct {
 	KBSections []DocumentChunk
 }
 
+// HybridSearchOptions holds optional hybrid search configuration for retrieval.
+type HybridSearchOptions struct {
+	Enabled      bool    // Enable hybrid search
+	VectorWeight float64 // Weight for vector similarity (0-1)
+	TextWeight   float64 // Weight for BM25/text match (0-1)
+}
+
 // RetrieveContextForQuery performs retrieval based on user query and intent.
 func RetrieveContextForQuery(
 	ctx context.Context,
@@ -615,6 +641,7 @@ func RetrieveContextForQuery(
 	intent string,
 	tenantID int32,
 	audienceType string,
+	hybridOpts *HybridSearchOptions,
 ) (*RetrievedContext, error) {
 	// Determine content types and topK based on intent
 	var contentTypes []string
@@ -642,8 +669,8 @@ func RetrieveContextForQuery(
 		topK = 5
 	}
 
-	// Perform search
-	result, err := db.Search(ctx, SearchQuery{
+	// Build search query with optional hybrid search
+	searchQuery := SearchQuery{
 		QueryText:    query,
 		TenantID:     tenantID,
 		AudienceType: audienceType,
@@ -651,7 +678,17 @@ func RetrieveContextForQuery(
 		ActiveOnly:   true,
 		TopK:         topK,
 		MinScore:     0.3, // Minimum relevance threshold
-	})
+	}
+
+	// Apply hybrid search options if provided
+	if hybridOpts != nil && hybridOpts.Enabled {
+		searchQuery.UseHybridSearch = true
+		searchQuery.VectorWeight = hybridOpts.VectorWeight
+		searchQuery.TextWeight = hybridOpts.TextWeight
+	}
+
+	// Perform search
+	result, err := db.Search(ctx, searchQuery)
 	if err != nil {
 		return nil, fmt.Errorf("search failed: %w", err)
 	}

@@ -20,7 +20,7 @@ This document provides a comprehensive reference for all environment variables u
 |----------|--------------|
 | **Core** | `OPENROUTER_API_KEY`, `LLM_MODEL` |
 | **Embedding** | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL` |
-| **RAG** | `RAG_PIPELINE_ENABLED`, `REINDEX_RAG` |
+| **RAG** | `RAG_PIPELINE_ENABLED`, `REINDEX_RAG`, `HYBRID_SEARCH_ENABLED` |
 | **Storage** | `LANCEDB_STORAGE_PROVIDER`, `LANCEDB_LOCAL_PATH` |
 
 ---
@@ -262,6 +262,69 @@ export REINDEX_RAG=true
 - After changing embedding dimensions
 
 **Note:** Set back to `false` after successful reindex.
+
+---
+
+### HYBRID_SEARCH_ENABLED
+
+Enables hybrid search combining vector similarity with BM25 keyword matching.
+
+| Property | Value |
+|----------|-------|
+| Type | Boolean |
+| Default | `false` |
+| Options | `true`, `false` |
+
+```bash
+export HYBRID_SEARCH_ENABLED=true
+```
+
+When enabled, RAG queries use both:
+- **Vector similarity** - Semantic understanding of query meaning
+- **BM25 keyword matching** - Exact term matching for precise results
+
+**Benefits:**
+- Better recall for exact keyword matches
+- Improved handling of technical terms and proper nouns
+- Combines semantic understanding with keyword precision
+
+---
+
+### HYBRID_VECTOR_WEIGHT
+
+Weight for vector similarity in hybrid search score fusion.
+
+| Property | Value |
+|----------|-------|
+| Type | Float |
+| Default | `0.7` |
+| Range | `0.0` to `1.0` |
+
+```bash
+export HYBRID_VECTOR_WEIGHT=0.7
+```
+
+Higher values favor semantic similarity over keyword matching.
+
+---
+
+### HYBRID_TEXT_WEIGHT
+
+Weight for BM25 text matching in hybrid search score fusion.
+
+| Property | Value |
+|----------|-------|
+| Type | Float |
+| Default | `0.3` |
+| Range | `0.0` to `1.0` |
+
+```bash
+export HYBRID_TEXT_WEIGHT=0.3
+```
+
+Higher values favor exact keyword matches over semantic similarity.
+
+**Note:** `HYBRID_VECTOR_WEIGHT` + `HYBRID_TEXT_WEIGHT` should sum to 1.0 for normalized scores.
 
 ---
 

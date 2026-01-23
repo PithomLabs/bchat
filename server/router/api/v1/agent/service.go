@@ -30,6 +30,7 @@ type Service struct {
 	verifier            *Verifier
 	verificationMetrics *VerificationMetrics
 	vectorDB            VectorDB
+	vectorDBConfig      *VectorDBConfig
 	chunker             *Chunker
 }
 
@@ -76,6 +77,14 @@ func NewService(s *store.Store, p *profile.Profile) *Service {
 		vectorDB = NewNoOpVectorDB()
 	}
 	svc.vectorDB = vectorDB
+	svc.vectorDBConfig = vectorDBConfig
+
+	// Log hybrid search configuration
+	if vectorDBConfig.HybridSearchEnabled {
+		slog.Info("Hybrid search enabled",
+			"vector_weight", vectorDBConfig.HybridVectorWeight,
+			"text_weight", vectorDBConfig.HybridTextWeight)
+	}
 
 	// Check if we should reindex all content on startup
 	if os.Getenv("REINDEX_RAG") == "true" {
@@ -1526,7 +1535,15 @@ func (s *Service) generateRAGResponse(
 		return "I apologize, but the chat service is not currently available. Please call us directly.", nil
 	}
 
-	// Retrieve relevant context from vector database
+	// Retrieve relevant context from vector database with hybrid search if enabled
+	var hybridOpts *HybridSearchOptions
+	if s.vectorDBConfig != nil && s.vectorDBConfig.HybridSearchEnabled {
+		hybridOpts = &HybridSearchOptions{
+			Enabled:      true,
+			VectorWeight: s.vectorDBConfig.HybridVectorWeight,
+			TextWeight:   s.vectorDBConfig.HybridTextWeight,
+		}
+	}
 	retrieved, err := RetrieveContextForQuery(
 		ctx,
 		s.vectorDB,
@@ -1534,6 +1551,7 @@ func (s *Service) generateRAGResponse(
 		classification.PrimaryIntent,
 		config.TenantID,
 		config.AudienceType,
+		hybridOpts,
 	)
 	if err != nil {
 		slog.Warn("RAG retrieval failed, falling back to full context",

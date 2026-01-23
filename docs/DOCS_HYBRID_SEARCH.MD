@@ -645,11 +645,11 @@ See **[DOCS_HYBRID_SEARCH_WEEK1.MD](./DOCS_HYBRID_SEARCH_WEEK1.MD)** for detaile
 - [x] Implement hybrid search method
 - [x] Unit tests for BM25 scoring
 
-### Week 2: Integration (Partially Complete)
+### Week 2: Integration ✅
 
 - [x] Implement MemoryVectorDB hybrid support
-- [ ] Add environment configuration (`USE_HYBRID_SEARCH` env var)
-- [ ] Integration tests with real LanceDB
+- [x] Add environment configuration (`HYBRID_SEARCH_ENABLED`, `HYBRID_VECTOR_WEIGHT`, `HYBRID_TEXT_WEIGHT`)
+- [x] Integration tests with real LanceDB (`vectordb_lance_test.go`)
 
 ### Week 3: Evaluation
 

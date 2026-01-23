@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"math"
+	"os"
 	"testing"
 )
 
@@ -497,5 +498,100 @@ func TestNoOpVectorDB(t *testing.T) {
 	}
 	if stats.TotalChunks != 0 {
 		t.Errorf("Expected 0 total chunks, got %d", stats.TotalChunks)
+	}
+}
+
+// ============================================================================
+// ENVIRONMENT CONFIGURATION TESTS
+// ============================================================================
+
+func TestParseFloatOrDefault(t *testing.T) {
+	tests := []struct {
+		name       string
+		envKey     string
+		envValue   string
+		defaultVal float64
+		expected   float64
+	}{
+		{"empty env", "TEST_FLOAT_EMPTY", "", 0.7, 0.7},
+		{"valid float", "TEST_FLOAT_VALID", "0.8", 0.7, 0.8},
+		{"invalid float", "TEST_FLOAT_INVALID", "not-a-number", 0.7, 0.7},
+		{"zero value", "TEST_FLOAT_ZERO", "0", 0.7, 0},
+		{"negative value", "TEST_FLOAT_NEG", "-0.5", 0.7, -0.5},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.envValue != "" {
+				os.Setenv(tt.envKey, tt.envValue)
+				defer os.Unsetenv(tt.envKey)
+			}
+
+			result := parseFloatOrDefault(tt.envKey, tt.defaultVal)
+			if result != tt.expected {
+				t.Errorf("Expected %f, got %f", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestVectorDBConfig_HybridSearchDefaults(t *testing.T) {
+	// Clear any existing env vars
+	os.Unsetenv("HYBRID_SEARCH_ENABLED")
+	os.Unsetenv("HYBRID_VECTOR_WEIGHT")
+	os.Unsetenv("HYBRID_TEXT_WEIGHT")
+
+	config := NewVectorDBConfigFromEnv()
+
+	// Defaults should be: disabled, 0.7 vector, 0.3 text
+	if config.HybridSearchEnabled {
+		t.Error("Expected HybridSearchEnabled to be false by default")
+	}
+	if config.HybridVectorWeight != 0.7 {
+		t.Errorf("Expected default HybridVectorWeight=0.7, got %f", config.HybridVectorWeight)
+	}
+	if config.HybridTextWeight != 0.3 {
+		t.Errorf("Expected default HybridTextWeight=0.3, got %f", config.HybridTextWeight)
+	}
+}
+
+func TestVectorDBConfig_HybridSearchEnabled(t *testing.T) {
+	// Save and restore original env
+	origEnabled := os.Getenv("HYBRID_SEARCH_ENABLED")
+	origVector := os.Getenv("HYBRID_VECTOR_WEIGHT")
+	origText := os.Getenv("HYBRID_TEXT_WEIGHT")
+	defer func() {
+		if origEnabled != "" {
+			os.Setenv("HYBRID_SEARCH_ENABLED", origEnabled)
+		} else {
+			os.Unsetenv("HYBRID_SEARCH_ENABLED")
+		}
+		if origVector != "" {
+			os.Setenv("HYBRID_VECTOR_WEIGHT", origVector)
+		} else {
+			os.Unsetenv("HYBRID_VECTOR_WEIGHT")
+		}
+		if origText != "" {
+			os.Setenv("HYBRID_TEXT_WEIGHT", origText)
+		} else {
+			os.Unsetenv("HYBRID_TEXT_WEIGHT")
+		}
+	}()
+
+	// Test with hybrid search enabled
+	os.Setenv("HYBRID_SEARCH_ENABLED", "true")
+	os.Setenv("HYBRID_VECTOR_WEIGHT", "0.6")
+	os.Setenv("HYBRID_TEXT_WEIGHT", "0.4")
+
+	config := NewVectorDBConfigFromEnv()
+
+	if !config.HybridSearchEnabled {
+		t.Error("Expected HybridSearchEnabled to be true")
+	}
+	if config.HybridVectorWeight != 0.6 {
+		t.Errorf("Expected HybridVectorWeight=0.6, got %f", config.HybridVectorWeight)
+	}
+	if config.HybridTextWeight != 0.4 {
+		t.Errorf("Expected HybridTextWeight=0.4, got %f", config.HybridTextWeight)
 	}
 }

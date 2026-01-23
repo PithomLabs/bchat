@@ -60,6 +60,37 @@ All notable changes to the bchat AI Agent System are documented in this file.
   - Implemented `hybridSearch()` method in LanceVectorDB with linear combination score fusion
   - Created `vectordb_test.go` with 17 unit tests for BM25 scoring and hybrid search
 
+- **Hybrid Search Implementation (Week 2)** - Environment configuration and integration
+  - Added `HYBRID_SEARCH_ENABLED` environment variable to globally enable hybrid search
+  - Added `HYBRID_VECTOR_WEIGHT` and `HYBRID_TEXT_WEIGHT` for configuring score fusion weights
+  - Extended `VectorDBConfig` struct with hybrid search configuration fields
+  - Added `parseFloatOrDefault()` helper for environment variable parsing
+  - Updated `RetrieveContextForQuery()` to accept `HybridSearchOptions`
+  - Service now logs hybrid search configuration on startup
+  - Created `vectordb_lance_test.go` with LanceDB integration tests (requires `-tags "rag integration"`)
+  - Added 3 new unit tests for environment configuration: `TestParseFloatOrDefault`, `TestVectorDBConfig_HybridSearchDefaults`, `TestVectorDBConfig_HybridSearchEnabled`
+
+- **DOCS_HYBRID_SEARCH_EXPLAINED.MD** - Comprehensive hybrid search technical guide
+  - Library analogy explaining semantic vs keyword search
+  - Deep dive into vector search and cosine similarity
+  - BM25 algorithm explanation with TF-IDF foundation
+  - Score fusion (linear combination) with worked examples
+  - Complete data flow diagram (ASCII art)
+  - Configuration guide with tuning recommendations
+  - Testing and verification instructions
+  - Real-world query examples with score breakdowns
+  - Technical reference with file/line numbers
+  - Troubleshooting guide
+
+- **DOCS_AGENT_ARCHITECTURE.MD** - Agent architecture flexibility documentation
+  - Configuration-driven design principle explanation
+  - Service business origins and why examples are service-focused
+  - Annotation-based parsing system (`<!-- @type: params -->`)
+  - Flexible architecture elements (multi-tenant, multi-audience, RAG)
+  - Adaptation examples for Q&A, Technical Support, HR, and Legal systems
+  - Configuration vs code changes guide
+  - Anti-patterns to avoid
+
 ### Fixed
 - **Data Path Doubling** - Fixed `build/build/data` path error in Taskfile.yml
   - Changed `--data build/data` to `--data {{.ROOT_DIR}}/build/data` for absolute paths
