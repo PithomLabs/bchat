@@ -55,3 +55,6 @@ nousresearch/hermes-3-llama-3.1-405b:free
 
 uuidgen to encrypt OPENROUTER_API_KEY
 ./memos --mode dev --driver sqlite --data ./data
+
+To build RAG
+go build -tags rag -o build/memos ./bin/memos

@@ -17,7 +17,7 @@ type EmbeddingService interface {
 	Embed(ctx context.Context, texts []string) ([][]float32, error)
 	// Dimension returns the embedding vector dimension.
 	Dimension() int
-	// Provider returns the provider name ("local" or "openrouter").
+	// Provider returns the provider name ("local", "openrouter", or "mock").
 	Provider() string
 }
 
@@ -61,6 +61,8 @@ func NewEmbeddingService(config *EmbeddingConfig) (EmbeddingService, error) {
 	switch config.Provider {
 	case "openrouter":
 		return NewOpenRouterEmbedding(config)
+	case "mock":
+		return NewMockEmbedding(config), nil
 	case "local":
 		return NewLocalEmbedding(config)
 	default:
@@ -294,6 +296,76 @@ func (e *OpenRouterEmbedding) Dimension() int {
 // Provider returns "openrouter".
 func (e *OpenRouterEmbedding) Provider() string {
 	return "openrouter"
+}
+
+// ============================================================================
+// MOCK EMBEDDING SERVICE (Testing without external dependencies)
+// ============================================================================
+
+// MockEmbedding implements EmbeddingService using deterministic pseudo-random vectors.
+// This is useful for testing the RAG pipeline without requiring an embedding server or API.
+type MockEmbedding struct {
+	dimension int
+}
+
+// NewMockEmbedding creates a new mock embedding service.
+func NewMockEmbedding(config *EmbeddingConfig) *MockEmbedding {
+	dimension := config.Dimension
+	if dimension == 0 {
+		dimension = 384 // Default dimension
+	}
+	return &MockEmbedding{
+		dimension: dimension,
+	}
+}
+
+// Embed generates deterministic pseudo-random embeddings based on text hash.
+// The same text will always produce the same embedding, enabling consistent search results.
+func (e *MockEmbedding) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	embeddings := make([][]float32, len(texts))
+
+	for i, text := range texts {
+		embedding := make([]float32, e.dimension)
+		// Use a simple hash-based approach for deterministic embeddings
+		hash := uint64(0)
+		for _, c := range text {
+			hash = hash*31 + uint64(c)
+		}
+
+		// Generate pseudo-random values from hash
+		for j := 0; j < e.dimension; j++ {
+			// Linear congruential generator for reproducible values
+			hash = hash*6364136223846793005 + 1442695040888963407
+			// Normalize to [-1, 1] range
+			embedding[j] = float32(int64(hash>>33)-int64(1<<30)) / float32(1<<30)
+		}
+
+		// Normalize the vector to unit length
+		var norm float32
+		for _, v := range embedding {
+			norm += v * v
+		}
+		if norm > 0 {
+			norm = float32(1.0 / float64(norm))
+			for j := range embedding {
+				embedding[j] *= norm
+			}
+		}
+
+		embeddings[i] = embedding
+	}
+
+	return embeddings, nil
+}
+
+// Dimension returns the embedding vector dimension.
+func (e *MockEmbedding) Dimension() int {
+	return e.dimension
+}
+
+// Provider returns "mock".
+func (e *MockEmbedding) Provider() string {
+	return "mock"
 }
 
 // ============================================================================
