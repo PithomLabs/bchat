@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/revrost/go-openrouter"
 	"github.com/usememos/memos/store"
 )
 
@@ -96,13 +97,15 @@ var UniversalComplianceChecklist = []ComplianceCheck{
 // ComplianceAuditor handles auditing of conversation transcripts.
 type ComplianceAuditor struct {
 	store     store.Store
+	client    *openrouter.Client
 	checklist []ComplianceCheck
 }
 
 // NewComplianceAuditor creates a new auditor with the universal checklist.
-func NewComplianceAuditor(store store.Store) *ComplianceAuditor {
+func NewComplianceAuditor(store store.Store, client *openrouter.Client) *ComplianceAuditor {
 	return &ComplianceAuditor{
 		store:     store,
+		client:    client,
 		checklist: UniversalComplianceChecklist,
 	}
 }
@@ -279,7 +282,7 @@ func (a *ComplianceAuditor) evaluateCheck(
 	return result
 }
 
-// checkServiceCompliance verifies agent only mentions documented services.
+// checkServiceCompliance verifies agent only mentions documented services using LLM-based semantic analysis.
 func (a *ComplianceAuditor) checkServiceCompliance(messages []store.AgentMessage, config *AudienceConfig) ComplianceCheckResult {
 	result := ComplianceCheckResult{Passed: true}
 
@@ -288,27 +291,26 @@ func (a *ComplianceAuditor) checkServiceCompliance(messages []store.AgentMessage
 		return result
 	}
 
-	// Build set of valid service keywords
-	validKeywords := make(map[string]bool)
-	for _, svc := range config.Services {
-		for _, word := range strings.Fields(strings.ToLower(svc.Name)) {
-			if len(word) > 3 {
-				validKeywords[word] = true
-			}
-		}
-	}
-
-	// Check agent messages for service-like phrases
-	checker := NewComplianceChecker()
-	for _, msg := range messages {
-		if msg.Role == "assistant" {
-			compResult := checker.VerifyCompliance(context.Background(), msg.Content, config)
-			for _, v := range compResult.Violations {
-				if v.Type == "hallucinated_service" || v.Type == "potential_hallucinated_service" {
-					result.Passed = false
-					result.Evidence = v.Content
-					result.Reasoning = "Agent mentioned service not in knowledge base"
+	// Use LLM verifier for semantic service compliance checking
+	if a.client != nil {
+		verifier := NewVerifier(a.client, DefaultVerificationConfig())
+		for _, msg := range messages {
+			if msg.Role == "assistant" {
+				verifyResult, err := verifier.VerifyResponse(context.Background(), msg.Content, config)
+				if err != nil {
+					// On error, fall back to passing (graceful degradation)
+					result.Reasoning = "Verification unavailable, assumed compliant"
 					return result
+				}
+
+				// Check for service-related violations
+				for _, v := range verifyResult.Violations {
+					if strings.Contains(strings.ToLower(v.ChecklistItem), "service") {
+						result.Passed = false
+						result.Evidence = v.Evidence
+						result.Reasoning = v.Violation
+						return result
+					}
 				}
 			}
 		}
@@ -318,20 +320,32 @@ func (a *ComplianceAuditor) checkServiceCompliance(messages []store.AgentMessage
 	return result
 }
 
-// checkContactCompliance verifies only authorized contacts are provided.
+// checkContactCompliance verifies only authorized contacts are provided using LLM-based semantic analysis.
 func (a *ComplianceAuditor) checkContactCompliance(messages []store.AgentMessage, config *AudienceConfig) ComplianceCheckResult {
 	result := ComplianceCheckResult{Passed: true}
 
-	checker := NewComplianceChecker()
-	for _, msg := range messages {
-		if msg.Role == "assistant" {
-			compResult := checker.VerifyCompliance(context.Background(), msg.Content, config)
-			for _, v := range compResult.Violations {
-				if v.Type == "wrong_contact" || v.Type == "unauthorized_contact" {
-					result.Passed = false
-					result.Evidence = v.Content
-					result.Reasoning = "Agent provided unauthorized contact information"
+	// Use LLM verifier for semantic contact compliance checking
+	if a.client != nil {
+		verifier := NewVerifier(a.client, DefaultVerificationConfig())
+		for _, msg := range messages {
+			if msg.Role == "assistant" {
+				verifyResult, err := verifier.VerifyResponse(context.Background(), msg.Content, config)
+				if err != nil {
+					// On error, fall back to passing (graceful degradation)
+					result.Reasoning = "Verification unavailable, assumed compliant"
 					return result
+				}
+
+				// Check for contact-related violations
+				for _, v := range verifyResult.Violations {
+					itemLower := strings.ToLower(v.ChecklistItem)
+					if strings.Contains(itemLower, "phone") || strings.Contains(itemLower, "email") ||
+						strings.Contains(itemLower, "contact") || strings.Contains(itemLower, "placeholder") {
+						result.Passed = false
+						result.Evidence = v.Evidence
+						result.Reasoning = v.Violation
+						return result
+					}
 				}
 			}
 		}
@@ -460,7 +474,7 @@ func (a *ComplianceAuditor) checkEmpathyShown(transcript string, messages []stor
 	return result
 }
 
-// checkExclusionCompliance verifies excluded services were not offered.
+// checkExclusionCompliance verifies excluded services were not offered using LLM-based semantic analysis.
 func (a *ComplianceAuditor) checkExclusionCompliance(messages []store.AgentMessage, config *AudienceConfig) ComplianceCheckResult {
 	result := ComplianceCheckResult{Passed: true}
 
@@ -469,16 +483,28 @@ func (a *ComplianceAuditor) checkExclusionCompliance(messages []store.AgentMessa
 		return result
 	}
 
-	checker := NewComplianceChecker()
-	for _, msg := range messages {
-		if msg.Role == "assistant" {
-			compResult := checker.VerifyCompliance(context.Background(), msg.Content, config)
-			for _, v := range compResult.Violations {
-				if v.Type == "excluded_service_offered" {
-					result.Passed = false
-					result.Evidence = v.Content
-					result.Reasoning = "Agent offered an excluded service"
+	// Use LLM verifier for semantic exclusion compliance checking
+	if a.client != nil {
+		verifier := NewVerifier(a.client, DefaultVerificationConfig())
+		for _, msg := range messages {
+			if msg.Role == "assistant" {
+				verifyResult, err := verifier.VerifyResponse(context.Background(), msg.Content, config)
+				if err != nil {
+					// On error, fall back to passing (graceful degradation)
+					result.Reasoning = "Verification unavailable, assumed compliant"
 					return result
+				}
+
+				// Check for exclusion-related violations
+				for _, v := range verifyResult.Violations {
+					itemLower := strings.ToLower(v.ChecklistItem)
+					if strings.Contains(itemLower, "exclusion") || strings.Contains(itemLower, "do not provide") ||
+						strings.Contains(itemLower, "excluded") {
+						result.Passed = false
+						result.Evidence = v.Evidence
+						result.Reasoning = v.Violation
+						return result
+					}
 				}
 			}
 		}

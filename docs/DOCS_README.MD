@@ -259,6 +259,25 @@ User Query → Embed → Vector Search → Top-K Chunks → LLM Prompt
 | `local` | Development, single-instance | `LANCEDB_LOCAL_PATH` |
 | `s3` | Production, fly.io | `LANCEDB_S3_*` variables |
 
+### Hybrid Search
+
+The RAG pipeline supports **hybrid search** combining vector similarity with BM25 keyword matching:
+
+```
+Query → Embedding → Vector Search (semantic) ─┐
+                                              ├─► Score Fusion → Results
+Query → Tokenization → BM25 Search (keyword) ─┘
+```
+
+| Mode | Use Case | Configuration |
+|------|----------|---------------|
+| Vector-only | Semantic understanding | `HYBRID_SEARCH_ENABLED=false` |
+| Hybrid | Best of both | `HYBRID_SEARCH_ENABLED=true` |
+
+**Default Weights:** 70% vector similarity, 30% BM25 keyword matching
+
+See [DOCS_HYBRID_SEARCH_EXPLAINED.MD](./DOCS_HYBRID_SEARCH_EXPLAINED.MD) for technical details.
+
 ### RAG vs Non-RAG
 
 | Feature | Without RAG | With RAG |
@@ -511,6 +530,21 @@ fly secrets set LANCEDB_STORAGE_PROVIDER=s3
 
 3. **SCRIPT.MD Not RAG-Indexed** - By design, SCRIPT.MD is included fully in the system prompt, not chunked.
 
+4. **Hybrid Search Latency** - Enabling hybrid search adds ~20-50ms latency due to BM25 index lookup and score fusion.
+
+### Response Validation
+
+The system includes a two-layer validation system for response quality:
+
+| Layer | Status | Description |
+|-------|--------|-------------|
+| Output Sanitization | Always Active | System tag removal, contact correction |
+| LLM Verification | Optional | Semantic grounding against KB |
+
+**Note:** The regex compliance layer was removed in Phase 5B. Audit functionality now uses LLM-based semantic verification instead of regex patterns.
+
+See [DOCS_HALLUCINATION_GROUNDING.MD](./DOCS_HALLUCINATION_GROUNDING.MD) for details.
+
 ### Security Considerations
 
 1. **API Key Exposure** - Ensure `OPENROUTER_API_KEY` is never committed to version control.
@@ -523,15 +557,38 @@ fly secrets set LANCEDB_STORAGE_PROVIDER=s3
 
 ## Related Documentation
 
+### Core Documentation
+
 | Document | Description |
 |----------|-------------|
 | [CHANGELOG.MD](./CHANGELOG.MD) | Project changelog |
 | [DOCS_ENV_VAR.MD](./DOCS_ENV_VAR.MD) | Environment variables reference |
 | [DOCS_TASKFILE.MD](./DOCS_TASKFILE.MD) | Build commands reference |
-| [DOCS_WIDGET.MD](./DOCS_WIDGET.MD) | External chat widget integration |
+| [DOCS_AGENT_ARCHITECTURE.MD](./DOCS_AGENT_ARCHITECTURE.MD) | Configuration-driven architecture guide |
+
+### RAG & Search
+
+| Document | Description |
+|----------|-------------|
 | [DOCS_RAG_PIPELINE.MD](./DOCS_RAG_PIPELINE.MD) | RAG architecture details |
-| [DOCS_SIMULATION.MD](./DOCS_SIMULATION.MD) | Simulation feature specification |
 | [DOCS_LANCEDB.MD](./DOCS_LANCEDB.MD) | LanceDB implementation plan |
+| [DOCS_HYBRID_SEARCH.MD](./DOCS_HYBRID_SEARCH.MD) | Hybrid search implementation plan |
+| [DOCS_HYBRID_SEARCH_EXPLAINED.MD](./DOCS_HYBRID_SEARCH_EXPLAINED.MD) | Hybrid search technical deep-dive |
+
+### Quality & Evaluation
+
+| Document | Description |
+|----------|-------------|
+| [DOCS_EVALUATION.MD](./DOCS_EVALUATION.MD) | Evaluation framework and metrics |
+| [DOCS_HALLUCINATION_GROUNDING.MD](./DOCS_HALLUCINATION_GROUNDING.MD) | Hallucination detection and grounding |
+| [DOCS_ROLLOUT.MD](./DOCS_ROLLOUT.MD) | Production rollout guide |
+
+### Features
+
+| Document | Description |
+|----------|-------------|
+| [DOCS_WIDGET.MD](./DOCS_WIDGET.MD) | External chat widget integration |
+| [DOCS_SIMULATION.MD](./DOCS_SIMULATION.MD) | Simulation feature specification |
 
 ### For Claude Code Users
 

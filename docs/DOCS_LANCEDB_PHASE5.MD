@@ -1,6 +1,6 @@
 # LanceDB RAG Implementation - Phase 5: Cleanup & Optimization
 
-**Status:** Complete
+**Status:** Complete (including Phase 5B)
 **Date:** 2026-01-23
 **Parent Document:** [DOCS_LANCEDB.MD](./DOCS_LANCEDB.MD)
 **Previous Phase:** [DOCS_LANCEDB_PHASE4.MD](./DOCS_LANCEDB_PHASE4.MD)
@@ -9,7 +9,9 @@
 
 ## Overview
 
-Phase 5 cleaned up the codebase by removing redundant verification layers that are no longer needed with the RAG pipeline. The grounding layer was completely removed, and the LLM verifier was made optional. The compliance checker was retained for audit purposes only.
+Phase 5 cleaned up the codebase by removing redundant verification layers that are no longer needed with the RAG pipeline. The grounding layer was completely removed, and the LLM verifier was made optional.
+
+**Phase 5B Update:** The compliance checker (`compliance.go`) has now been deleted. The audit functionality in `audit.go` was refactored to use LLM-based semantic verification via `verifier.go` instead of regex patterns.
 
 ---
 
@@ -18,7 +20,7 @@ Phase 5 cleaned up the codebase by removing redundant verification layers that a
 | Component | Action | Reason |
 |-----------|--------|--------|
 | `grounding.go` | **Deleted** | Replaced by RAG pipeline |
-| `compliance.go` | **Retained (audit-only)** | Used by audit.go for conversation analysis |
+| `compliance.go` | **Deleted (Phase 5B)** | Refactored audit.go to use LLM-based verification |
 | LLM Verifier | **Made optional** | Disabled by default, enable via env var |
 | Sanitizer | **Kept as-is** | Still useful for cleaning LLM output |
 
@@ -98,17 +100,28 @@ func (s *Service) verifyResponseWithLLM(ctx context.Context, response string, co
 
 ---
 
-## Files Retained
+## Files Deleted (Phase 5B)
 
 ### `server/router/api/v1/agent/compliance.go`
 
-Retained for **audit purposes only**. The `ComplianceAuditor` in `audit.go` uses the compliance checker to analyze historical conversations for:
+**Deleted in Phase 5B.** The regex-based compliance checker was removed because:
 
-- Service compliance (did agent mention only documented services?)
-- Contact compliance (did agent provide only authorized contact info?)
-- Exclusion compliance (did agent avoid offering excluded services?)
+1. Regex patterns cannot understand semantic meaning
+2. High false positive rates for legitimate content
+3. Maintenance burden for pattern updates
+4. Inconsistent with RAG philosophy (use LLM grounding, not regex)
 
-**Note:** This is used for post-hoc analysis via the audit API, NOT in the real-time chat flow.
+**Replacement:** The `ComplianceAuditor` in `audit.go` now uses `verifier.go` for LLM-based semantic analysis:
+
+```go
+// audit.go now uses verifier.go for compliance checks
+verifier := NewVerifier(a.client, DefaultVerificationConfig())
+verifyResult, err := verifier.VerifyResponse(ctx, msg.Content, config)
+```
+
+---
+
+## Files Retained
 
 ### `server/router/api/v1/agent/sanitizer.go`
 

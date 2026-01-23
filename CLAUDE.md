@@ -11,6 +11,7 @@ See `docs/DOCS_CHAT_DESIGN_4_IMP_2-PROGRESS.MD` for detailed progress report.
 - `docs/CHANGELOG.MD` - Project changelog with dated entries
 - `docs/DOCS_ENV_VAR.MD` - Environment variables reference
 - `docs/DOCS_TASKFILE.MD` - Build and run commands reference
+- `docs/DOCS_AGENT_ARCHITECTURE.MD` - Configuration-driven architecture guide
 - `docs/DOCS_WIDGET.MD` - External chat widget integration guide
 - `docs/DOCS_PENDING.MD` - Pending work, limitations, and known issues
 
@@ -19,10 +20,14 @@ See `docs/DOCS_CHAT_DESIGN_4_IMP_2-PROGRESS.MD` for detailed progress report.
 - `docs/DOCS_CHAT_DESIGN_4_IMP_2-PROGRESS.MD` - Implementation progress and pending items
 - `docs/DOCS_SIMULATION.MD` - Agent simulation feature specification
 - `docs/DOCS_RAG_PIPELINE.MD` - RAG pipeline architecture and configuration
-- `docs/DOCS_HYBRID_SEARCH.MD` - Hybrid search (vector + BM25) implementation plan
 - `docs/DOCS_LANCEDB.MD` - LanceDB RAG implementation plan
-- `docs/DOCS_LANCEDB_PHASE1.MD` - Phase 1: Foundation (complete)
-- `docs/DOCS_LANCEDB_PHASE2.MD` - Phase 2: Indexing Pipeline (complete)
+
+## Hybrid Search & Evaluation Documents
+- `docs/DOCS_HYBRID_SEARCH.MD` - Hybrid search (vector + BM25) implementation plan
+- `docs/DOCS_HYBRID_SEARCH_EXPLAINED.MD` - Hybrid search technical deep-dive (BM25, cosine similarity, score fusion)
+- `docs/DOCS_EVALUATION.MD` - Evaluation framework (datasets, quality metrics, benchmarking)
+- `docs/DOCS_HALLUCINATION_GROUNDING.MD` - Hallucination detection and grounding validation
+- `docs/DOCS_ROLLOUT.MD` - Production rollout guide (staged deployment, monitoring, rollback)
 
 ## Architecture
 - **Backend:** Go with Echo framework, SQLite database
@@ -365,6 +370,7 @@ LANCEDB_STORAGE_PROVIDER=local|s3
 6. Added REINDEX_RAG startup flag for bulk re-indexing
 7. Created DOCS_WIDGET.MD for external chat widget integration
 8. Completed RAG Phases 3-5 (retrieval pipeline, prompt simplification, cleanup)
+9. **Phase 5B Complete:** Removed compliance.go (489 lines), refactored audit.go to use LLM-based semantic verification via verifier.go
 
 ### Previous Work (2026-01-20)
 1. Added Agent Simulation feature with SSE streaming
@@ -391,7 +397,8 @@ RAG (Retrieval-Augmented Generation) pipeline using LanceDB-Go to improve respon
 | Phase 2 | Indexing Pipeline - Index on KB/Policy upload, batch embedding | ✅ Complete |
 | Phase 3 | Retrieval Pipeline - Hybrid search, intent-aware retrieval | ✅ Complete |
 | Phase 4 | Prompt Simplification - New template, refactor buildSystemPrompt() | ✅ Complete |
-| Phase 5 | Cleanup & Optimization - Remove compliance.go, grounding.go, optional verifier | ✅ Complete |
+| Phase 5 | Cleanup & Optimization - Remove grounding.go, optional verifier | ✅ Complete |
+| Phase 5B | Remove compliance.go, refactor audit.go to use LLM verification | ✅ Complete |
 
 ### Phase 1 Files Created
 - `server/router/api/v1/agent/vectordb.go` - LanceDB connection and operations
@@ -431,7 +438,7 @@ LLM_VERIFIER_ENABLED=true|false  # Default: false
 - **Index Storage:** Local filesystem (testing) + Tigrisdata S3 (production on fly.io)
 - **Re-indexing:** On every file upload
 - **Feature Flag:** Global environment variable
-- **Compliance Checker:** Will be REMOVED (regex compliance)
+- **Compliance Checker:** REMOVED (Phase 5B) - audit.go now uses LLM-based verification
 - **LLM Verifier:** Keep as OPTIONAL safety net (disabled by default)
 - **SCRIPT.MD:** Full content as system prompt, configurable per tenant
 

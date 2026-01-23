@@ -6,6 +6,14 @@ All notable changes to the bchat AI Agent System are documented in this file.
 
 ## 2026-01-23
 
+### Removed
+- **compliance.go (Phase 5B)** - Removed regex-based compliance checker
+  - Replaced with LLM-based semantic verification in `audit.go`
+  - `audit.go` now uses `verifier.go` for service, contact, and exclusion compliance checks
+  - Regex patterns cannot understand semantic meaning and had high false positive rates
+  - Consistent with RAG philosophy: use LLM grounding, not regex patterns
+  - Updated `DOCS_HALLUCINATION_GROUNDING.MD` to reflect Layer 1 removal
+
 ### Added
 - **Rebuild Index Button** - Added "Rebuild Index" button to Agent Admin page for per-tenant RAG reindexing
   - New `ReindexTenantContent()` function in `service.go`
@@ -109,6 +117,15 @@ All notable changes to the bchat AI Agent System are documented in this file.
   - VerificationMetrics for monitoring
   - Configuration guide for enabling verification
   - Integration points in service.go
+
+- **DOCS_ROLLOUT.MD** - Hybrid search production rollout guide
+  - Phase 1: Test tenant enablement with verification checklist
+  - Phase 2: Metrics monitoring (quality, latency, errors) with alert thresholds
+  - Phase 3: Gradual rollout stages (10% → 25% → 50% → 100%)
+  - Rollback procedures (immediate and gradual)
+  - Success criteria and go/no-go checklists
+  - SQL commands for tenant-level feature flags
+  - Emergency response procedures
 
 ### Fixed
 - **Data Path Doubling** - Fixed `build/build/data` path error in Taskfile.yml

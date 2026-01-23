@@ -49,12 +49,12 @@ bchat implements a **defense-in-depth** approach with three validation layers:
 └─────────────────────────┬───────────────────────────────────────┘
                           ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ LAYER 1: Regex Compliance Check (compliance.go)                  │
+│ LAYER 1: Regex Compliance Check                                  │
 │ ─────────────────────────────────────────────────────────────── │
-│ • Placeholder phone detection (555-xxxx, 000-0000)              │
-│ • Placeholder email detection (@example.com)                     │
-│ • Excluded service mentions                                      │
-│ • Status: OPTIONAL (marked for removal in Phase 5)              │
+│ • Status: REMOVED (Phase 5B complete)                           │
+│ • Replaced by LLM-based semantic verification in audit.go       │
+│ • compliance.go deleted - regex patterns cannot understand      │
+│   semantic meaning and had high false positive rates            │
 └─────────────────────────┬───────────────────────────────────────┘
                           ▼
 ┌─────────────────────────────────────────────────────────────────┐
@@ -83,26 +83,29 @@ bchat implements a **defense-in-depth** approach with three validation layers:
 
 ---
 
-## Layer 1: Regex-Based Compliance
+## Layer 1: Regex-Based Compliance (REMOVED)
 
-**File:** `compliance.go`
-**Status:** Active but marked for removal
+**File:** `compliance.go` - **DELETED**
+**Status:** Removed in Phase 5B
 
-### Detected Patterns
+### Why It Was Removed
 
-| Category | Pattern | Example |
-|----------|---------|---------|
-| Placeholder phone | `555-XXX-XXXX` | (555) 123-4567 |
-| All-zeros phone | `000-000-0000` | 000-000-0000 |
-| Test phone | `123-456-7890` | (123) 456-7890 |
-| Placeholder email | `@example.com` | test@example.com |
-| Test email | `@test.com` | user@test.com |
+The regex-based compliance checker was removed because:
 
-### Limitations
+1. **Pattern-only** - Cannot understand semantic meaning
+2. **False positives** - May flag legitimate customer-provided numbers
+3. **Maintenance burden** - Requires updating patterns manually
+4. **Inconsistent with RAG philosophy** - Use LLM grounding, not regex patterns
 
-- **Pattern-only** - Cannot understand semantic meaning
-- **False positives** - May flag legitimate customer-provided numbers
-- **Maintenance burden** - Requires updating patterns manually
+### What Replaced It
+
+The audit functionality in `audit.go` now uses **LLM-based semantic verification** via `verifier.go` instead of regex patterns. This provides:
+
+- Semantic understanding of content
+- Context-aware violation detection
+- Consistent approach with the RAG pipeline philosophy
+
+The **Output Sanitization** layer (Layer 2) still handles concrete placeholder patterns like impossible phone numbers and known placeholder emails.
 
 ---
 
@@ -552,13 +555,15 @@ slog.Debug("verification result",
 
 | Layer | Purpose | Status | Latency |
 |-------|---------|--------|---------|
-| Regex Compliance | Pattern detection | Deprecated | < 1ms |
+| Regex Compliance | Pattern detection | **Removed** (Phase 5B) | N/A |
 | Output Sanitization | Cleanup & correction | Always on | < 5ms |
 | LLM Verification | Semantic grounding | Optional | 200-500ms |
 
 **Best Practice:** Use output sanitization always, enable LLM verification in production when accuracy is critical.
 
+**Note:** The regex compliance layer was removed in Phase 5B. Audit functionality now uses LLM-based semantic verification instead of regex patterns for improved accuracy.
+
 ---
 
-*Document Version: 1.0*
-*Created: 2026-01-23*
+*Document Version: 1.1*
+*Updated: 2026-01-23* - Phase 5B: Removed regex compliance layer

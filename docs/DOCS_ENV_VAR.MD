@@ -330,7 +330,7 @@ Higher values favor exact keyword matches over semantic similarity.
 
 ### LLM_VERIFIER_ENABLED
 
-Enables LLM-based response verification (optional safety layer).
+Enables LLM-based response verification (semantic grounding against KB).
 
 | Property | Value |
 |----------|-------|
@@ -343,6 +343,13 @@ export LLM_VERIFIER_ENABLED=true
 ```
 
 When enabled, responses are verified against KB content before being sent.
+
+**Note:** This is now the primary semantic verification layer. The regex-based compliance checker was removed in Phase 5B. The output sanitizer (always active) handles concrete placeholder patterns, while the LLM verifier provides semantic grounding checks.
+
+**When to enable:**
+- High-stakes deployments needing extra validation
+- Debugging response quality issues
+- Production environments where accuracy is critical
 
 ---
 
@@ -599,5 +606,5 @@ task build:backend:rag
 
 ---
 
-*Document Version: 1.0*
-*Created: 2026-01-23*
+*Document Version: 1.1*
+*Updated: 2026-01-23* - Updated LLM_VERIFIER_ENABLED description after Phase 5B
