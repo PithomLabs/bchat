@@ -12,6 +12,7 @@ See `docs/DOCS_CHAT_DESIGN_4_IMP_2-PROGRESS.MD` for detailed progress report.
 - `docs/DOCS_ENV_VAR.MD` - Environment variables reference
 - `docs/DOCS_TASKFILE.MD` - Build and run commands reference
 - `docs/DOCS_WIDGET.MD` - External chat widget integration guide
+- `docs/DOCS_PENDING.MD` - Pending work, limitations, and known issues
 
 ## Design Documents
 - `docs/DOCS_CHAT_DESIGN_4_IMP_2.MD` - Main implementation specification
