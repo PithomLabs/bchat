@@ -1,0 +1,5 @@
+let us tighten the script, the purpose of POLICY.MD is to establish what the knowledge base says within its constraints and what are not allowed to say as guidance for the chat agent, the SCRIPT.MD is all about the chat agent conversation flow from opening to closing and everything in between (its role, tone and personality, response length, all about the chat agent), what do you think are supposed to be included in both MD files considering that I have fed the chat engine with KB.MD which is the entire knowledge base of the chat agent
+
+note that chat agent is just for knowledge base, it is supposed to be general purpose like it can address other verticals like services business (hvac plumbing etc), I want all the categories that are relevant for both MD files
+
+elaborate the guidelines for SCRIPT.MD emphasizing the distinction between Phase 1 (opening game, mid-game, intake, emergency/disress-related scenarios and the like, answering concerns) and Phase 2 (end game, "is there anything else?") that is applicable for all categories of chat agent (not just KB but covers all spectrum of businesses), refer to SCRIPT_OPUS.13.MD for guidance)
