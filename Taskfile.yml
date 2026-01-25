@@ -48,13 +48,28 @@ tasks:
       - mkdir -p build
       - go build -tags rag -o build/memos ./bin/memos/main.go
 
+  build:widget:
+    desc: Build the embeddable chat widget
+    dir: widget
+    cmds:
+      - npm install
+      - npm run build
+
   build:
     desc: Build everything (frontend + backend)
     deps: [build:frontend, build:backend]
 
+  build:all:
+    desc: Build everything including widget (frontend + backend + widget)
+    deps: [build:frontend, build:backend, build:widget]
+
   build:rag:
     desc: Build everything with RAG support (frontend + backend with LanceDB)
     deps: [build:frontend, build:backend:rag]
+
+  build:rag:all:
+    desc: Build everything with RAG support including widget
+    deps: [build:frontend, build:backend:rag, build:widget]
 
   dev:frontend:
     desc: Run frontend dev server

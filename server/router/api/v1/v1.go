@@ -136,6 +136,13 @@ func (s *APIV1Service) RegisterGateway(ctx context.Context, echoServer *echo.Ech
 	gwGroup := echoServer.Group("")
 	gwGroup.Use(middleware.CORS())
 
+	// Global CORS middleware for all routes - handles OPTIONS preflight before auth
+	echoServer.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: []string{"*"},
+		AllowMethods: []string{echo.GET, echo.POST, echo.PUT, echo.DELETE, echo.OPTIONS},
+		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization},
+	}))
+
 	// Register ticket routes directly to Echo group with Auth middleware
 	// Register these BEFORE the gRPC-gateway Any wildcard to ensure they take precedence
 	ticketGroup := echoServer.Group("/api/v1")
@@ -177,10 +184,15 @@ func (s *APIV1Service) RegisterGateway(ctx context.Context, echoServer *echo.Ech
 
 // RegisterAgentRoutes registers the agent chat API routes.
 func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
-	// Public routes (no auth required)
+	// Public routes (no auth required) - CORS handled globally
 	publicGroup := echoServer.Group("/api/v1/agent")
 	publicGroup.POST("/:slug/chat/ext", s.agentHandler.HandleChatExternal)
-	publicGroup.GET("/:slug/widget.js", s.agentHandler.HandleWidget)
+	publicGroup.GET("/:slug/widget.js", s.agentHandler.HandleWidget) // Legacy - inline JS
+
+	// Widget routes (public, no auth) - CORS handled globally
+	widgetGroup := echoServer.Group("/widget")
+	widgetGroup.GET("/:slug/embed.js", s.agentHandler.HandleWidgetEmbed)  // Built bundle
+	widgetGroup.GET("/:slug/iframe", s.agentHandler.HandleWidgetIframe)   // iframe HTML
 
 	// Authenticated routes (Memos user auth required)
 	authGroup := echoServer.Group("/api/v1/agent")

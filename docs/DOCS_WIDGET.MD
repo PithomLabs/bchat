@@ -1,7 +1,7 @@
 # External Chat Widget
 
 **Status:** Active
-**Date:** 2026-01-23
+**Date:** 2026-01-25
 **Related Documents:**
 - [DOCS_README.MD](./DOCS_README.MD) - Project overview
 - [DOCS_ENV_VAR.MD](./DOCS_ENV_VAR.MD) - Environment variables
@@ -10,24 +10,48 @@
 
 ## Overview
 
-The external chat widget allows you to embed an AI chat agent on any website using a single JavaScript include. The widget:
+The external chat widget allows you to embed an AI chat agent on any website. The widget supports multiple embedding approaches:
 
-- Uses a **JavaScript embed approach** (not iframe)
-- Is **self-contained** - no external dependencies required
-- **Auto-configures** based on tenant settings
-- Provides a **floating chat button** in the bottom-right corner
+| Approach | Best For | Isolation |
+|----------|----------|-----------|
+| **JavaScript Embed** | General websites, full control | Low (shares DOM) |
+| **iframe Embed** | CMS, WordPress, Shopify | High (isolated) |
+| **Legacy Script** | Backward compatibility | Low (shares DOM) |
+
+All approaches:
+- Are **self-contained** - no external dependencies required
+- **Auto-configure** based on tenant settings
+- Provide a **floating chat button** (JS) or **full panel** (iframe)
 
 ---
 
 ## Quick Start
 
-Add this single line to your website's HTML, replacing `your-tenant` with your tenant slug:
+### Option 1: JavaScript Embed (Recommended)
+
+```html
+<script
+  src="https://your-server.com/widget/your-tenant/embed.js"
+  data-position="bottom-right"
+  data-color="#0d9488"
+></script>
+```
+
+### Option 2: iframe Embed
+
+```html
+<iframe
+  src="https://your-server.com/widget/your-tenant/iframe?color=%230d9488"
+  style="position:fixed;bottom:0;right:0;width:400px;height:600px;border:none;z-index:9999;"
+  title="Chat Widget"
+></iframe>
+```
+
+### Option 3: Legacy Script (Backward Compatible)
 
 ```html
 <script src="https://your-server.com/api/v1/agent/your-tenant/widget.js"></script>
 ```
-
-That's it! A chat button will appear in the bottom-right corner of your page.
 
 ---
 
@@ -39,9 +63,11 @@ That's it! A chat button will appear in the bottom-right corner of your page.
 2. Select your tenant
 3. Copy the slug (e.g., `acme-corp`)
 
-### Step 2: Add the Widget Script
+### Step 2: Choose Your Embedding Method
 
-Add the script tag before the closing `</body>` tag:
+#### JavaScript Embed (Recommended)
+
+Best for most websites. Provides a floating button that expands into a chat panel.
 
 ```html
 <!DOCTYPE html>
@@ -50,13 +76,49 @@ Add the script tag before the closing `</body>` tag:
   <title>My Website</title>
 </head>
 <body>
-  <!-- Your website content -->
   <h1>Welcome to our site</h1>
 
-  <!-- Add the chat widget -->
-  <script src="https://your-server.com/api/v1/agent/acme-corp/widget.js"></script>
+  <!-- Chat widget with configuration -->
+  <script
+    src="https://your-server.com/widget/acme-corp/embed.js"
+    data-position="bottom-right"
+    data-color="#0d9488"
+    data-welcome="How can we help you today?"
+  ></script>
 </body>
 </html>
+```
+
+#### iframe Embed
+
+Best for CMS platforms (WordPress, Shopify, Wix) where script injection is limited.
+
+```html
+<iframe
+  src="https://your-server.com/widget/acme-corp/iframe?color=%230d9488&welcome=How%20can%20we%20help%3F"
+  style="position:fixed;bottom:0;right:0;width:400px;height:600px;border:none;z-index:9999;"
+  title="Chat Widget"
+></iframe>
+```
+
+#### Advanced: Global Configuration
+
+For more control, configure via JavaScript before loading the widget:
+
+```html
+<script>
+  window.AgentChatConfig = {
+    baseUrl: 'https://your-server.com',
+    tenant: 'acme-corp',
+    color: '#0d9488',
+    position: 'bottom-right',
+    welcomeMessage: 'How can we help you today?',
+    buttonSize: 56,
+    panelWidth: 350,
+    panelHeight: 500
+  };
+</script>
+<script src="https://your-server.com/widget/acme-corp/embed.js"></script>
 ```
 
 ### Step 3: Test the Widget
@@ -68,11 +130,37 @@ Add the script tag before the closing `</body>` tag:
 
 ---
 
+## Configuration Options
+
+### JavaScript Embed (data-* attributes)
+
+| Attribute | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `data-position` | string | `bottom-right` | `bottom-right` or `bottom-left` |
+| `data-color` | string | `#0d9488` | Primary color (hex) |
+| `data-welcome` | string | `How can we help you today?` | Welcome message |
+| `data-company-name` | string | (from tenant) | Company name in header |
+| `data-button-size` | number | `56` | Toggle button size (px) |
+| `data-panel-width` | number | `350` | Panel width (px) |
+| `data-panel-height` | number | `500` | Panel height (px) |
+
+### iframe Embed (query parameters)
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `color` | string | `#0d9488` | Primary color (URL-encoded hex) |
+| `welcome` | string | `How can we help you today?` | Welcome message |
+| `companyName` | string | (from tenant) | Company name in header |
+
+**Note:** URL-encode special characters. `#0d9488` becomes `%230d9488`.
+
+---
+
 ## API Reference
 
-### GET /api/v1/agent/:slug/widget.js
+### GET /widget/:slug/embed.js
 
-Returns the embeddable widget JavaScript.
+Returns the built widget JavaScript bundle with tenant configuration injected.
 
 **Parameters:**
 | Parameter | Type | Description |
@@ -85,19 +173,45 @@ Returns the embeddable widget JavaScript.
 
 **Example:**
 ```bash
-curl https://your-server.com/api/v1/agent/acme-corp/widget.js
+curl https://your-server.com/widget/acme-corp/embed.js
 ```
+
+---
+
+### GET /widget/:slug/iframe
+
+Returns a standalone HTML page for iframe embedding.
+
+**Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `slug` | path | Tenant slug |
+| `color` | query | Primary color (URL-encoded hex) |
+| `welcome` | query | Welcome message |
+| `companyName` | query | Company name override |
+
+**Response:**
+- Content-Type: `text/html; charset=utf-8`
+- Cache-Control: `public, max-age=3600` (1 hour)
+
+**Example:**
+```bash
+curl "https://your-server.com/widget/acme-corp/iframe?color=%230d9488"
+```
+
+---
+
+### GET /api/v1/agent/:slug/widget.js (Legacy)
+
+Returns the legacy inline-generated widget JavaScript.
+
+**Note:** This endpoint is maintained for backward compatibility. New integrations should use `/widget/:slug/embed.js`.
 
 ---
 
 ### POST /api/v1/agent/:slug/chat/ext
 
 Sends a chat message and receives a response. **No authentication required.**
-
-**Parameters:**
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `slug` | path | Tenant slug |
 
 **Request Body:**
 ```json
@@ -133,24 +247,8 @@ Sends a chat message and receives a response. **No authentication required.**
 |--------|-------------|
 | 400 | Invalid request body or missing message |
 | 404 | Tenant not found or inactive |
-| 429 | Rate limit exceeded (see below) |
+| 429 | Rate limit exceeded |
 | 500 | Internal server error |
-
-**Rate Limit Response (429):**
-```json
-{
-  "error": "rate_limit_exceeded",
-  "message": "Too many requests. Please try again in 60 seconds.",
-  "retry_after": 60
-}
-```
-
-**Example:**
-```bash
-curl -X POST https://your-server.com/api/v1/agent/acme-corp/chat/ext \
-  -H "Content-Type: application/json" \
-  -d '{"message": "Hello"}'
-```
 
 ---
 
@@ -165,7 +263,7 @@ curl -X POST https://your-server.com/api/v1/agent/acme-corp/chat/ext \
 | Header controls | Minimize (−) and close (×) buttons |
 | Message history | Auto-scrolling message list |
 | Input area | Text input with send button |
-| Welcome message | "How can we help you today?" |
+| Welcome message | Customizable via config |
 
 ### Behavior
 
@@ -174,7 +272,7 @@ curl -X POST https://your-server.com/api/v1/agent/acme-corp/chat/ext \
 | Toggle | Click button to open/close panel |
 | Minimize | Click − to collapse panel (keeps button visible) |
 | Enter to send | Press Enter to send message |
-| Typing indicator | Shows "Typing..." while waiting for response |
+| Typing indicator | Shows animated dots while waiting for response |
 | Auto-scroll | Scrolls to latest message automatically |
 | Session persistence | Maintains conversation via `session_id` |
 
@@ -182,7 +280,7 @@ curl -X POST https://your-server.com/api/v1/agent/acme-corp/chat/ext \
 
 | Property | Value |
 |----------|-------|
-| Primary color | Teal (#0d9488) |
+| Primary color | Configurable (default: #0d9488) |
 | Font | System UI (system-ui, -apple-system, sans-serif) |
 | Font size | 14px |
 | Border radius | 12px (panel), 50% (button) |
@@ -199,19 +297,23 @@ On screens under 480px:
 
 ## Customization
 
-### Currently Available
+### Using Data Attributes (Recommended)
 
-| Option | Source | Notes |
-|--------|--------|-------|
-| Company name | Tenant config | Displayed in header (if set) |
-| Primary color | Hardcoded | #0d9488 (teal) |
+```html
+<script
+  src="https://your-server.com/widget/acme-corp/embed.js"
+  data-position="bottom-left"
+  data-color="#7c3aed"
+  data-welcome="Hi! What can I help you with?"
+></script>
+```
 
 ### CSS Overrides
 
 You can override widget styles after the script loads:
 
 ```html
-<script src=".../widget.js"></script>
+<script src=".../embed.js"></script>
 <style>
   /* Move to bottom-left */
   #acw-toggle, #acw-panel {
@@ -242,7 +344,8 @@ You can override widget styles after the script loads:
 | `#acw-header` | Panel header |
 | `#acw-content` | Content area |
 | `#acw-messages` | Messages container |
-| `.acw-msg` | Message bubble |
+| `.acw-msg` | Message wrapper |
+| `.acw-msg-bubble` | Message bubble |
 | `.acw-msg-user` | User message |
 | `.acw-msg-assistant` | Agent message |
 | `.acw-typing` | Typing indicator |
@@ -277,19 +380,58 @@ You can override widget styles after the script loads:
 - Server handles CORS headers automatically
 - Widget script works cross-origin
 
+### iframe Security
+- iframe embed is isolated from parent page
+- No access to parent page DOM or cookies
+
 ---
 
-## Limitations
+## Building the Widget
 
-| Limitation | Description |
-|------------|-------------|
-| No SSE streaming | Uses request/response, not real-time streaming |
-| No file uploads | Text messages only |
-| No history persistence | Sessions lost on server restart |
-| Limited customization | Primary color is hardcoded |
-| No typing detection | No "user is typing" indicator to agent |
-| No offline support | Requires active server connection |
-| No multi-language | Widget UI is English only |
+The widget source code is in the `widget/` folder. To build:
+
+```bash
+# Build widget only
+task build:widget
+
+# Build everything including widget
+task build:all
+
+# Build with RAG support including widget
+task build:rag:all
+```
+
+### Development
+
+```bash
+cd widget
+npm install
+npm run dev     # Start dev server on port 3002
+npm run build   # Build for production
+```
+
+### Widget Architecture
+
+```
+widget/
+├── src/
+│   ├── core/           # Core logic
+│   │   ├── types.ts    # TypeScript interfaces
+│   │   ├── api.ts      # API client
+│   │   └── state.ts    # State management
+│   ├── ui/             # UI components
+│   │   ├── Widget.ts   # Main orchestrator
+│   │   ├── Button.ts   # Toggle button
+│   │   ├── Panel.ts    # Chat panel
+│   │   ├── Messages.ts # Message list
+│   │   └── Input.ts    # Input area
+│   ├── styles/
+│   │   └── styles.ts   # Inline CSS
+│   └── embed.ts        # Entry point
+├── dist/
+│   └── embed.min.js    # Built bundle (~15-20KB)
+└── package.json
+```
 
 ---
 
@@ -308,6 +450,7 @@ You can override widget styles after the script loads:
 ```javascript
 // Debug: Check if widget loaded
 console.log(document.getElementById('agent-chat-widget'));
+console.log(window.AgentChatWidget);
 ```
 
 ### Rate Limit Errors
@@ -327,30 +470,28 @@ console.log(document.getElementById('agent-chat-widget'));
 2. Check if using correct server URL (http vs https)
 3. Verify tenant exists and is active
 
-### Messages Not Sending
+### iframe Not Loading
 
-**Symptoms:** Click send but nothing happens.
-
-**Solutions:**
-1. Check network tab for failed requests
-2. Verify server is running
-3. Check for JavaScript errors in console
-4. Ensure message is not empty
-
-### Styling Issues
-
-**Symptoms:** Widget looks broken or unstyled.
+**Symptoms:** iframe shows blank or error.
 
 **Solutions:**
-1. Check for CSS conflicts with your site
-2. Ensure no `* { }` reset styles affecting widget
-3. Try loading widget on a blank page to isolate issue
+1. Check browser console for errors
+2. Ensure URL is correct and tenant is active
+3. Check for Content Security Policy (CSP) restrictions on parent page
+
+### Build Not Found
+
+**Symptoms:** Fallback to legacy widget, console shows "widget embed.min.js not found".
+
+**Solutions:**
+1. Run `task build:widget` to build the widget
+2. Ensure the server is running from the project root directory
 
 ---
 
 ## Examples
 
-### Basic Integration
+### Basic JavaScript Embed
 
 ```html
 <!DOCTYPE html>
@@ -362,34 +503,42 @@ console.log(document.getElementById('agent-chat-widget'));
   <h1>Contact Us</h1>
   <p>Click the chat button for instant support.</p>
 
-  <script src="https://chat.example.com/api/v1/agent/support/widget.js"></script>
+  <script src="https://chat.example.com/widget/support/embed.js"></script>
 </body>
 </html>
 ```
 
-### With Custom Styling
+### Customized JavaScript Embed
 
 ```html
 <!DOCTYPE html>
 <html>
 <head>
   <title>My Store</title>
-  <style>
-    /* Purple theme */
-    #acw-toggle, #acw-header, .acw-msg-user, #acw-send {
-      background: #7c3aed !important;
-    }
-    #acw-input:focus {
-      border-color: #7c3aed !important;
-    }
-  </style>
 </head>
 <body>
   <h1>Welcome to My Store</h1>
 
-  <script src="https://chat.example.com/api/v1/agent/mystore/widget.js"></script>
+  <script
+    src="https://chat.example.com/widget/mystore/embed.js"
+    data-position="bottom-left"
+    data-color="#7c3aed"
+    data-welcome="Hi! Need help finding something?"
+  ></script>
 </body>
 </html>
+```
+
+### iframe in WordPress
+
+Add this to a Custom HTML block:
+
+```html
+<iframe
+  src="https://chat.example.com/widget/mystore/iframe?color=%237c3aed"
+  style="position:fixed;bottom:20px;right:20px;width:380px;height:550px;border:none;z-index:9999;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.15);"
+  title="Chat Support"
+></iframe>
 ```
 
 ### React Integration
@@ -397,10 +546,15 @@ console.log(document.getElementById('agent-chat-widget'));
 ```jsx
 import { useEffect } from 'react';
 
-function ChatWidget({ tenantSlug }) {
+function ChatWidget({ tenantSlug, color = '#0d9488' }) {
   useEffect(() => {
+    // Configure before loading
+    window.AgentChatConfig = {
+      color: color
+    };
+
     const script = document.createElement('script');
-    script.src = `https://chat.example.com/api/v1/agent/${tenantSlug}/widget.js`;
+    script.src = `https://chat.example.com/widget/${tenantSlug}/embed.js`;
     script.async = true;
     document.body.appendChild(script);
 
@@ -408,9 +562,12 @@ function ChatWidget({ tenantSlug }) {
       // Cleanup on unmount
       const widget = document.getElementById('agent-chat-widget');
       if (widget) widget.remove();
+      const styles = document.getElementById('acw-styles');
+      if (styles) styles.remove();
       script.remove();
+      delete window.AgentChatWidget;
     };
-  }, [tenantSlug]);
+  }, [tenantSlug, color]);
 
   return null;
 }
@@ -424,12 +581,13 @@ export default ChatWidget;
 
 | Endpoint | Auth | Description |
 |----------|------|-------------|
-| `GET /:slug/widget.js` | None | Widget JavaScript |
-| `POST /:slug/chat/ext` | None | External chat |
-| `POST /:slug/chat/int` | Required | Internal chat |
-| `GET /:slug/config` | Required | Tenant configuration |
+| `GET /widget/:slug/embed.js` | None | Built widget bundle |
+| `GET /widget/:slug/iframe` | None | iframe HTML page |
+| `GET /api/v1/agent/:slug/widget.js` | None | Legacy widget (inline JS) |
+| `POST /api/v1/agent/:slug/chat/ext` | None | External chat API |
+| `POST /api/v1/agent/:slug/chat/int` | Required | Internal chat API |
 
 ---
 
-*Document Version: 1.0*
-*Last Updated: 2026-01-23*
+*Document Version: 2.0*
+*Last Updated: 2026-01-25*

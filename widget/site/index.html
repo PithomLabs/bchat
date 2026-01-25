@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Widget Test Site</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      line-height: 1.6;
+      color: #1f2937;
+      background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+
+    h1 {
+      color: #0d9488;
+      font-size: 2.5rem;
+      margin-bottom: 8px;
+    }
+
+    .subtitle {
+      color: #6b7280;
+      font-size: 1.1rem;
+    }
+
+    .card {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+
+    .card h2 {
+      color: #374151;
+      font-size: 1.25rem;
+      margin-bottom: 16px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid #e5e7eb;
+    }
+
+    .card p {
+      color: #4b5563;
+      margin-bottom: 12px;
+    }
+
+    .card ul {
+      list-style: none;
+      padding: 0;
+    }
+
+    .card li {
+      padding: 8px 0;
+      padding-left: 24px;
+      position: relative;
+      color: #4b5563;
+    }
+
+    .card li::before {
+      content: "✓";
+      position: absolute;
+      left: 0;
+      color: #0d9488;
+      font-weight: bold;
+    }
+
+    .config-section {
+      background: #f9fafb;
+      border-radius: 8px;
+      padding: 16px;
+      margin-top: 16px;
+    }
+
+    .config-section h3 {
+      font-size: 0.875rem;
+      color: #6b7280;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .config-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #e5e7eb;
+    }
+
+    .config-item:last-child {
+      border-bottom: none;
+    }
+
+    .config-key {
+      font-family: monospace;
+      color: #0d9488;
+    }
+
+    .config-value {
+      color: #374151;
+      font-family: monospace;
+    }
+
+    .test-buttons {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 16px;
+    }
+
+    .test-btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+
+    .test-btn-primary {
+      background: #0d9488;
+      color: white;
+    }
+
+    .test-btn-primary:hover {
+      background: #0f766e;
+    }
+
+    .test-btn-secondary {
+      background: #e5e7eb;
+      color: #374151;
+    }
+
+    .test-btn-secondary:hover {
+      background: #d1d5db;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 9999px;
+      font-size: 0.875rem;
+      font-weight: 500;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .status-success {
+      background: #d1fae5;
+      color: #065f46;
+    }
+
+    .status-success .status-dot {
+      background: #10b981;
+    }
+
+    .status-warning {
+      background: #fef3c7;
+      color: #92400e;
+    }
+
+    .status-warning .status-dot {
+      background: #f59e0b;
+    }
+
+    footer {
+      text-align: center;
+      color: #9ca3af;
+      font-size: 0.875rem;
+      margin-top: 40px;
+    }
+
+    code {
+      background: #f3f4f6;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 0.875rem;
+    }
+
+    .lorem {
+      color: #9ca3af;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Widget Test Site</h1>
+      <p class="subtitle">Testing the embeddable chat widget against local server</p>
+    </header>
+
+    <div class="card">
+      <h2>Server Status</h2>
+      <p>
+        <span class="status status-warning" id="server-status">
+          <span class="status-dot"></span>
+          Checking...
+        </span>
+      </p>
+      <p>The widget connects to: <code id="server-url">http://localhost:8081</code></p>
+
+      <div class="config-section">
+        <h3>Widget Configuration</h3>
+        <div class="config-item">
+          <span class="config-key">tenant</span>
+          <span class="config-value" id="tenant-slug">test-tenant</span>
+        </div>
+        <div class="config-item">
+          <span class="config-key">position</span>
+          <span class="config-value">bottom-right</span>
+        </div>
+        <div class="config-item">
+          <span class="config-key">color</span>
+          <span class="config-value">#0d9488</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Test Instructions</h2>
+      <ul>
+        <li>Start the server: <code>task run:rag</code> or <code>task run:rag:mock</code></li>
+        <li>Ensure a tenant exists with slug matching the configuration</li>
+        <li>Click the chat button in the bottom-right corner</li>
+        <li>Send a test message and verify the response</li>
+        <li>Check browser console for any errors</li>
+      </ul>
+
+      <div class="test-buttons">
+        <button class="test-btn test-btn-primary" onclick="openWidget()">Open Widget</button>
+        <button class="test-btn test-btn-secondary" onclick="closeWidget()">Close Widget</button>
+        <button class="test-btn test-btn-secondary" onclick="checkServer()">Check Server</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Sample Content</h2>
+      <p>This section simulates typical website content to test widget interaction with page elements.</p>
+      <p class="lorem">
+        Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt
+        ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco
+        laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in
+        voluptate velit esse cillum dolore eu fugiat nulla pariatur.
+      </p>
+      <p class="lorem">
+        Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit
+        anim id est laborum. Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium
+        doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi
+        architecto beatae vitae dicta sunt explicabo.
+      </p>
+    </div>
+
+    <footer>
+      <p>Widget Test Site | Local Development</p>
+    </footer>
+  </div>
+
+  <!-- Widget Configuration -->
+  <script>
+    // Configure the widget before loading
+    window.AgentChatConfig = {
+      baseUrl: 'http://localhost:8081',
+      tenant: 'inc',
+      color: '#0d9488',
+      position: 'bottom-right',
+      welcomeMessage: 'How can we help you today?'
+    };
+
+    // Helper functions for testing
+    function openWidget() {
+      const btn = document.getElementById('acw-toggle');
+      if (btn && !document.getElementById('acw-panel')?.classList.contains('acw-open')) {
+        btn.click();
+      }
+    }
+
+    function closeWidget() {
+      const closeBtn = document.getElementById('acw-close');
+      if (closeBtn) {
+        closeBtn.click();
+      }
+    }
+
+    async function checkServer() {
+      const statusEl = document.getElementById('server-status');
+      statusEl.innerHTML = '<span class="status-dot"></span>Checking...';
+      statusEl.className = 'status status-warning';
+
+      try {
+        const response = await fetch('http://localhost:8081/api/v1/agent/inc/chat/ext', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: 'ping' })
+        });
+
+        if (response.ok || response.status === 404) {
+          // 404 means server is up but tenant doesn't exist
+          if (response.status === 404) {
+            statusEl.innerHTML = '<span class="status-dot"></span>Server OK (tenant not found)';
+            statusEl.className = 'status status-warning';
+          } else {
+            statusEl.innerHTML = '<span class="status-dot"></span>Connected';
+            statusEl.className = 'status status-success';
+          }
+        } else {
+          statusEl.innerHTML = '<span class="status-dot"></span>Error: ' + response.status;
+          statusEl.className = 'status status-warning';
+        }
+      } catch (err) {
+        statusEl.innerHTML = '<span class="status-dot"></span>Server Offline';
+        statusEl.className = 'status status-warning';
+      }
+    }
+
+    // Check server status on load
+    document.addEventListener('DOMContentLoaded', checkServer);
+  </script>
+
+  <!-- Load the widget -->
+  <script src="http://localhost:8081/widget/inc/embed.js"></script>
+</body>
+</html>

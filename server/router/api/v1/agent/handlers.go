@@ -6,6 +6,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -1295,6 +1297,161 @@ func generateWidgetScript(baseURL, tenantSlug, companyName string) string {
   // Initialize
   updateUI();
 })();`
+}
+
+// HandleWidgetEmbed serves the built widget JavaScript bundle.
+// GET /widget/:slug/embed.js
+func (h *Handler) HandleWidgetEmbed(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	// Validate tenant exists and is active
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil || !tenant.IsActive {
+		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
+	}
+
+	// Get base URL from request
+	scheme := "https"
+	if c.Request().TLS == nil {
+		scheme = "http"
+	}
+	baseURL := scheme + "://" + c.Request().Host
+
+	// Try to read the built widget file
+	widgetPath := filepath.Join("widget", "dist", "embed.min.js")
+	content, err := os.ReadFile(widgetPath)
+	if err != nil {
+		// Fallback to inline-generated script if built file not found
+		slog.Warn("widget embed.min.js not found, using inline fallback", "path", widgetPath, "error", err)
+		script := generateWidgetScript(baseURL, slug, tenant.CompanyName)
+		c.Response().Header().Set("Content-Type", "application/javascript")
+		c.Response().Header().Set("Cache-Control", "public, max-age=3600")
+		return c.String(http.StatusOK, script)
+	}
+
+	// Inject configuration at the start of the script
+	configScript := fmt.Sprintf(`window.AgentChatConfig=window.AgentChatConfig||{};
+window.AgentChatConfig.baseUrl=window.AgentChatConfig.baseUrl||%q;
+window.AgentChatConfig.tenant=window.AgentChatConfig.tenant||%q;
+window.AgentChatConfig.companyName=window.AgentChatConfig.companyName||%q;
+`, baseURL, slug, tenant.CompanyName)
+
+	finalScript := configScript + string(content)
+
+	c.Response().Header().Set("Content-Type", "application/javascript")
+	c.Response().Header().Set("Cache-Control", "public, max-age=3600")
+	return c.String(http.StatusOK, finalScript)
+}
+
+// HandleWidgetIframe serves the widget as a standalone HTML page for iframe embedding.
+// GET /widget/:slug/iframe
+func (h *Handler) HandleWidgetIframe(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	// Validate tenant exists and is active
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil || !tenant.IsActive {
+		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
+	}
+
+	// Get base URL from request
+	scheme := "https"
+	if c.Request().TLS == nil {
+		scheme = "http"
+	}
+	baseURL := scheme + "://" + c.Request().Host
+
+	// Parse optional query parameters for customization
+	color := c.QueryParam("color")
+	if color == "" {
+		color = "#0d9488"
+	}
+	welcome := c.QueryParam("welcome")
+	if welcome == "" {
+		welcome = "How can we help you today?"
+	}
+	companyName := tenant.CompanyName
+	if qName := c.QueryParam("companyName"); qName != "" {
+		companyName = qName
+	}
+
+	// Generate the iframe HTML with embedded widget
+	html := generateIframeHTML(baseURL, slug, companyName, color, welcome)
+
+	c.Response().Header().Set("Content-Type", "text/html; charset=utf-8")
+	c.Response().Header().Set("Cache-Control", "public, max-age=3600")
+	return c.HTML(http.StatusOK, html)
+}
+
+// generateIframeHTML generates a standalone HTML page for the widget iframe.
+func generateIframeHTML(baseURL, tenantSlug, companyName, color, welcomeMessage string) string {
+	// Escape values for use in JavaScript
+	escapeJS := func(s string) string {
+		s = strings.ReplaceAll(s, "\\", "\\\\")
+		s = strings.ReplaceAll(s, "'", "\\'")
+		s = strings.ReplaceAll(s, "\n", "\\n")
+		s = strings.ReplaceAll(s, "\r", "")
+		return s
+	}
+
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chat</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%%;
+      height: 100%%;
+      overflow: hidden;
+      background: transparent;
+    }
+    /* Override widget positioning for iframe mode */
+    #agent-chat-widget { position: static !important; }
+    #acw-toggle { display: none !important; }
+    #acw-panel {
+      position: static !important;
+      width: 100%% !important;
+      height: 100%% !important;
+      border-radius: 0 !important;
+      box-shadow: none !important;
+      display: flex !important;
+    }
+  </style>
+</head>
+<body>
+  <script>
+    window.AgentChatConfig = {
+      baseUrl: '%s',
+      tenant: '%s',
+      companyName: '%s',
+      color: '%s',
+      welcomeMessage: '%s'
+    };
+  </script>
+  <script src="%s/widget/%s/embed.js"></script>
+  <script>
+    // Auto-open in iframe mode
+    setTimeout(function() {
+      var btn = document.getElementById('acw-toggle');
+      if (btn) btn.click();
+    }, 100);
+  </script>
+</body>
+</html>`,
+		escapeJS(baseURL),
+		escapeJS(tenantSlug),
+		escapeJS(companyName),
+		escapeJS(color),
+		escapeJS(welcomeMessage),
+		escapeJS(baseURL),
+		escapeJS(tenantSlug),
+	)
 }
 
 // ============================================================================
