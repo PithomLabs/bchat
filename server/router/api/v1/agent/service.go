@@ -122,9 +122,10 @@ func (s *Service) ReindexAllContent(ctx context.Context) error {
 
 	totalChunks := 0
 	for _, tenant := range tenants {
-		// Get all source files for this tenant
+		// Get latest version of each source file for this tenant
 		files, err := s.store.ListAgentSourceFiles(ctx, &store.FindAgentSourceFile{
-			TenantID: &tenant.ID,
+			TenantID:   &tenant.ID,
+			LatestOnly: true, // Only get latest version of each file type
 		})
 		if err != nil {
 			slog.Warn("Failed to list source files for tenant", "tenantID", tenant.ID, "error", err)
@@ -196,8 +197,9 @@ func (s *Service) ReindexAllContent(ctx context.Context) error {
 }
 
 // ReindexTenantContent re-indexes KB and Policy content for a specific tenant.
+// If audienceType is provided (non-empty), only that audience is indexed.
 // Returns the number of chunks indexed.
-func (s *Service) ReindexTenantContent(ctx context.Context, tenantID int32) (int, error) {
+func (s *Service) ReindexTenantContent(ctx context.Context, tenantID int32, audienceType string) (int, error) {
 	if s.vectorDB == nil || s.chunker == nil {
 		return 0, fmt.Errorf("RAG pipeline not initialized")
 	}
@@ -213,12 +215,20 @@ func (s *Service) ReindexTenantContent(ctx context.Context, tenantID int32) (int
 		return 0, fmt.Errorf("failed to get tenant: %w", err)
 	}
 
-	slog.Info("Starting RAG reindex for tenant", "tenantID", tenantID, "tenant", tenant.Slug)
+	slog.Info("Starting RAG reindex for tenant", "tenantID", tenantID, "tenant", tenant.Slug, "audienceFilter", audienceType)
 
-	// Get all source files for this tenant
-	files, err := s.store.ListAgentSourceFiles(ctx, &store.FindAgentSourceFile{
-		TenantID: &tenantID,
-	})
+	// Get latest version of each source file for this tenant
+	findParams := &store.FindAgentSourceFile{
+		TenantID:   &tenantID,
+		LatestOnly: true, // Only get latest version of each file type
+	}
+
+	// Optional: filter by audience type
+	if audienceType != "" {
+		findParams.AudienceType = &audienceType
+	}
+
+	files, err := s.store.ListAgentSourceFiles(ctx, findParams)
 	if err != nil {
 		return 0, fmt.Errorf("failed to list source files: %w", err)
 	}

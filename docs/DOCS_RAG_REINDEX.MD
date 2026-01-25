@@ -353,6 +353,197 @@ fly secrets unset REINDEX_RAG     # Remove after reindex
 
 ---
 
+## Addendum: File Version Bug (Fixed 2026-01-26)
+
+### Issue
+
+Zero chunks despite properly annotated KB.MD file.
+
+**Example:** Iglesia ni Cristo tenant had an internal KB.MD with 43 annotations (version 4, 20KB), but "Rebuild Index" showed 0 chunks.
+
+### Root Cause
+
+The `ReindexTenantContent()` function in `service.go` was loading ALL file versions instead of just the latest:
+
+```go
+// BUG: Missing LatestOnly: true
+files, err := s.store.ListAgentSourceFiles(ctx, &store.FindAgentSourceFile{
+    TenantID: &tenantID,
+})
+```
+
+The query returned files ordered by `version DESC`. The loop then overwrote the content map for each file:
+
+```go
+for _, f := range files {
+    audienceFiles[f.AudienceType][f.FileType] = f.Content  // Overwrites!
+}
+```
+
+Result: The **oldest version** (usually raw/unformatted) ended up being processed instead of the latest formatted version.
+
+### Evidence
+
+```
+INC internal KB versions:
+- Version 4: 20KB, 43 annotations ← Should be used
+- Version 3: 1.7MB, 0 annotations
+- Version 2: 1.7MB, 0 annotations
+- Version 1: 1.7MB, 0 annotations ← Was being used (bug)
+```
+
+### Fix
+
+Added `LatestOnly: true` to the `ListAgentSourceFiles` call:
+
+```go
+files, err := s.store.ListAgentSourceFiles(ctx, &store.FindAgentSourceFile{
+    TenantID:   &tenantID,
+    LatestOnly: true,  // Only get latest version of each file type
+})
+```
+
+### Verification
+
+After fix, "Rebuild Index" should show non-zero chunks for tenants with annotated KB.MD files.
+
+---
+
+## Addendum: Embedding Server Connection Refused (Fixed 2026-01-26)
+
+### Issue
+
+"Rebuild Index" fails with connection refused error:
+
+```
+Reindex failed: failed to insert chunks for audience internal:
+failed to generate embeddings: local embedding request failed:
+Post "http://localhost:8001/embed": dial tcp 127.0.0.1:8001: connect: connection refused
+```
+
+### Root Cause
+
+`EMBEDDING_PROVIDER` defaults to `"local"`, which requires a local embedding server running at `http://localhost:8001/embed`. If no server is running, the connection is refused.
+
+### Solutions
+
+**Option A: Use Mock Embeddings (Recommended for Testing)**
+
+```bash
+# Use hash-based embeddings (no external dependencies)
+export EMBEDDING_PROVIDER=mock
+task run:rag
+
+# Or use the convenience command:
+task run:rag:mock
+```
+
+- Deterministic hash-based embeddings
+- No external dependencies
+- Good for testing RAG pipeline functionality
+
+**Option B: Use OpenRouter Embeddings (Production)**
+
+```bash
+export EMBEDDING_PROVIDER=openrouter
+export OPENROUTER_API_KEY=sk-or-v1-...
+task run:rag
+```
+
+- Uses OpenAI text-embedding-3-small via OpenRouter
+- Requires API key
+- Better semantic search quality
+
+**Option C: Run Local Embedding Server**
+
+```bash
+# Start embedding server (Python FastAPI with sentence-transformers)
+cd embedding-server && python server.py
+
+# Then run app with local provider
+export EMBEDDING_PROVIDER=local
+export EMBEDDING_LOCAL_ENDPOINT=http://localhost:8001/embed
+task run:rag
+```
+
+### Quick Fix
+
+For development/testing, use mock embeddings:
+
+```bash
+task run:rag:mock
+```
+
+---
+
+## Addendum: Audience Type Filtering (Added 2026-01-26)
+
+### Background
+
+By default, "Rebuild Index" indexes **all** audience types (internal and external) for a tenant. Sometimes you only want to reindex a specific audience.
+
+### API Usage
+
+The reindex endpoint now accepts an optional `audience` query parameter:
+
+```bash
+# Reindex internal content only
+curl -X POST "http://localhost:8081/api/v1/agent/inc/reindex?audience=internal" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Reindex external content only
+curl -X POST "http://localhost:8081/api/v1/agent/inc/reindex?audience=external" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Reindex all audiences (default behavior)
+curl -X POST "http://localhost:8081/api/v1/agent/inc/reindex" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "chunks": 45,
+  "message": "Successfully reindexed 45 chunks",
+  "audience": "internal"
+}
+```
+
+The `audience` field is only present when filtering by a specific audience type.
+
+### Code Changes
+
+**service.go:**
+```go
+func (s *Service) ReindexTenantContent(ctx context.Context, tenantID int32, audienceType string) (int, error) {
+    // ...
+    findParams := &store.FindAgentSourceFile{
+        TenantID:   &tenantID,
+        LatestOnly: true,
+    }
+
+    // Optional: filter by audience type
+    if audienceType != "" {
+        findParams.AudienceType = &audienceType
+    }
+    // ...
+}
+```
+
+**handlers.go:**
+```go
+func (h *Handler) HandleReindexTenant(c echo.Context) error {
+    // ...
+    audienceType := c.QueryParam("audience") // "internal" or "external" or "" (all)
+    chunks, err := h.service.ReindexTenantContent(ctx, tenant.ID, audienceType)
+    // ...
+}
+```
+
+---
+
 ## Related Documentation
 
 - [DOCS_RAG_PIPELINE.MD](./DOCS_RAG_PIPELINE.MD) - RAG architecture overview

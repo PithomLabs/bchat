@@ -550,8 +550,10 @@ func (h *Handler) HandleImportSingleFile(c echo.Context) error {
 }
 
 // HandleReindexTenant triggers RAG reindexing for a specific tenant.
-// POST /api/v1/agent/:slug/reindex
+// POST /api/v1/agent/:slug/reindex?audience=internal|external
 // Requires: ADMIN role OR api:config permission
+// Query params:
+//   - audience: Optional. Filter to only reindex "internal" or "external" content.
 func (h *Handler) HandleReindexTenant(c echo.Context) error {
 	ctx := c.Request().Context()
 	slug := c.Param("slug")
@@ -567,18 +569,26 @@ func (h *Handler) HandleReindexTenant(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or api:config permission")
 	}
 
+	// Optional: filter by audience type
+	audienceType := c.QueryParam("audience") // "internal" or "external" or "" (all)
+
 	// Perform reindex
-	chunks, err := h.service.ReindexTenantContent(ctx, tenant.ID)
+	chunks, err := h.service.ReindexTenantContent(ctx, tenant.ID, audienceType)
 	if err != nil {
-		slog.Error("reindex failed", "tenantID", tenant.ID, "error", err)
+		slog.Error("reindex failed", "tenantID", tenant.ID, "audience", audienceType, "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Reindex failed: "+err.Error())
 	}
 
-	return c.JSON(http.StatusOK, map[string]interface{}{
+	response := map[string]interface{}{
 		"success": true,
 		"chunks":  chunks,
 		"message": fmt.Sprintf("Successfully reindexed %d chunks", chunks),
-	})
+	}
+	if audienceType != "" {
+		response["audience"] = audienceType
+	}
+
+	return c.JSON(http.StatusOK, response)
 }
 
 func stringPtr(s string) *string {

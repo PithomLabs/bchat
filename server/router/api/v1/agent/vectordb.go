@@ -143,6 +143,7 @@ func NewVectorDB(config *VectorDBConfig) (VectorDB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create embedding service: %w", err)
 	}
+	slog.Info("Embedding service initialized", "provider", embedSvc.Provider(), "dimension", embedSvc.Dimension())
 
 	switch config.StorageProvider {
 	case "memory":
