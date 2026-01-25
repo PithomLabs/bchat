@@ -270,3 +270,288 @@ Users of the Iglesia Ni Cristo websites (`iglesianicristo.net`, `incmedia.org`) 
 ### Privacy Policy
 <!-- @section: privacy_policy, type: legal -->
 The privacy policy outlines the collection, use, and disclosure of personal data. Data is collected for service provision and improvement. This may include personal details, cookies, and usage data. Data may be shared with third-party service providers (e.g., web hosting, analytics). Users have rights regarding their data, including access, deletion, and rectification. All data is controlled and processed by CEBSI in the Philippines. By using the services, users consent to this policy.
+
+
+
+The following list details the coherent topics and subtopics found within the **combined_INC.md** document, providing summaries and verbatim excerpts from the source material.
+
+# 1. Global Identity and Mission
+**Summary:** The Iglesia Ni Cristo (Church Of Christ) is an international Christian religion dedicated to worshiping God according to the teachings of Jesus Christ, serving a diverse membership across six continents.
+
+*   **Verbatim Detail:** "The Iglesia Ni Cristo (Church Of Christ) is a Christian religion whose primary purpose is to worship the Almighty God in a manner taught by the Lord Jesus Christ and His apostles as recorded in the Bible. The Church Of Christ is a church for all peoples. It is for everyone who will embrace the true faith regardless of race, nationality, cultural background, social standing, economic status, and educational attainment."
+*   **Verbatim Detail:** "Thus far, the Iglesia Ni Cristo has an international membership comprising 152 racial and ethnic backgrounds. It maintains nearly 7,000 congregations and missions grouped into more than 178 ecclesiastical districts in 168 countries and territories in the six inhabited continents of the world."
+
+# 2. Fundamental Doctrines and Core Beliefs
+## 2.1 One God, the Father
+**Summary:** The Church asserts that the Father alone is the true God and Creator, and it explicitly rejects the non-biblical concept of the Trinity.
+
+*   **Verbatim Detail:** "We believe that the one and only true God is the Father, the Creator. We hold this belief because this is the doctrine taught by our Lord Jesus Christ and His Apostles (John 17:3, 1; I Cor. 8:6). God is a spirit (John 4:24), and, therefore, He has no flesh and bones (Luke 24:39)."
+*   **Verbatim Detail:** "There is no trinity of persons in God. Though the Bible speaks of the Father, the Son, and the Holy Spirit, never does it refer to all of them as gods nor as three persons in one God; rather, it points to the Father alone as the true God. The Son Himself emphasized that only the Father is the true God (John 17:3, 1) and that He Christ Himself is a man telling the truth which He received from God (John 8:40)."
+
+## 2.2 The Lord Jesus Christ
+**Summary:** While recognized as the Son of God and Savior, Jesus Christ is believed to be man in nature rather than God.
+
+*   **Verbatim Detail:** "The Iglesia Ni Cristo believes that the Lord Jesus Christ, the Son of God (Matt. 3:17), is the one and only Savior given by God (Acts 13:23). Christ is the sole mediator between God and man (I Tim. 2:5) and the only way to God (John 14:6). But we do not subscribe to the belief that Christ is a God-Man or both God and man. He is man in nature according to His own testimony (John 8:40) and the teachings of His Apostles (I Tim. 2:5; Matt. 1:18)."
+*   **Verbatim Detail:** "The attributes of a human being are found in Christ. He hungered (Matt. 4:2), thirsted (John 19:28), became weary or tired (John 4:6), slept (Matt. 8:24), and died (Matt. 27:50; I Cor. 15:3). However, Christ as distinct from all other men, is the only one Who did not sin (I Pet. 2:21-22; Heb. 4:15)."
+
+## 2.3 The Holy Spirit and Holy Scriptures
+**Summary:** The Holy Spirit is defined as the power of God, not a deity, and the Bible is upheld as the exclusive basis of faith.
+
+*   **Verbatim Detail:** "We believe that the Holy Spirit is the power (Acts 1:8) sent by the Father in the name of Christ, to teach and remind His messengers of all things that Christ said (John 14:26). ... and although the Holy Spirit is a spirit, never does the Scriptures refer to it as “God the Holy Spirit” because it is not God but one of the spirits being sent by God."
+*   **Verbatim Detail:** "We believe that the Bible is the sole basis of faith and service to God. The Gospel is the power of God unto salvation to those who believe, for in it the righteousness of God is revealed (Rom. 1:16-17)."
+
+# 3. The Church, Salvation, and Membership
+**Summary:** Membership in the Iglesia Ni Cristo is taught as the only means to receive salvation because Christ is the Savior of His body, the Church. The joining process requires 28 Bible lessons and a six-month probation period.
+
+*   **Verbatim Detail:** "The Iglesia Ni Cristo believes that membership in the Church Of Christ is the only means for people to receive the salvation that the Savior Jesus Christ brings. ... mankind are to die in the lake of fire, the wages of sins (Rom. 5:12; 6:23; Rev. 20:14). For people to be saved, he should enter in by Christ, by becoming a member of His body or Church (John 10:9; I Cor. 12:27; Col. 1:18) because it is His Church that Christ will save (Eph. 5:23)."
+*   **Verbatim Detail:** "The shortest amount of time it can take to be baptized inside the Church Of Christ is 6 months. The process includes listening to the 28 Bible study lessons regarding the Basic Bible Teachings and consistently for 6 months."
+
+# 4. Prophecy, the Last Messenger, and Administration
+**Summary:** Brother Felix Y. Manalo is identified as God's Messenger in these last days, fulfilling biblical prophecy. Members are duty-bound to follow the Church Administration.
+
+*   **Verbatim Detail:** "We believe that the late Brother Felix Y. Manalo is God’s messenger in these last days; he was the fulfillment of the Biblical prophecies concerning the messenger from the Far East (Rev. 7:2-3) who would preach to God’s sons and daughters in our time (Isa. 43:5-6; 46:11; 41:9-11)."
+*   **Verbatim Detail:** "The Iglesia Ni Cristo believes that every member is duty-bound to submit himself to the Church Administration because it is God’s commandment (Heb. 13:17). This is so because God entrusted to the Administration the message and the ministry of reconciliation (II Cor. 5:18-20). To submit to the Administration is to be bound by its instructions (Matt. 18:18). To abide by the decisions laid down by the Administration is to abide by the words of Christ (Acts 16:4; Luke 10:16)."
+
+# 5. Worship Services and Practices
+**Summary:** Worship services are twice-weekly solemn gatherings featuring hymns, prayers, and biblical study. The Church rejects tithing, emphasizing voluntary offerings.
+
+*   **Verbatim Detail:** "A solemn gathering of the faithful, the worship service of the Iglesia Ni Cristo is usually held twice a week in the house of worship and consists of hymn-singing, prayers, voluntary offering, and the study of God’s words to guide the true Christians in their daily living."
+*   **Verbatim Detail:** "We don’t practice tithing. ... First of all, who should give? What did He say? Each one should give. How should our offering be given? The Bible says, “as he purposes in his heart.” So not 10% anymore as it was during the Old Testament times. Now, it’s what the person purposes in his heart."
+
+# 6. Christian Family Organizations (CFO)
+**Summary:** The Church maintains several organizations to edify members at different life stages, including Buklod for married couples, KADIWA for single adults, and Binhi for youth.
+
+*   **Verbatim Detail:** "Buklod (“bond”), the organization for married members envisions a strong husband-and-wife relationship leading to a family that is steadfast in faith and active in serving God. ... KADIWA or Kabataang may Diwang Wagas (Youth with Noble Intent), the organization for single members 18 years old and above, aims to prepare them for a bright future as well as for a married life under God’s blessing."
+*   **Verbatim Detail:** "Binhi (seedling), the organization for baptized members 12 to 17 years old, instills in the youth the importance of knowledge and education while guiding them in right living and proper conduct. ... Pagsamba ng Kabataan (PNK) or Children’s Worship Service (CWS) caters to the members’ children, 4 to 11 years old."
+
+# 7. Signs of the Times and Judgment Day
+**Summary:** Biblical prophecies regarding wars, famines, and earthquakes, particularly since 1914, indicate that Judgment Day is near.
+
+*   **Verbatim Detail:** "Jesus now tells His followers how they could discern when the world was actually entering into the beginning of the birth pangs … The first such time in world history occurred during the years of World War I (1914−1918) …"
+*   **Verbatim Detail:** "The day of Christ’s return is the Day of Judgment and destruction of ungodly men. On that day, the heavens will pass away with a loud noise, and the elements will be dissolved with fire and be burned up (II Pet. 3:7, 10)."
+
+# 8. Socio-Civic Outreach and Humanitarian Aid
+**Summary:** Through projects like "Care for Humanity" and the Felix Y. Manalo Foundation, the Church provides disaster relief and assistance to those in need globally.
+
+*   **Verbatim Detail:** "The Care for Humanity (Lingap sa Mamamayan) outreach program has provided immediate assistance to multitudes of people, from calamity victims to indigents and indigenous peoples, and all others who are in need. Through its implementing arm, the Felix Y. Manalo Foundation, the Church seeks to give aid to the needy in all parts of the world."
+*   **Verbatim Detail:** "Across the United States on Saturday, May 10, in 26 different locations, the Iglesia Ni Cristo (Church Of Christ), in partnership with the Felix Y. Manalo Foundation, held simultaneous Care for Humanity events to benefit community members and to commemorate the 139th birth anniversary of God’s Messenger in these last days, Brother Felix Y. Manalo."
+
+# 9. Christian Living and Relationships
+## 9.1 Parent-Child Relationship
+**Summary:** Biblical values guide family life, emphasizing the parents' duty to teach God's commands and the children's duty to respect and obey parents.
+
+*   **Verbatim Detail:** "Parents are responsible for raising their children in a particular way, not just any way that they choose. Since God is the one who blesses the couple with children, He knows what’s best for them, which is to make sure that the children grow up in His discipline and teachings."
+*   **Verbatim Detail:** "Children, it is your Christian duty to obey your parents, for this is the right thing to do. “Respect your father and mother” is the first commandment that has a promise added: “so that all may go well with you, and you may live a long time in the land.”"
+
+# 10. Contact Information and Directory
+**Summary:** The Church maintains administrative offices and congregations worldwide to serve its international membership.
+
+*   **Verbatim Detail:** "Iglesia Ni Cristo (Church Of Christ) Central Office No. 1 Central Ave., New Era, Quezon City 1107 Philippines Tel. No. (632) 8981-4311, Fax No. (632) 8981-4333."
+*   **Verbatim Detail:** "NORTH AMERICA 770 Airport Boulevard, Burlingame CA 94010 USA Fax: (650) 548-1128."
+
+# 11. Media Resources and Evangelism
+**Summary:** The Church uses flagship media like INCTV and INCRadio, along with various websites, to propagate the gospel.
+
+*   **Verbatim Detail:** "Pasugo: God’s Message, the monthly official magazine of the Church, carries mainly religious articles and Church news and features. ... Its official website is at pasugo.com.ph. Aside from the magazine, the Church also has other publications such as books, pamphlets, leaflets, and fliers for worldwide distribution."
+*   **Verbatim Detail:** "INCTVis the flagship television station of the Church Of Christ. The Church first ventured in TV evangelism with the “Ang Iglesia Ni Cristo” program which premiered over a major TV network in the Philippines in February 1983."
+
+# 12. Legal Policies and Terms of Use
+**Summary:** Accessing Church-operated websites constitutes a binding agreement regarding content restrictions, liability, and privacy policies.
+
+*   **Verbatim Detail:** "By using this website, you (the ‘user’) are taken to have understood and accepted the Terms of Use and Privacy Policy below, and have agreed to be bound by it. ... You are prohibited from: Reproducing and publishing any Website material in other media... Selling, sublicensing and/or otherwise commercializing any Website material."
+*   **Verbatim Detail:** "Christian Era Broadcasting Service International (‘CEBSI’) is the data controller and processor for all information collected as part of your use of the website (the ‘Service’)."
+
+
+
+KB_IGLESIA_NI_CRISTO_COMPREHENSIVE.MD
+Purpose: This document is the authoritative knowledge base for the Iglesia Ni Cristo (Church Of Christ)
+. It is structured for long-context memory processing using the bchat annotation system
+. For behavioral rules, see POLICY.MD. For conversation flow, see SCRIPT.MD.
+
+--------------------------------------------------------------------------------
+1. Global Identity and Mission
+The Iglesia Ni Cristo (Church Of Christ) is a Christian religion whose primary purpose is to worship Almighty God in the manner taught by the Lord Jesus Christ and His apostles as recorded in the Bible
+.
+• International Scope: Comprised of members from 152 racial and ethnic backgrounds
+.
+• Global Presence: Maintains nearly 7,000 congregations grouped into more than 178 ecclesiastical districts in 168 countries and territories across six inhabited continents
+.
+• Leadership: Led by the Executive Minister, Brother Eduardo V. Manalo
+.
+• Vision: A "radiant church, without stain or wrinkle or any other blemish, but holy and blameless" (Ephesians 5:27)
+.
+• Mission: To continuously preach the gospel of salvation and edify the faithful toward spiritual maturity
+.
+
+--------------------------------------------------------------------------------
+2. Official Contact Directory
+Office / Region
+	
+Contact Type
+	
+Value
+Philippines (Central Office)
+	
+Telephone
+	
+(632) 8981-4311, (632) 981-4311
+Philippines (Central Office)
+	
+Fax
+	
+(632) 8981-4333, (632) 981-4333
+Philippines (Central Office)
+	
+Email
+	
+pasugo@iglesianicristo.org.ph
+Philippines (Central Office)
+	
+Address
+	
+No. 1 Central Ave., New Era, Quezon City 1107
+North America (U.S. West)
+	
+Fax
+	
+(650) 548-1128
+North America (U.S. West)
+	
+Email
+	
+info@incmedia.org
+North America (U.S. West)
+	
+Address
+	
+770 Airport Blvd. Burlingame, CA 94010
+Europe (United Kingdom)
+	
+Fax
+	
+(0044-193) 275-5467
+Africa (South Africa)
+	
+Tel/Fax
+	
+(27) 432-5168
+Australia
+	
+Fax
+	
+(612) 9630-5058
+Northeast Asia (Japan)
+	
+Telefax
+	
+(81-03) 6303-7874
+
+--------------------------------------------------------------------------------
+3. Core Beliefs and Doctrines
+• The Only True God: We believe the one and only true God is the Father, the Creator
+. There is no trinity of persons in God; the Father alone is the true God (John 17:3, 1)
+.
+• The Nature of Jesus Christ: Jesus is the Son of God and the sole mediator between God and man (1 Tim 2:5)
+. He is man in nature, not a "God-Man". He hungered, thirsted, slept, and died
+.
+• The Holy Spirit: The power (Acts 1:8) sent by the Father in the name of Christ to teach and strengthen the Church
+. It is not "God the Holy Spirit"
+.
+• The Holy Scriptures: The Bible is the sole basis of faith and service to God
+.
+• The Church and Salvation: Membership in the Church Of Christ is the only means to receive salvation because Christ is the Savior of His body, which is the Church (Eph 5:23)
+.
+• The Last Messenger: Brother Felix Y. Manalo is God’s Messenger in these last days, fulfilling prophecies regarding the "messenger from the Far East" (Rev 7:2-3; Isa 43:5-6)
+.
+• Church Administration: Members are duty-bound to submit to the Church Administration as it is God's commandment (Heb 13:17) to manage the ministry of reconciliation
+.
+
+--------------------------------------------------------------------------------
+4. Prohibitions and Non-Observances
+• Pagan Holidays: The Church does not celebrate Christmas, Easter, Halloween, or Valentine's Day due to their pagan roots
+.
+• Dietary Laws: The Bible strictly prohibits the consumption of blood
+
+• Relationships: Members are not permitted to date or marry non-believers (un-believers)
+
+• Marriage: The Church prohibits divorce, adhering to the sanctity of marriage
+
+• Religious Artifacts: Rejects the use of the cross as a symbol of Christianity
+
+• Infant Baptism: Not practiced; candidates must be old enough to be taught, believe, and repent
+
+
+--------------------------------------------------------------------------------
+5 Services and Practices
+• Worship Services: Solemn gatherings held twice a week consisting of hymn-singing, prayers, voluntary offerings, and the study of God's words
+
+• Bible Studies: Conducted in a strict question-and-answer format where answers come directly from the Bible without personal opinion
+
+• Holy Array: Attendees wear clean, conservative clothing (no jeans/sneakers; skirts or dresses for women)
+
+• Offerings: Tithing (10%) is not practiced Offerings are voluntary, prepared beforehand, and given as one "purposes in his heart" (2 Cor 9:7)
+
+• Baptism: Performed by immersion for those who have completed the required lessons and probation
+
+
+--------------------------------------------------------------------------------
+6 Membership and Frequently Asked Questions
+• How to Join: The 3-step process includes: 1) Learning the 28 Bible lessons, 2) Completing a 6-month probation period of consistent attendance, and 3) Baptism by immersion
+
+• Minors: Individuals under 18 require parental approval to sign up as a Bible student
+
+• Judgment Day: No one knows the day or hour
+ However, "signs of the times" (World War I, famines, earthquakes) indicate the return of Christ is near
+
+• The "Far East": The place where the Church would emerge in the last days, fulfilled by the Philippines
+
+
+--------------------------------------------------------------------------------
+7 Organizations and Outreach
+• Christian Family Organizations (CFO):
+    ◦ Buklod: For married members
+
+    ◦ KADIWA: For single members 18 and older
+
+    ◦ Binhi: For members aged 12 to 17
+
+    ◦ PNK/CWS: Children’s Worship Service for ages 11 and below
+
+• Specialty Groups: SCAN (Emergency/Radio), CMDPS (Medical), CBI (Students), CSD (Deaf)
+
+• Humanitarian Aid: Conducted through the Felix Y Manalo (FYM) Foundation and the Care for Humanity (Lingap sa Mamamayan) program
+
+
+--------------------------------------------------------------------------------
+8 Emergency and Spiritual Distress
+• Distress Protocol: For those feeling lonely or weak, seek God’s mercy (Psalm 25:16-17)
+
+• Refuge: The house of worship is the designated place to seek help and prayer during hardships
+
+• Pastoral Care: Seekers are encouraged to schedule a free video "Meet & Greet" with a Minister to address urgent spiritual questions
+
+
+--------------------------------------------------------------------------------
+9 Official Media Resources
+• Websites: incmediaorg, iglesianicristonet, pasugocomph
+
+• Television: INCTV (Flagship station) and NET25
+
+• Radio: INCRadio DZEM 954kH
+
+• Apps: INC Media App (iOS, Android, Roku, FireTV, AppleTV)
+
+• Directory: iglesianicristonet/directory
+
+
+--------------------------------------------------------------------------------
+10 Global Ecclesiastical Districts (Examples)
+• Americas: Alaska, Bay Area CA, Florida, Hawaii Pacific, Texas, Washington DC, etc
+
+• Asia: Hong Kong, Macau, Malaysia, South Korea, Taiwan, Thailand, Tokyo, etc
+
+• Europe: Britain, Central Europe, Ireland, Italy, Mediterranean, Spain
+
+• Africa: Northern, Southeastern, and Southern Africa
+
+• Australia-Oceania: New South Wales, New Zealand, Queensland, Victoria

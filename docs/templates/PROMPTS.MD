@@ -3,3 +3,5 @@ let us tighten the script, the purpose of POLICY.MD is to establish what the kno
 note that chat agent is just for knowledge base, it is supposed to be general purpose like it can address other verticals like services business (hvac plumbing etc), I want all the categories that are relevant for both MD files
 
 elaborate the guidelines for SCRIPT.MD emphasizing the distinction between Phase 1 (opening game, mid-game, intake, emergency/disress-related scenarios and the like, answering concerns) and Phase 2 (end game, "is there anything else?") that is applicable for all categories of chat agent (not just KB but covers all spectrum of businesses), refer to SCRIPT_OPUS.13.MD for guidance)
+
+list all the topics as markdown in combined_INC.md, make a summary of each topic and subtopics as markdown headers (#, ##, ###) with full details of sentences and paragraphs verbatim for each topic or subtopic

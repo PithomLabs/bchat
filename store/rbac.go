@@ -31,6 +31,8 @@ type TenantConfig struct {
 	OpenRouterAPIKeyEncrypted []byte
 	OpenRouterAPIKeyNonce     []byte
 	Features                  map[string]interface{}
+	RetrievalMode             string // "long_context" or "rag" - determines KB retrieval strategy
+	ContentTokens             int32  // Estimated token count of KB + Policy content
 	UpdatedAt                 time.Time
 	UpdatedBy                 *int32
 }

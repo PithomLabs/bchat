@@ -141,19 +141,12 @@ func (s *Service) ReindexAllContent(ctx context.Context) error {
 			audienceFiles[f.AudienceType][f.FileType] = f.Content
 		}
 
-		// Index each audience
+		// Index each audience using heading-based chunker
 		for audience, fileMap := range audienceFiles {
-			var parsedKB *ParsedKB
-			var parsedPolicy *ParsedPolicy
+			kbContent := fileMap["kb"]
+			policyContent := fileMap["policy"]
 
-			if kbContent, ok := fileMap["kb"]; ok && kbContent != "" {
-				parsedKB, _ = s.parser.ParseKB(kbContent, tenant.ID, audience)
-			}
-			if policyContent, ok := fileMap["policy"]; ok && policyContent != "" {
-				parsedPolicy, _ = s.parser.ParsePolicy(policyContent, tenant.ID, audience)
-			}
-
-			if parsedKB == nil && parsedPolicy == nil {
+			if kbContent == "" && policyContent == "" {
 				continue
 			}
 
@@ -162,14 +155,14 @@ func (s *Service) ReindexAllContent(ctx context.Context) error {
 				slog.Warn("Failed to delete existing chunks", "tenantID", tenant.ID, "audience", audience, "error", err)
 			}
 
-			// Chunk content
+			// Use heading-based chunker for raw markdown content
 			var allChunks []DocumentChunk
-			if parsedKB != nil {
-				kbChunks := s.chunker.ChunkKBContent(parsedKB, tenant.ID, audience, 1)
+			if kbContent != "" {
+				kbChunks := s.chunker.ChunkMarkdownContent(kbContent, tenant.ID, audience, "kb", 1)
 				allChunks = append(allChunks, kbChunks...)
 			}
-			if parsedPolicy != nil {
-				policyChunks := s.chunker.ChunkPolicyContent(parsedPolicy, tenant.ID, audience, 1)
+			if policyContent != "" {
+				policyChunks := s.chunker.ChunkMarkdownContent(policyContent, tenant.ID, audience, "policy", 1)
 				allChunks = append(allChunks, policyChunks...)
 			}
 
@@ -188,7 +181,8 @@ func (s *Service) ReindexAllContent(ctx context.Context) error {
 				"tenantID", tenant.ID,
 				"tenant", tenant.Slug,
 				"audience", audience,
-				"chunks", len(allChunks))
+				"chunks", len(allChunks),
+				"method", "heading-based")
 		}
 	}
 
@@ -207,6 +201,11 @@ func (s *Service) ReindexTenantContent(ctx context.Context, tenantID int32, audi
 	// Check if using NoOpVectorDB
 	if _, isNoOp := s.vectorDB.(*NoOpVectorDB); isNoOp {
 		return 0, fmt.Errorf("RAG pipeline disabled (using NoOpVectorDB)")
+	}
+
+	// Force internal-only indexing - external audience is never indexed
+	if audienceType == "" || audienceType == "external" {
+		audienceType = "internal"
 	}
 
 	// Get tenant info for logging
@@ -244,19 +243,12 @@ func (s *Service) ReindexTenantContent(ctx context.Context, tenantID int32, audi
 
 	totalChunks := 0
 
-	// Index each audience
+	// Index each audience using heading-based chunker
 	for audience, fileMap := range audienceFiles {
-		var parsedKB *ParsedKB
-		var parsedPolicy *ParsedPolicy
+		kbContent := fileMap["kb"]
+		policyContent := fileMap["policy"]
 
-		if kbContent, ok := fileMap["kb"]; ok && kbContent != "" {
-			parsedKB, _ = s.parser.ParseKB(kbContent, tenantID, audience)
-		}
-		if policyContent, ok := fileMap["policy"]; ok && policyContent != "" {
-			parsedPolicy, _ = s.parser.ParsePolicy(policyContent, tenantID, audience)
-		}
-
-		if parsedKB == nil && parsedPolicy == nil {
+		if kbContent == "" && policyContent == "" {
 			continue
 		}
 
@@ -265,18 +257,23 @@ func (s *Service) ReindexTenantContent(ctx context.Context, tenantID int32, audi
 			slog.Warn("Failed to delete existing chunks", "tenantID", tenantID, "audience", audience, "error", err)
 		}
 
-		// Chunk content
+		// Use heading-based chunker for raw markdown content
 		var allChunks []DocumentChunk
-		if parsedKB != nil {
-			kbChunks := s.chunker.ChunkKBContent(parsedKB, tenantID, audience, 1)
+		if kbContent != "" {
+			kbChunks := s.chunker.ChunkMarkdownContent(kbContent, tenantID, audience, "kb", 1)
 			allChunks = append(allChunks, kbChunks...)
 		}
-		if parsedPolicy != nil {
-			policyChunks := s.chunker.ChunkPolicyContent(parsedPolicy, tenantID, audience, 1)
+		if policyContent != "" {
+			policyChunks := s.chunker.ChunkMarkdownContent(policyContent, tenantID, audience, "policy", 1)
 			allChunks = append(allChunks, policyChunks...)
 		}
 
 		if len(allChunks) == 0 {
+			slog.Warn("No chunks created from content",
+				"tenantID", tenantID,
+				"audience", audience,
+				"kbLength", len(kbContent),
+				"policyLength", len(policyContent))
 			continue
 		}
 
@@ -290,7 +287,8 @@ func (s *Service) ReindexTenantContent(ctx context.Context, tenantID int32, audi
 			"tenantID", tenantID,
 			"tenant", tenant.Slug,
 			"audience", audience,
-			"chunks", len(allChunks))
+			"chunks", len(allChunks),
+			"method", "heading-based")
 	}
 
 	slog.Info("RAG reindex completed for tenant", "tenantID", tenantID, "tenant", tenant.Slug, "totalChunks", totalChunks)
@@ -943,22 +941,30 @@ func (s *Service) processChat(ctx context.Context, config *AudienceConfig, sessi
 	var response string
 	var genErr error
 
-	// Determine which generation method to use:
-	// 1. RAG Pipeline (Phase 3) - retrieves relevant context from vector DB
-	// 2. Grounded Generation (Phase 2) - structured responses with citations
-	// 3. Regular Generation - full KB in system prompt
+	// Determine which generation method to use based on tenant's retrieval mode:
+	// - "rag" mode: Use RAG pipeline with retrieved chunks (for large KBs)
+	// - "long_context" mode (default): Full KB in system prompt (for small/medium KBs)
+	useRAG := false
 	if s.UseRAGPipeline() {
-		// Use RAG retrieval for focused context
+		// Check tenant-specific retrieval mode
+		tenantConfig, _ := s.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &config.TenantID})
+		if tenantConfig != nil && tenantConfig.RetrievalMode == "rag" {
+			useRAG = true
+		}
+	}
+
+	if useRAG {
+		// Use RAG retrieval for focused context (large KBs)
 		response, genErr = s.generateRAGResponse(ctx, config, session, classification, decision, userMessage)
 		if genErr != nil {
-			slog.Warn("RAG generation failed, falling back to regular generation",
+			slog.Warn("RAG generation failed, falling back to long context",
 				"error", genErr, "session_id", session.ID)
 			response, genErr = s.generateResponse(ctx, config, session, classification, decision)
 		} else {
 			slog.Debug("using RAG pipeline response", "session_id", session.ID)
 		}
 	} else {
-		// Regular generation with full KB context
+		// Long context mode - full KB in system prompt (small/medium KBs)
 		response, genErr = s.generateResponse(ctx, config, session, classification, decision)
 	}
 

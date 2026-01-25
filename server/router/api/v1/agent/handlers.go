@@ -583,20 +583,65 @@ func (h *Handler) HandleImportSingleFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Import failed: "+err.Error())
 	}
 
+	// Calculate tokens and determine retrieval mode
+	kbContent := string(content)
+	policyContent := otherContent
+	if fileType == "policy" {
+		kbContent = otherContent
+		policyContent = string(content)
+	}
+
+	totalTokens := EstimateTokens(kbContent) + EstimateTokens(policyContent)
+	retrievalMode := "long_context"
+	if totalTokens >= DefaultTokenThreshold {
+		retrievalMode = "rag"
+	}
+
+	// Update tenant config with retrieval mode and token count
+	tenantConfig, _ := h.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &tenant.ID})
+	if tenantConfig == nil {
+		tenantConfig = &store.TenantConfig{TenantID: tenant.ID}
+	}
+	tenantConfig.RetrievalMode = retrievalMode
+	tenantConfig.ContentTokens = int32(totalTokens)
+	if _, err := h.store.UpsertTenantConfig(ctx, tenantConfig); err != nil {
+		slog.Warn("failed to update tenant config with retrieval mode", "error", err)
+	}
+
+	slog.Info("file imported",
+		"tenant", slug,
+		"audience", audienceType,
+		"fileType", fileType,
+		"totalTokens", totalTokens,
+		"retrievalMode", retrievalMode,
+	)
+
+	// Trigger RAG indexing only for internal audience in RAG mode
+	// External audience is never indexed (uses long_context retrieval)
+	if retrievalMode == "rag" && audienceType == "internal" {
+		go func() {
+			if _, err := h.service.ReindexTenantContent(context.Background(), tenant.ID, "internal"); err != nil {
+				slog.Error("background RAG indexing failed", "tenant", slug, "error", err)
+			}
+		}()
+	}
+
 	// Invalidate cache
 	h.service.configCache.Invalidate(tenant.Slug)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"success":  true,
-		"audience": audienceInfo,
+		"success":       true,
+		"audience":      audienceInfo,
+		"totalTokens":   totalTokens,
+		"retrievalMode": retrievalMode,
 	})
 }
 
 // HandleReindexTenant triggers RAG reindexing for a specific tenant.
-// POST /api/v1/agent/:slug/reindex?audience=internal|external
+// POST /api/v1/agent/:slug/reindex
 // Requires: ADMIN role OR api:config permission
-// Query params:
-//   - audience: Optional. Filter to only reindex "internal" or "external" content.
+// Note: Only indexes internal audience content. External audience is never indexed.
+// Note: Skipped entirely if tenant uses long_context mode (RAG not needed).
 func (h *Handler) HandleReindexTenant(c echo.Context) error {
 	ctx := c.Request().Context()
 	slug := c.Param("slug")
@@ -612,8 +657,19 @@ func (h *Handler) HandleReindexTenant(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or api:config permission")
 	}
 
-	// Optional: filter by audience type
-	audienceType := c.QueryParam("audience") // "internal" or "external" or "" (all)
+	// Check if tenant uses long_context mode - skip indexing entirely
+	tenantConfig, _ := h.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &tenant.ID})
+	if tenantConfig != nil && tenantConfig.RetrievalMode == "long_context" {
+		return c.JSON(http.StatusOK, map[string]interface{}{
+			"success":  true,
+			"message":  "Skipped - tenant uses long_context mode (RAG indexing not needed)",
+			"chunks":   0,
+			"audience": "internal",
+		})
+	}
+
+	// Always index internal-only (external audience is never indexed)
+	audienceType := "internal"
 
 	// Perform reindex
 	chunks, err := h.service.ReindexTenantContent(ctx, tenant.ID, audienceType)
@@ -622,16 +678,12 @@ func (h *Handler) HandleReindexTenant(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Reindex failed: "+err.Error())
 	}
 
-	response := map[string]interface{}{
-		"success": true,
-		"chunks":  chunks,
-		"message": fmt.Sprintf("Successfully reindexed %d chunks", chunks),
-	}
-	if audienceType != "" {
-		response["audience"] = audienceType
-	}
-
-	return c.JSON(http.StatusOK, response)
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"success":  true,
+		"chunks":   chunks,
+		"message":  fmt.Sprintf("Successfully reindexed %d chunks", chunks),
+		"audience": audienceType,
+	})
 }
 
 func stringPtr(s string) *string {
