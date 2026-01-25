@@ -203,7 +203,13 @@
     "no-learnings": "No learnings applied yet",
     "no-learnings-hint": "Analyze simulations and select items to apply improvements",
     "clear-all": "Clear All",
-    "active-count": "{{count}} active"
+    "active-count": "{{count}} active",
+    "external": "External",
+    "internal": "Internal",
+    "preview-kb": "Preview Knowledge Base",
+    "preview-policy": "Preview Policy",
+    "simulation-human-model": "Model for Human in Simulation",
+    "simulation-human-model-hint": "LLM model used to simulate human/customer in agent simulations"
   },
   "agent-simulation": {
     "title": "Agent Simulation",

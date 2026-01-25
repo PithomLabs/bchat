@@ -263,6 +263,7 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	adminGroup.POST("/:slug/generate-policy", s.agentHandler.HandleGeneratePolicy)
 	adminGroup.GET("/:slug/files/:audienceType/:fileType/versions", s.agentHandler.HandleGetFileVersions)
 	adminGroup.POST("/:slug/files/:audienceType/:fileType/restore", s.agentHandler.HandleRestoreFileVersion)
+	adminGroup.GET("/:slug/source-file", s.agentHandler.HandleGetSourceFileContent)
 
 	// RAG Stats routes (admin only)
 	ragGroup := echoServer.Group("/api/v1/admin/rag")

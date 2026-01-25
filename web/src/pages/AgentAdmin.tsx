@@ -1,12 +1,12 @@
 import { Button, Chip, DialogActions, DialogContent, DialogTitle, Divider, FormControl, FormHelperText, FormLabel, Input, Modal, ModalClose, ModalDialog, Option, Select, Switch, Textarea } from "@mui/joy";
-import { ArrowLeftIcon, BrainIcon, BuildingIcon, CheckIcon, CopyIcon, EditIcon, FileTextIcon, HistoryIcon, PlusIcon, RefreshCwIcon, SettingsIcon, SparklesIcon, Trash2Icon, UploadIcon, XIcon } from "lucide-react";
+import { ArrowLeftIcon, BuildingIcon, CheckIcon, CopyIcon, EditIcon, EyeIcon, FileTextIcon, HistoryIcon, PlusIcon, RefreshCwIcon, SettingsIcon, SparklesIcon, Trash2Icon, UploadIcon, XIcon } from "lucide-react";
 import { observer } from "mobx-react-lite";
 import { ChangeEvent, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import MobileHeader from "@/components/MobileHeader";
 import useResponsiveWidth from "@/hooks/useResponsiveWidth";
 import { agentAdminStore, userStore } from "@/store/v2";
-import type { AgentTenant, AgentLearningMemory, CreateTenantRequest, LLMConfig, SetLLMConfigRequest, UserPermission, GrantPermissionRequest } from "@/store/v2/agentAdmin";
+import type { AgentTenant, CreateTenantRequest, LLMConfig, SetLLMConfigRequest, UserPermission, GrantPermissionRequest } from "@/store/v2/agentAdmin";
 import { LLM_MODEL_OPTIONS, PERMISSION_PRESETS } from "@/store/v2/agentAdmin";
 import { cn } from "@/utils";
 import { useTranslate } from "@/utils/i18n";
@@ -23,7 +23,7 @@ const AgentAdmin = observer(() => {
   const [showGeneratedContent, setShowGeneratedContent] = useState<{ type: "kb" | "policy"; content: string } | null>(null);
   const [isGenerating, setIsGenerating] = useState<"kb" | "policy" | null>(null);
 
-  const { tenants, selectedTenant, isLoading, isSaving, error, fileVersions, llmConfig, tenantPermissions, myPermissions, script, isLoadingScript, learningMemory, isLoadingLearning } = agentAdminStore.state;
+  const { tenants, selectedTenant, isLoading, isSaving, error, fileVersions, llmConfig, tenantPermissions, myPermissions, script, isLoadingScript } = agentAdminStore.state;
 
   // Get current user and determine if they're an admin
   const currentUserName = userStore.state.currentUser;
@@ -62,10 +62,6 @@ const AgentAdmin = observer(() => {
       // Fetch script if user can read
       if (isAdmin || agentAdminStore.hasPermission("tenant:read")) {
         agentAdminStore.fetchScript(selectedTenant.tenant.slug);
-      }
-      // Fetch learning memory if user is admin or has tenant:admin
-      if (isAdmin || agentAdminStore.hasPermission("tenant:admin")) {
-        agentAdminStore.fetchLearningMemory(selectedTenant.tenant.slug);
       }
     }
   }, [selectedTenant?.tenant.slug, selectedTenant?.tenant.id, isAdmin]);
@@ -292,6 +288,7 @@ const AgentAdmin = observer(() => {
                 config={llmConfig}
                 isSaving={isSaving}
                 canEdit={canConfigApi}
+                t={t}
               />
             )}
 
@@ -316,20 +313,9 @@ const AgentAdmin = observer(() => {
               />
             )}
 
-            {/* Applied Learnings - Agent Self-Improvement (admin/tenant:admin only) */}
-            {canManagePermissions && (
-              <AppliedLearningsSection
-                tenantSlug={selectedTenant.tenant.slug}
-                learningMemory={learningMemory}
-                isLoading={isLoadingLearning}
-                isSaving={isSaving}
-                t={t}
-              />
-            )}
-
             {/* External Configuration */}
             <AudienceSection
-              title="External (Customer-Facing)"
+              title={t("agent-admin.external")}
               audienceType="external"
               tenant={selectedTenant}
               onViewVersions={handleViewVersions}
@@ -378,7 +364,7 @@ const AgentAdmin = observer(() => {
 
             {/* Internal Configuration */}
             <AudienceSection
-              title="Internal (Employee-Facing)"
+              title={t("agent-admin.internal")}
               audienceType="internal"
               tenant={selectedTenant}
               onViewVersions={handleViewVersions}
@@ -544,6 +530,8 @@ const AudienceSection = ({ title, audienceType, tenant, onViewVersions, isSaving
   const data = audienceType === "external" ? tenant.external : tenant.internal;
   const kbFileRef = useRef<HTMLInputElement>(null);
   const policyFileRef = useRef<HTMLInputElement>(null);
+  const [previewContent, setPreviewContent] = useState<string | null>(null);
+  const [previewTitle, setPreviewTitle] = useState<string>("");
 
   const handleFileUpload = async (fileType: "kb" | "policy", event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -559,6 +547,17 @@ const AudienceSection = ({ title, audienceType, tenant, onViewVersions, isSaving
       }
       // Reset the input
       event.target.value = "";
+    }
+  };
+
+  const handlePreview = async (fileType: "kb" | "policy") => {
+    const content = await agentAdminStore.fetchFileContent(tenant.tenant.slug, audienceType, fileType);
+    if (content) {
+      const typeLabel = fileType === "kb" ? t("agent-admin.preview-kb") : t("agent-admin.preview-policy");
+      setPreviewTitle(`${typeLabel} (${audienceType})`);
+      setPreviewContent(content);
+    } else {
+      toast.error("No content available to preview");
     }
   };
 
@@ -590,6 +589,7 @@ const AudienceSection = ({ title, audienceType, tenant, onViewVersions, isSaving
           fileRef={kbFileRef}
           onUpload={(e) => handleFileUpload("kb", e)}
           onViewVersions={() => onViewVersions(tenant.tenant.slug, audienceType, "kb")}
+          onPreview={() => handlePreview("kb")}
           isSaving={isSaving}
           t={t}
           canUpload={canUpload}
@@ -601,12 +601,30 @@ const AudienceSection = ({ title, audienceType, tenant, onViewVersions, isSaving
           fileRef={policyFileRef}
           onUpload={(e) => handleFileUpload("policy", e)}
           onViewVersions={() => onViewVersions(tenant.tenant.slug, audienceType, "policy")}
+          onPreview={() => handlePreview("policy")}
           isSaving={isSaving}
           t={t}
           canUpload={canUpload}
           canRestore={canRestore}
         />
       </div>
+
+      {/* Preview Modal */}
+      <Modal open={!!previewContent} onClose={() => setPreviewContent(null)}>
+        <ModalDialog sx={{ maxWidth: 900, width: '90vw', maxHeight: '90vh', overflow: 'hidden' }}>
+          <ModalClose />
+          <DialogTitle>{previewTitle}</DialogTitle>
+          <DialogContent sx={{ overflow: 'auto' }}>
+            <Textarea
+              value={previewContent || ""}
+              readOnly
+              minRows={20}
+              maxRows={40}
+              sx={{ fontFamily: 'monospace', fontSize: 12 }}
+            />
+          </DialogContent>
+        </ModalDialog>
+      </Modal>
     </div>
   );
 };
@@ -617,13 +635,14 @@ interface FileUploadRowProps {
   fileRef: React.RefObject<HTMLInputElement>;
   onUpload: (e: ChangeEvent<HTMLInputElement>) => void;
   onViewVersions: () => void;
+  onPreview: () => void;
   isSaving: boolean;
   t: (key: string) => string;
   canUpload?: boolean;
   canRestore?: boolean;
 }
 
-const FileUploadRow = ({ label, hint, fileRef, onUpload, onViewVersions, isSaving, t, canUpload = false, canRestore = false }: FileUploadRowProps) => (
+const FileUploadRow = ({ label, hint, fileRef, onUpload, onViewVersions, onPreview, isSaving, t, canUpload = false, canRestore = false }: FileUploadRowProps) => (
   <div className="flex justify-between items-center p-3 bg-gray-50 dark:bg-zinc-700 rounded-lg">
     <div>
       <div className="font-medium text-sm text-gray-800 dark:text-gray-200">{label}</div>
@@ -639,6 +658,15 @@ const FileUploadRow = ({ label, hint, fileRef, onUpload, onViewVersions, isSavin
           className="hidden"
         />
       )}
+      <Button
+        size="sm"
+        variant="outlined"
+        color="neutral"
+        startDecorator={<EyeIcon className="w-3 h-3" />}
+        onClick={onPreview}
+      >
+        {t("agent-admin.preview")}
+      </Button>
       {canRestore && (
         <Button
           size="sm"
@@ -1054,123 +1082,6 @@ const ScriptSection = ({ tenantSlug, script, isLoading, isSaving, canUpload = fa
 };
 
 // ============================================================================
-// LEARNING INSIGHTS SECTION (Agent Self-Improvement)
-// ============================================================================
-
-interface AppliedLearningsSectionProps {
-  tenantSlug: string;
-  learningMemory: AgentLearningMemory | null;
-  isLoading: boolean;
-  isSaving: boolean;
-  t: (key: string) => string;
-}
-
-const AppliedLearningsSection = ({ tenantSlug, learningMemory, isLoading, isSaving, t }: AppliedLearningsSectionProps) => {
-  const handleRemoveBehavior = async (behaviorId: string) => {
-    if (confirm(t("agent-admin.remove-behavior-confirm"))) {
-      const success = await agentAdminStore.removeLearnedBehavior(tenantSlug, behaviorId);
-      if (success) {
-        toast.success(t("agent-admin.behavior-removed"));
-      }
-    }
-  };
-
-  const handleClearAll = async () => {
-    if (confirm(t("agent-admin.clear-learning-confirm"))) {
-      const success = await agentAdminStore.clearLearningMemory(tenantSlug);
-      if (success) {
-        toast.success(t("agent-admin.learning-cleared"));
-      }
-    }
-  };
-
-  const learnedBehaviors = learningMemory?.learned_behaviors?.filter((b) => b.is_active) || [];
-
-  // Get display text for a behavior (v2 uses content, v1 uses trigger+behavior)
-  const getBehaviorText = (behavior: LearnedBehavior) => {
-    if (behavior.content) {
-      return behavior.content;
-    }
-    if (behavior.trigger && behavior.behavior) {
-      return `${behavior.trigger}: ${behavior.behavior}`;
-    }
-    return behavior.behavior || "Unknown";
-  };
-
-  return (
-    <div className="bg-white dark:bg-zinc-800 rounded-xl border border-gray-200 dark:border-zinc-700 p-4">
-      <div className="flex justify-between items-center mb-3">
-        <div className="flex items-center gap-2">
-          <BrainIcon className="w-5 h-5 text-purple-500" />
-          <div>
-            <h3 className="font-medium text-gray-800 dark:text-gray-200">{t("agent-admin.applied-learnings-title")}</h3>
-            <p className="text-xs text-gray-500 dark:text-gray-400">{t("agent-admin.applied-learnings-description")}</p>
-          </div>
-        </div>
-        {learnedBehaviors.length > 0 && (
-          <Chip size="sm" color="success" variant="soft">
-            {t("agent-admin.active-count", { count: learnedBehaviors.length })}
-          </Chip>
-        )}
-      </div>
-
-      {isLoading ? (
-        <div className="text-center py-4 text-gray-500">Loading...</div>
-      ) : learnedBehaviors.length === 0 ? (
-        <div className="text-center py-6 text-gray-500 dark:text-gray-400">
-          <BrainIcon className="w-8 h-8 mx-auto mb-2 opacity-50" />
-          <p className="text-sm">{t("agent-admin.no-learnings")}</p>
-          <p className="text-xs mt-1">{t("agent-admin.no-learnings-hint")}</p>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {/* Applied Learnings List */}
-          <div className="space-y-2">
-            {learnedBehaviors.map((behavior) => (
-              <div
-                key={behavior.id}
-                className="bg-green-50 dark:bg-green-900/20 rounded-lg p-3 border border-green-200 dark:border-green-800"
-              >
-                <div className="flex justify-between items-start gap-2">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm text-gray-700 dark:text-gray-300">{getBehaviorText(behavior)}</p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      {t("common.added")}: {behavior.added_at} • {behavior.source}
-                    </p>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="plain"
-                    color="danger"
-                    onClick={() => handleRemoveBehavior(behavior.id)}
-                    loading={isSaving}
-                  >
-                    <Trash2Icon className="w-4 h-4" />
-                  </Button>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Clear All Button */}
-          <div className="pt-2 border-t border-gray-200 dark:border-zinc-700">
-            <Button
-              size="sm"
-              variant="plain"
-              color="danger"
-              onClick={handleClearAll}
-              loading={isSaving}
-            >
-              {t("agent-admin.clear-all")}
-            </Button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-// ============================================================================
 // LLM CONFIGURATION SECTION
 // ============================================================================
 
@@ -1179,33 +1090,43 @@ interface LLMConfigSectionProps {
   config: LLMConfig | null;
   isSaving: boolean;
   canEdit?: boolean;
+  t: (key: string) => string;
 }
 
-const LLMConfigSection = ({ tenantSlug, config, isSaving, canEdit = false }: LLMConfigSectionProps) => {
+const LLMConfigSection = ({ tenantSlug, config, isSaving, canEdit = false, t }: LLMConfigSectionProps) => {
   const [model, setModel] = useState(config?.llmModel || "");
   const [customModel, setCustomModel] = useState("");
-  const [apiKey, setApiKey] = useState("");
+  const [simHumanModel, setSimHumanModel] = useState(config?.simulationHumanModel || "");
+  const [customSimHumanModel, setCustomSimHumanModel] = useState("");
 
   useEffect(() => {
+    // Handle main model
     const modelValue = config?.llmModel || "";
     setModel(modelValue);
-    // Check if it's a custom model (not in preset list)
     const isPreset = LLM_MODEL_OPTIONS.some((opt) => opt.value === modelValue);
     if (modelValue && !isPreset) {
       setCustomModel(modelValue);
       setModel("custom");
     }
-  }, [config?.llmModel]);
+    // Handle simulation human model
+    const simModelValue = config?.simulationHumanModel || "";
+    setSimHumanModel(simModelValue);
+    const isSimPreset = LLM_MODEL_OPTIONS.some((opt) => opt.value === simModelValue);
+    if (simModelValue && !isSimPreset) {
+      setCustomSimHumanModel(simModelValue);
+      setSimHumanModel("custom");
+    }
+  }, [config?.llmModel, config?.simulationHumanModel]);
 
   const handleSave = async () => {
     const selectedModel = model === "custom" ? customModel : model;
+    const selectedSimModel = simHumanModel === "custom" ? customSimHumanModel : simHumanModel;
     const success = await agentAdminStore.updateLLMConfig(tenantSlug, {
       llmModel: selectedModel,
-      openrouterApiKey: apiKey || undefined,
+      simulationHumanModel: selectedSimModel,
     });
     if (success) {
       toast.success("LLM configuration saved");
-      setApiKey("");
     }
   };
 
@@ -1242,25 +1163,35 @@ const LLMConfigSection = ({ tenantSlug, config, isSaving, canEdit = false }: LLM
           </FormControl>
         )}
 
-        {canEdit && (
-          <FormControl>
-            <FormLabel>OpenRouter API Key</FormLabel>
-            <Input
-              type="password"
-              placeholder={config?.hasApiKey ? "••••••••••• (key is set)" : "sk-or-..."}
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-            />
-            <div className="text-xs text-gray-500 mt-1">
-              {config?.hasApiKey ? "Leave empty to keep current key" : "Enter your OpenRouter API key"}
-            </div>
-          </FormControl>
-        )}
+        <FormControl>
+          <FormLabel>{t("agent-admin.simulation-human-model")}</FormLabel>
+          <Select
+            value={simHumanModel || ""}
+            onChange={(_, val) => setSimHumanModel(val as string)}
+            disabled={!canEdit}
+            placeholder="Same as Model (default)"
+          >
+            <Option value="">Same as Model (default)</Option>
+            {LLM_MODEL_OPTIONS.map((opt) => (
+              <Option key={opt.value} value={opt.value}>
+                {opt.label}
+              </Option>
+            ))}
+            <Option value="custom">Custom Model...</Option>
+          </Select>
+          <FormHelperText>{t("agent-admin.simulation-human-model-hint")}</FormHelperText>
+        </FormControl>
 
-        {!canEdit && config?.hasApiKey && (
-          <div className="text-sm text-gray-500">
-            API key is configured (hidden for security)
-          </div>
+        {simHumanModel === "custom" && (
+          <FormControl>
+            <FormLabel>Custom Simulation Model ID</FormLabel>
+            <Input
+              placeholder="e.g., openai/gpt-4o"
+              value={customSimHumanModel}
+              onChange={(e) => setCustomSimHumanModel(e.target.value)}
+              disabled={!canEdit}
+            />
+          </FormControl>
         )}
 
         {canEdit && (

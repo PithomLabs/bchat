@@ -394,7 +394,9 @@ func (s *Service) RunSimulation(
 
 // generateHumanResponse generates a realistic human response using LLM.
 func (s *Service) generateHumanResponse(ctx context.Context, config *AudienceConfig, state *SimulationState, agentSession *store.AgentSession) (string, error) {
-	model, apiKey := s.getLLMConfig(ctx, config.TenantID)
+	// Use separate model for human simulator (falls back to main model if not set)
+	model := s.getSimulationHumanModel(ctx, config.TenantID)
+	_, apiKey := s.getLLMConfig(ctx, config.TenantID)
 	if apiKey == "" {
 		return "", fmt.Errorf("no API key configured")
 	}

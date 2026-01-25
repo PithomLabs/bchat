@@ -37,6 +37,7 @@ git tag -a v0.4.7 -m "DOCS_SIMULATION_2*.MD"
 git tag -a v0.5.8 -m "chat widget"
 git tag -a v0.5.9 -m "rag stats"
 git tag -a v0.5.10 -m "parse MD files"
+git tag -a v0.5.11 -m "rag reindex"
 git push origin --tags
 ```
 

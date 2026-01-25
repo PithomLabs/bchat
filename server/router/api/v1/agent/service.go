@@ -529,6 +529,20 @@ func (s *Service) getLLMConfig(ctx context.Context, tenantID int32) (model strin
 	return model, apiKey
 }
 
+// getSimulationHumanModel returns the LLM model for the human role in simulations.
+// Falls back to the main LLM model if not configured.
+func (s *Service) getSimulationHumanModel(ctx context.Context, tenantID int32) string {
+	// 1. Try tenant-specific simulation human model
+	config, _ := s.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &tenantID})
+	if config != nil && config.SimulationHumanModel != "" {
+		return config.SimulationHumanModel
+	}
+
+	// 2. Fallback to main LLM model
+	model, _ := s.getLLMConfig(ctx, tenantID)
+	return model
+}
+
 // verifyResponseWithLLM uses an LLM to verify the response against KB and policies.
 // Returns the (potentially corrected) response and the verification result.
 // Can be disabled via LLM_VERIFIER_ENABLED=false environment variable.

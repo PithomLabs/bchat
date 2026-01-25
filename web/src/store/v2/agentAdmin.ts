@@ -66,12 +66,14 @@ export interface UpdateTenantFilesRequest {
 export interface LLMConfig {
   tenantSlug: string;
   llmModel: string;
+  simulationHumanModel: string;
   hasApiKey: boolean;
   updatedAt?: string;
 }
 
 export interface SetLLMConfigRequest {
   llmModel: string;
+  simulationHumanModel: string;
   openrouterApiKey?: string;
 }
 
@@ -655,6 +657,7 @@ const agentAdminStore = (() => {
   const transformLLMConfig = (data: any): LLMConfig => ({
     tenantSlug: data.tenant_slug,
     llmModel: data.llm_model,
+    simulationHumanModel: data.simulation_human_model || "",
     hasApiKey: data.has_api_key,
     updatedAt: data.updated_at,
   });
@@ -675,6 +678,7 @@ const agentAdminStore = (() => {
     try {
       const response = await axios.put(`/api/v1/agent/${slug}/llm-config`, {
         llm_model: config.llmModel,
+        simulation_human_model: config.simulationHumanModel,
         openrouter_api_key: config.openrouterApiKey,
       });
       runInAction(() => {
@@ -688,6 +692,19 @@ const agentAdminStore = (() => {
         state.error = error.response?.data?.message || "Failed to update LLM config";
       });
       return false;
+    }
+  };
+
+  // Fetch file content for preview
+  const fetchFileContent = async (slug: string, audienceType: string, fileType: string): Promise<string | null> => {
+    try {
+      const response = await axios.get(`/api/v1/agent/${slug}/source-file`, {
+        params: { audience_type: audienceType, file_type: fileType },
+      });
+      return response.data.content || null;
+    } catch (error: any) {
+      console.error("Failed to fetch file content:", error);
+      return null;
     }
   };
 
@@ -864,6 +881,8 @@ const agentAdminStore = (() => {
     // Auto-generate annotated content
     generateKB,
     generatePolicy,
+    // File content preview
+    fetchFileContent,
   };
 })();
 

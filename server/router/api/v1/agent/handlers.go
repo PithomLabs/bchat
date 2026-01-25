@@ -472,6 +472,49 @@ func (h *Handler) HandleRestoreFileVersion(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]bool{"success": true})
 }
 
+// HandleGetSourceFileContent returns the content of a source file.
+// GET /api/v1/agent/:slug/source-file?audience_type=external&file_type=kb
+// Requires: ADMIN role OR tenant:read permission
+func (h *Handler) HandleGetSourceFileContent(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+	audienceType := c.QueryParam("audience_type")
+	fileType := c.QueryParam("file_type")
+
+	if audienceType == "" || fileType == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "audience_type and file_type query parameters are required")
+	}
+
+	// Get tenant
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	// Check admin role OR tenant:read permission
+	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermTenantRead) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or tenant:read permission")
+	}
+
+	// Get latest file
+	latestOnly := true
+	files, err := h.store.ListAgentSourceFiles(ctx, &store.FindAgentSourceFile{
+		TenantID:     &tenant.ID,
+		AudienceType: &audienceType,
+		FileType:     &fileType,
+		LatestOnly:   latestOnly,
+	})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get file")
+	}
+
+	if len(files) == 0 {
+		return c.JSON(http.StatusOK, map[string]string{"content": ""})
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{"content": files[0].Content})
+}
+
 // HandleImportSingleFile handles importing a single file for a tenant.
 // POST /api/v1/agent/:slug/import (updated to support single file)
 // Requires: ADMIN role OR files:upload permission
@@ -1635,16 +1678,18 @@ func (h *Handler) hasPermission(c echo.Context, tenantID int32, permission strin
 
 // LLMConfigResponse represents the LLM configuration response.
 type LLMConfigResponse struct {
-	TenantSlug string `json:"tenant_slug"`
-	LLMModel   string `json:"llm_model"`
-	HasAPIKey  bool   `json:"has_api_key"`
-	UpdatedAt  string `json:"updated_at,omitempty"`
+	TenantSlug           string `json:"tenant_slug"`
+	LLMModel             string `json:"llm_model"`
+	SimulationHumanModel string `json:"simulation_human_model"`
+	HasAPIKey            bool   `json:"has_api_key"`
+	UpdatedAt            string `json:"updated_at,omitempty"`
 }
 
 // SetLLMConfigRequest represents the request to set LLM config.
 type SetLLMConfigRequest struct {
-	LLMModel         string `json:"llm_model"`
-	OpenRouterAPIKey string `json:"openrouter_api_key,omitempty"`
+	LLMModel             string `json:"llm_model"`
+	SimulationHumanModel string `json:"simulation_human_model"`
+	OpenRouterAPIKey     string `json:"openrouter_api_key,omitempty"`
 }
 
 // HandleGetLLMConfig returns the LLM configuration for a tenant.
@@ -1671,13 +1716,15 @@ func (h *Handler) HandleGetLLMConfig(c echo.Context) error {
 	}
 
 	response := LLMConfigResponse{
-		TenantSlug: slug,
-		LLMModel:   "",
-		HasAPIKey:  false,
+		TenantSlug:           slug,
+		LLMModel:             "",
+		SimulationHumanModel: "",
+		HasAPIKey:            false,
 	}
 
 	if config != nil {
 		response.LLMModel = config.LLMModel
+		response.SimulationHumanModel = config.SimulationHumanModel
 		response.HasAPIKey = len(config.OpenRouterAPIKeyEncrypted) > 0
 		response.UpdatedAt = config.UpdatedAt.Format(time.RFC3339)
 	}
@@ -1713,9 +1760,10 @@ func (h *Handler) HandleSetLLMConfig(c echo.Context) error {
 
 	// Build config
 	config := &store.TenantConfig{
-		TenantID:  tenant.ID,
-		LLMModel:  req.LLMModel,
-		UpdatedBy: &userID,
+		TenantID:             tenant.ID,
+		LLMModel:             req.LLMModel,
+		SimulationHumanModel: req.SimulationHumanModel,
+		UpdatedBy:            &userID,
 	}
 
 	// Encrypt API key if provided
@@ -1747,10 +1795,11 @@ func (h *Handler) HandleSetLLMConfig(c echo.Context) error {
 	h.service.configCache.Invalidate(tenant.Slug)
 
 	return c.JSON(http.StatusOK, LLMConfigResponse{
-		TenantSlug: slug,
-		LLMModel:   config.LLMModel,
-		HasAPIKey:  len(config.OpenRouterAPIKeyEncrypted) > 0,
-		UpdatedAt:  config.UpdatedAt.Format(time.RFC3339),
+		TenantSlug:           slug,
+		LLMModel:             config.LLMModel,
+		SimulationHumanModel: config.SimulationHumanModel,
+		HasAPIKey:            len(config.OpenRouterAPIKeyEncrypted) > 0,
+		UpdatedAt:            config.UpdatedAt.Format(time.RFC3339),
 	})
 }
 

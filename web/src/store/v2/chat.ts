@@ -1,5 +1,5 @@
 import axios from "axios";
-import { makeAutoObservable } from "mobx";
+import { makeAutoObservable, runInAction } from "mobx";
 
 export interface ChatMessage {
   role: "user" | "assistant";
@@ -7,10 +7,24 @@ export interface ChatMessage {
   timestamp: Date;
 }
 
+interface ChatApiResponse {
+  session_id: string;
+  message: {
+    role: string;
+    content: string;
+    timestamp: string;
+  };
+}
+
 class LocalState {
   messages: ChatMessage[] = [];
   isLoading: boolean = false;
   error: string | null = null;
+  // Tenant state
+  selectedTenantSlug: string = "";
+  isTenantValidated: boolean = false;
+  isTenantLoading: boolean = false;
+  sessionId: string = "";
 
   constructor() {
     makeAutoObservable(this);
@@ -24,8 +38,38 @@ class LocalState {
 const chatStore = (() => {
   const state = new LocalState();
 
+  const validateAndSetTenant = async (slug: string) => {
+    state.setPartial({ isTenantLoading: true, isTenantValidated: false, error: null });
+    try {
+      await axios.get(`/api/v1/agent/${slug}/validate`);
+      runInAction(() => {
+        state.selectedTenantSlug = slug;
+        state.isTenantValidated = true;
+        state.isTenantLoading = false;
+        state.messages = [];
+        state.sessionId = "";
+      });
+    } catch (error: any) {
+      runInAction(() => {
+        state.isTenantLoading = false;
+        state.error = error.response?.data?.message || "Failed to validate tenant";
+      });
+    }
+  };
+
+  const resetTenant = () => {
+    state.setPartial({
+      selectedTenantSlug: "",
+      isTenantValidated: false,
+      messages: [],
+      sessionId: "",
+      error: null,
+    });
+  };
+
   const sendMessage = async (content: string) => {
-    // Add user message to history
+    if (!state.selectedTenantSlug) return;
+
     const userMessage: ChatMessage = {
       role: "user",
       content,
@@ -41,30 +85,29 @@ const chatStore = (() => {
     });
 
     try {
-      // Prepare messages for API (without timestamps)
-      const apiMessages = updatedMessages.map((msg) => ({
-        role: msg.role,
-        content: msg.content,
-      }));
-
-      const response = await axios.post<{ message: { role: string; content: string } }>("/api/v1/chat", {
-        messages: apiMessages,
-      });
+      const response = await axios.post<ChatApiResponse>(
+        `/api/v1/agent/${state.selectedTenantSlug}/chat/int`,
+        {
+          message: content,
+          session_id: state.sessionId || undefined,
+        }
+      );
 
       const assistantMessage: ChatMessage = {
         role: "assistant",
         content: response.data.message.content,
-        timestamp: new Date(),
+        timestamp: new Date(response.data.message.timestamp),
       };
 
-      state.setPartial({
-        messages: [...updatedMessages, assistantMessage],
-        isLoading: false,
+      runInAction(() => {
+        state.messages = [...updatedMessages, assistantMessage];
+        state.sessionId = response.data.session_id;
+        state.isLoading = false;
       });
     } catch (error: any) {
-      state.setPartial({
-        isLoading: false,
-        error: error.response?.data?.message || "Failed to get response",
+      runInAction(() => {
+        state.isLoading = false;
+        state.error = error.response?.data?.message || "Failed to get response";
       });
     }
   };
@@ -74,11 +117,14 @@ const chatStore = (() => {
       messages: [],
       isLoading: false,
       error: null,
+      sessionId: "",
     });
   };
 
   return {
     state,
+    validateAndSetTenant,
+    resetTenant,
     sendMessage,
     clearChat,
   };

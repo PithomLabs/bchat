@@ -131,7 +131,7 @@ func (d *DB) GetTenantConfig(ctx context.Context, find *store.FindTenantConfig) 
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, tenant_id, llm_model, openrouter_api_key_encrypted, openrouter_api_key_nonce, features, updated_at, updated_by
+		SELECT id, tenant_id, llm_model, simulation_human_model, openrouter_api_key_encrypted, openrouter_api_key_nonce, features, updated_at, updated_by
 		FROM tenant_config
 		WHERE %s
 		LIMIT 1
@@ -139,13 +139,14 @@ func (d *DB) GetTenantConfig(ctx context.Context, find *store.FindTenantConfig) 
 
 	var config store.TenantConfig
 	var llmModel sql.NullString
+	var simulationHumanModel sql.NullString
 	var apiKeyEncrypted, apiKeyNonce []byte
 	var featuresJSON sql.NullString
 	var updatedAtUnix int64
 	var updatedBy sql.NullInt32
 
 	err := d.db.QueryRowContext(ctx, query, args...).Scan(
-		&config.ID, &config.TenantID, &llmModel,
+		&config.ID, &config.TenantID, &llmModel, &simulationHumanModel,
 		&apiKeyEncrypted, &apiKeyNonce, &featuresJSON,
 		&updatedAtUnix, &updatedBy,
 	)
@@ -158,6 +159,9 @@ func (d *DB) GetTenantConfig(ctx context.Context, find *store.FindTenantConfig) 
 
 	if llmModel.Valid {
 		config.LLMModel = llmModel.String
+	}
+	if simulationHumanModel.Valid {
+		config.SimulationHumanModel = simulationHumanModel.String
 	}
 	config.OpenRouterAPIKeyEncrypted = apiKeyEncrypted
 	config.OpenRouterAPIKeyNonce = apiKeyNonce
@@ -182,10 +186,11 @@ func (d *DB) UpsertTenantConfig(ctx context.Context, config *store.TenantConfig)
 	now := time.Now()
 
 	stmt := `
-		INSERT INTO tenant_config (tenant_id, llm_model, openrouter_api_key_encrypted, openrouter_api_key_nonce, features, updated_at, updated_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO tenant_config (tenant_id, llm_model, simulation_human_model, openrouter_api_key_encrypted, openrouter_api_key_nonce, features, updated_at, updated_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(tenant_id) DO UPDATE SET
 			llm_model = excluded.llm_model,
+			simulation_human_model = excluded.simulation_human_model,
 			openrouter_api_key_encrypted = COALESCE(excluded.openrouter_api_key_encrypted, tenant_config.openrouter_api_key_encrypted),
 			openrouter_api_key_nonce = COALESCE(excluded.openrouter_api_key_nonce, tenant_config.openrouter_api_key_nonce),
 			features = excluded.features,
@@ -194,7 +199,7 @@ func (d *DB) UpsertTenantConfig(ctx context.Context, config *store.TenantConfig)
 		RETURNING id
 	`
 	if err := d.db.QueryRowContext(ctx, stmt,
-		config.TenantID, config.LLMModel, config.OpenRouterAPIKeyEncrypted, config.OpenRouterAPIKeyNonce,
+		config.TenantID, config.LLMModel, config.SimulationHumanModel, config.OpenRouterAPIKeyEncrypted, config.OpenRouterAPIKeyNonce,
 		string(featuresJSON), now.Unix(), config.UpdatedBy,
 	).Scan(&config.ID); err != nil {
 		return nil, err
