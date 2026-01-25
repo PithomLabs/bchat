@@ -34,6 +34,8 @@ git tag -a v0.4.4 -m "simplify self-improvement"
 git tag -a v0.4.5 -m "sim addendums"
 git tag -a v0.4.6 -m "tighten MD files"
 git tag -a v0.4.7 -m "DOCS_SIMULATION_2*.MD"
+git tag -a v0.5.8 -m "chat widget"
+
 git push origin --tags
 ```
 

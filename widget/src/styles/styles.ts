@@ -201,7 +201,7 @@ export function getStyles(config: WidgetConfig): string {
 
     .acw-msg-bubble {
       max-width: 80%;
-      padding: 10px 14px;
+      padding: 14px 20px;
       border-radius: 12px;
       word-wrap: break-word;
       white-space: pre-wrap;
