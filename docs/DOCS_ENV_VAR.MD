@@ -67,6 +67,29 @@ export LLM_MODEL=openai/gpt-4o-mini
 
 ---
 
+### LLM_MODEL_REASONING
+
+Model identifier for reasoning/generation tasks (e.g., auto-generating annotated KB.MD/POLICY.MD).
+
+| Property | Value |
+|----------|-------|
+| Type | String |
+| Default | `google/gemini-2.5-pro` |
+| Examples | `google/gemini-2.5-pro`, `anthropic/claude-3.5-sonnet` |
+
+```bash
+export LLM_MODEL_REASONING=google/gemini-2.5-pro
+```
+
+**Use Cases:**
+- Auto-generating annotated KB.MD from raw content
+- Auto-generating annotated POLICY.MD from raw content
+- Other tasks requiring longer context or advanced reasoning
+
+**Note:** This model is used for server-side content generation tasks, not for chat responses. It should be a capable model with good instruction following.
+
+---
+
 ## Configuration Priority (Tenant vs Environment)
 
 Environment variables provide **global defaults**, but tenant-specific settings in the **Agent Admin page take priority**.

@@ -92,7 +92,7 @@ tasks:
       RAG_PIPELINE_ENABLED: "true"
       EMBEDDING_PROVIDER: "local"
     cmds:
-      - go run -tags rag ./bin/memos/main.go --mode dev
+      - go run -tags rag ./bin/memos/main.go --mode dev --data {{.ROOT_DIR}}/build/data
 
   run:rag:
     desc: Run compiled binary with RAG enabled (local storage, OpenRouter embeddings)

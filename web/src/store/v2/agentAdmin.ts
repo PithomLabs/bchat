@@ -524,6 +524,48 @@ const agentAdminStore = (() => {
     state.setPartial({ learningMemory: null });
   };
 
+  // ============================================================================
+  // AUTO-GENERATE ANNOTATED KB.MD / POLICY.MD
+  // ============================================================================
+
+  const generateKB = async (slug: string): Promise<{ content?: string; error?: string }> => {
+    state.setPartial({ isSaving: true, error: null });
+    try {
+      const response = await axios.post<{ content: string }>(
+        `/api/v1/agent/${slug}/generate-kb`
+      );
+      runInAction(() => {
+        state.isSaving = false;
+      });
+      return { content: response.data.content };
+    } catch (error: any) {
+      runInAction(() => {
+        state.isSaving = false;
+        state.error = error.response?.data?.message || "Failed to generate KB";
+      });
+      return { error: error.response?.data?.message || "Failed to generate KB" };
+    }
+  };
+
+  const generatePolicy = async (slug: string): Promise<{ content?: string; error?: string }> => {
+    state.setPartial({ isSaving: true, error: null });
+    try {
+      const response = await axios.post<{ content: string }>(
+        `/api/v1/agent/${slug}/generate-policy`
+      );
+      runInAction(() => {
+        state.isSaving = false;
+      });
+      return { content: response.data.content };
+    } catch (error: any) {
+      runInAction(() => {
+        state.isSaving = false;
+        state.error = error.response?.data?.message || "Failed to generate Policy";
+      });
+      return { error: error.response?.data?.message || "Failed to generate Policy" };
+    }
+  };
+
   const deleteTenant = async (slug: string): Promise<boolean> => {
     state.setPartial({ isSaving: true, error: null });
 
@@ -819,6 +861,9 @@ const agentAdminStore = (() => {
     removeLearnedBehavior,
     clearLearningMemory,
     clearLearningState,
+    // Auto-generate annotated content
+    generateKB,
+    generatePolicy,
   };
 })();
 

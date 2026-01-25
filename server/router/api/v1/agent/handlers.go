@@ -3591,3 +3591,111 @@ func truncateString(s string, maxLen int) string {
 	}
 	return s[:maxLen-3] + "..."
 }
+
+// ============================================================================
+// AUTO-GENERATE ANNOTATED KB.MD / POLICY.MD
+// ============================================================================
+
+// HandleGenerateKB generates annotated KB.MD from raw content using LLM.
+// POST /api/v1/agent/:slug/generate-kb
+// Requires: ADMIN role
+func (h *Handler) HandleGenerateKB(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	// Check admin role
+	if !h.isAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
+	}
+
+	// Get tenant
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	// Load external KB content
+	audience := "external"
+	fileType := "kb"
+	latestOnly := true
+	kbFile, err := h.store.GetAgentSourceFile(ctx, &store.FindAgentSourceFile{
+		TenantID:     &tenant.ID,
+		AudienceType: &audience,
+		FileType:     &fileType,
+		LatestOnly:   latestOnly,
+	})
+	if err != nil || kbFile == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "No KB content found. Please upload a KB file first.")
+	}
+
+	if kbFile.Content == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "KB file is empty")
+	}
+
+	// Generate annotated KB using LLM
+	slog.Info("Generating annotated KB.MD", "tenant", slug, "content_length", len(kbFile.Content))
+
+	annotatedKB, err := h.service.GenerateAnnotatedKB(ctx, tenant.ID, tenant.CompanyName, kbFile.Content)
+	if err != nil {
+		slog.Error("Failed to generate annotated KB", "tenant", slug, "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate KB: "+err.Error())
+	}
+
+	slog.Info("Generated annotated KB.MD", "tenant", slug, "output_length", len(annotatedKB))
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"content": annotatedKB,
+	})
+}
+
+// HandleGeneratePolicy generates annotated POLICY.MD from raw content using LLM.
+// POST /api/v1/agent/:slug/generate-policy
+// Requires: ADMIN role
+func (h *Handler) HandleGeneratePolicy(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	// Check admin role
+	if !h.isAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
+	}
+
+	// Get tenant
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	// Load external Policy content
+	audience := "external"
+	fileType := "policy"
+	latestOnly := true
+	policyFile, err := h.store.GetAgentSourceFile(ctx, &store.FindAgentSourceFile{
+		TenantID:     &tenant.ID,
+		AudienceType: &audience,
+		FileType:     &fileType,
+		LatestOnly:   latestOnly,
+	})
+	if err != nil || policyFile == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "No Policy content found. Please upload a Policy file first.")
+	}
+
+	if policyFile.Content == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Policy file is empty")
+	}
+
+	// Generate annotated Policy using LLM
+	slog.Info("Generating annotated POLICY.MD", "tenant", slug, "content_length", len(policyFile.Content))
+
+	annotatedPolicy, err := h.service.GenerateAnnotatedPolicy(ctx, tenant.ID, tenant.CompanyName, policyFile.Content)
+	if err != nil {
+		slog.Error("Failed to generate annotated Policy", "tenant", slug, "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate Policy: "+err.Error())
+	}
+
+	slog.Info("Generated annotated POLICY.MD", "tenant", slug, "output_length", len(annotatedPolicy))
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"content": annotatedPolicy,
+	})
+}

@@ -2215,3 +2215,183 @@ func GetEscalationTicket(session *store.AgentSession) string {
 func SetEscalationTicket(session *store.AgentSession, ticketNumber string) {
 	session.EscalationTicket = ticketNumber
 }
+
+// ============================================================================
+// AUTO-GENERATE ANNOTATED KB.MD / POLICY.MD
+// ============================================================================
+
+// getReasoningModel returns the LLM model for reasoning tasks.
+// Uses LLM_MODEL_REASONING env var with fallback to default.
+func getReasoningModel() string {
+	model := os.Getenv("LLM_MODEL_REASONING")
+	if model == "" {
+		model = "google/gemini-2.5-pro"
+	}
+	return model
+}
+
+// GenerateAnnotatedKB uses an LLM to convert raw KB content into properly annotated KB.MD format.
+func (s *Service) GenerateAnnotatedKB(ctx context.Context, tenantID int32, companyName, rawContent string) (string, error) {
+	_, apiKey := s.getLLMConfig(ctx, tenantID)
+	if apiKey == "" {
+		return "", fmt.Errorf("OpenRouter API key not configured")
+	}
+
+	model := getReasoningModel()
+
+	prompt := buildKBGenerationPrompt(companyName, rawContent)
+
+	client := openrouter.NewClient(apiKey)
+	resp, err := client.CreateChatCompletion(ctx, openrouter.ChatCompletionRequest{
+		Model: model,
+		Messages: []openrouter.ChatCompletionMessage{
+			openrouter.SystemMessage("You are a technical writer that creates structured knowledge base documents. Output ONLY the formatted KB.MD content with no explanations or commentary."),
+			openrouter.UserMessage(prompt),
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("LLM request failed: %w", err)
+	}
+
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("no response from LLM")
+	}
+
+	return resp.Choices[0].Message.Content.Text, nil
+}
+
+// GenerateAnnotatedPolicy uses an LLM to convert raw Policy content into properly annotated POLICY.MD format.
+func (s *Service) GenerateAnnotatedPolicy(ctx context.Context, tenantID int32, companyName, rawContent string) (string, error) {
+	_, apiKey := s.getLLMConfig(ctx, tenantID)
+	if apiKey == "" {
+		return "", fmt.Errorf("OpenRouter API key not configured")
+	}
+
+	model := getReasoningModel()
+
+	prompt := buildPolicyGenerationPrompt(companyName, rawContent)
+
+	client := openrouter.NewClient(apiKey)
+	resp, err := client.CreateChatCompletion(ctx, openrouter.ChatCompletionRequest{
+		Model: model,
+		Messages: []openrouter.ChatCompletionMessage{
+			openrouter.SystemMessage("You are a technical writer that creates structured policy documents. Output ONLY the formatted POLICY.MD content with no explanations or commentary."),
+			openrouter.UserMessage(prompt),
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("LLM request failed: %w", err)
+	}
+
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("no response from LLM")
+	}
+
+	return resp.Choices[0].Message.Content.Text, nil
+}
+
+// buildKBGenerationPrompt constructs the prompt for KB.MD generation.
+func buildKBGenerationPrompt(companyName, rawContent string) string {
+	return fmt.Sprintf(`Analyze the following raw content and generate a properly formatted KB.MD file using HTML comment annotations.
+
+## Company Name
+%s
+
+## Raw Content to Analyze
+%s
+
+## Required Output Format
+
+Generate a KB.MD file with these annotation types:
+
+1. **@section** - For general content sections
+   Format: <!-- @section: code, type: category -->
+   Example: <!-- @section: about_us, type: general -->
+
+2. **@service** - For services/products offered
+   Format: <!-- @service: code, emergency: true/false -->
+   Example: <!-- @service: water_damage, emergency: true -->
+
+3. **@faq** - For Q&A pairs
+   Format: <!-- @faq: code -->
+   Example: <!-- @faq: response_time -->
+
+4. **@exclusion** - For things NOT offered
+   Format: <!-- @exclusion: code, exception: "when applicable" -->
+   Example: <!-- @exclusion: general_plumbing, exception: "unless it caused water damage" -->
+
+5. **@coverage** - For geographic/scope areas
+   Format: <!-- @coverage: include/exclude -->
+   Example: <!-- @coverage: include -->
+
+6. **@safety** - For safety protocols
+   Format: <!-- @safety: code, triggers: intent1, intent2 -->
+   Example: <!-- @safety: gas_leak, triggers: emergency_gas, smell_gas -->
+
+## Rules
+
+1. Each annotation must have a unique code (lowercase_snake_case)
+2. Group related content under appropriate headings (## for main sections, ### for items)
+3. Identify and extract ALL FAQs from the content (look for Q&A patterns, common questions)
+4. Identify services/products if applicable
+5. Create custom @section types for content that doesn't fit other categories
+6. Use clear, descriptive titles
+7. Maintain the original content's meaning - do not invent information
+8. Add section separators (---) between major sections
+
+## Output
+
+Return ONLY the formatted KB.MD content, starting with:
+# %s Knowledge Base
+
+Do not include any explanations or commentary before or after the content.`, companyName, rawContent, companyName)
+}
+
+// buildPolicyGenerationPrompt constructs the prompt for POLICY.MD generation.
+func buildPolicyGenerationPrompt(companyName, rawContent string) string {
+	return fmt.Sprintf(`Analyze the following raw content and generate a properly formatted POLICY.MD file using HTML comment annotations.
+
+## Company Name
+%s
+
+## Raw Content to Analyze
+%s
+
+## Required Output Format
+
+Generate a POLICY.MD file with these annotation types:
+
+1. **@identity** - Agent identity definition
+   Format: <!-- @identity: agent -->
+   Place at the start of the identity section
+
+2. **@intent** - User intent classification
+   Format: <!-- @intent: code, category: emergency|standard|meta, urgency: 0-5 -->
+   Example: <!-- @intent: report_water_damage, category: emergency, urgency: 5 -->
+
+3. **@rule** - Policy rules
+   Format: <!-- @rule: code, priority: 1-10 -->
+   Example: <!-- @rule: greeting, priority: 1 -->
+
+4. **@thresholds** - Escalation thresholds
+   Format: <!-- @thresholds: escalation -->
+   Example: <!-- @thresholds: escalation -->
+
+## Rules
+
+1. Each annotation must have a unique code (lowercase_snake_case)
+2. Identify the agent's role, tone, and brand voice for the @identity section
+3. Extract any conversation guidelines or rules
+4. Identify possible user intents from the content
+5. Look for escalation criteria or thresholds
+6. Group related content under appropriate headings
+7. Maintain the original content's meaning - do not invent information
+8. Add section separators (---) between major sections
+
+## Output
+
+Return ONLY the formatted POLICY.MD content, starting with:
+# %s Policy
+
+Do not include any explanations or commentary before or after the content.`, companyName, rawContent, companyName)
+}

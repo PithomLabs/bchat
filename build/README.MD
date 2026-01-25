@@ -35,7 +35,7 @@ git tag -a v0.4.5 -m "sim addendums"
 git tag -a v0.4.6 -m "tighten MD files"
 git tag -a v0.4.7 -m "DOCS_SIMULATION_2*.MD"
 git tag -a v0.5.8 -m "chat widget"
-
+git tag -a v0.5.9 -m "rag stats"
 git push origin --tags
 ```
 
@@ -60,3 +60,5 @@ uuidgen to encrypt OPENROUTER_API_KEY
 
 To build RAG
 go build -tags rag -o build/memos ./bin/memos
+
+RAG_PIPELINE_ENABLED=true REINDEX_RAG=true task run:rag

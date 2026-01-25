@@ -1,5 +1,5 @@
-import { Button, Chip, DialogActions, DialogContent, DialogTitle, Divider, FormControl, FormHelperText, FormLabel, Input, Modal, ModalDialog, Option, Select, Switch, Textarea } from "@mui/joy";
-import { ArrowLeftIcon, BrainIcon, BuildingIcon, CheckIcon, CopyIcon, EditIcon, FileTextIcon, HistoryIcon, PlusIcon, RefreshCwIcon, SettingsIcon, Trash2Icon, UploadIcon, XIcon } from "lucide-react";
+import { Button, Chip, DialogActions, DialogContent, DialogTitle, Divider, FormControl, FormHelperText, FormLabel, Input, Modal, ModalClose, ModalDialog, Option, Select, Switch, Textarea } from "@mui/joy";
+import { ArrowLeftIcon, BrainIcon, BuildingIcon, CheckIcon, CopyIcon, EditIcon, FileTextIcon, HistoryIcon, PlusIcon, RefreshCwIcon, SettingsIcon, SparklesIcon, Trash2Icon, UploadIcon, XIcon } from "lucide-react";
 import { observer } from "mobx-react-lite";
 import { ChangeEvent, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
@@ -19,6 +19,9 @@ const AgentAdmin = observer(() => {
   const [showDeleteModal, setShowDeleteModal] = useState<AgentTenant | null>(null);
   const [showVersionsModal, setShowVersionsModal] = useState<{ slug: string; audienceType: string; fileType: string } | null>(null);
   const [isRebuilding, setIsRebuilding] = useState(false);
+  // Auto-generate annotated content state
+  const [showGeneratedContent, setShowGeneratedContent] = useState<{ type: "kb" | "policy"; content: string } | null>(null);
+  const [isGenerating, setIsGenerating] = useState<"kb" | "policy" | null>(null);
 
   const { tenants, selectedTenant, isLoading, isSaving, error, fileVersions, llmConfig, tenantPermissions, myPermissions, script, isLoadingScript, learningMemory, isLoadingLearning } = agentAdminStore.state;
 
@@ -124,6 +127,40 @@ const AgentAdmin = observer(() => {
         toast.success("Version restored successfully");
         setShowVersionsModal(null);
       }
+    }
+  };
+
+  // Auto-generate annotated KB.MD
+  const handleGenerateKB = async () => {
+    if (!selectedTenant) return;
+    setIsGenerating("kb");
+    const result = await agentAdminStore.generateKB(selectedTenant.tenant.slug);
+    setIsGenerating(null);
+    if (result.content) {
+      setShowGeneratedContent({ type: "kb", content: result.content });
+    } else {
+      toast.error(result.error || "Failed to generate KB.MD");
+    }
+  };
+
+  // Auto-generate annotated POLICY.MD
+  const handleGeneratePolicy = async () => {
+    if (!selectedTenant) return;
+    setIsGenerating("policy");
+    const result = await agentAdminStore.generatePolicy(selectedTenant.tenant.slug);
+    setIsGenerating(null);
+    if (result.content) {
+      setShowGeneratedContent({ type: "policy", content: result.content });
+    } else {
+      toast.error(result.error || "Failed to generate POLICY.MD");
+    }
+  };
+
+  // Copy generated content to clipboard
+  const handleCopyGeneratedContent = () => {
+    if (showGeneratedContent) {
+      navigator.clipboard.writeText(showGeneratedContent.content);
+      toast.success(t("agent-admin.copied-to-clipboard"));
     }
   };
 
@@ -302,6 +339,43 @@ const AgentAdmin = observer(() => {
               canRestore={canRestore}
             />
 
+            {/* Auto-Generate Annotated Content - Admin only */}
+            {isAdmin && (
+              <div className="bg-purple-50 dark:bg-purple-900/20 rounded-xl border border-purple-200 dark:border-purple-800 p-4">
+                <div className="flex flex-col gap-3">
+                  <div>
+                    <h3 className="font-medium text-purple-700 dark:text-purple-300 flex items-center gap-2">
+                      <SparklesIcon className="w-4 h-4" />
+                      {t("agent-admin.auto-generate-title")}
+                    </h3>
+                    <p className="text-sm text-purple-600 dark:text-purple-400">{t("agent-admin.auto-generate-desc")}</p>
+                  </div>
+                  <div className="flex gap-2 flex-wrap">
+                    <Button
+                      variant="outlined"
+                      color="primary"
+                      onClick={handleGenerateKB}
+                      loading={isGenerating === "kb"}
+                      disabled={isGenerating !== null}
+                      startDecorator={<SparklesIcon className="w-4 h-4" />}
+                    >
+                      {isGenerating === "kb" ? t("agent-admin.generating") : t("agent-admin.generate-kb")}
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      color="primary"
+                      onClick={handleGeneratePolicy}
+                      loading={isGenerating === "policy"}
+                      disabled={isGenerating !== null}
+                      startDecorator={<SparklesIcon className="w-4 h-4" />}
+                    >
+                      {isGenerating === "policy" ? t("agent-admin.generating") : t("agent-admin.generate-policy")}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Internal Configuration */}
             <AudienceSection
               title="Internal (Employee-Facing)"
@@ -391,6 +465,41 @@ const AgentAdmin = observer(() => {
             <DialogActions>
               <Button variant="plain" color="neutral" onClick={() => setShowVersionsModal(null)}>
                 {t("common.close")}
+              </Button>
+            </DialogActions>
+          </ModalDialog>
+        </Modal>
+
+        {/* Generated Content Modal */}
+        <Modal open={showGeneratedContent !== null} onClose={() => setShowGeneratedContent(null)}>
+          <ModalDialog sx={{ maxWidth: 900, width: "90vw", maxHeight: "90vh" }}>
+            <ModalClose />
+            <DialogTitle>
+              {showGeneratedContent?.type === "kb"
+                ? t("agent-admin.generated-kb-title")
+                : t("agent-admin.generated-policy-title")}
+            </DialogTitle>
+            <Divider />
+            <DialogContent sx={{ overflow: "auto" }}>
+              <Textarea
+                value={showGeneratedContent?.content || ""}
+                readOnly
+                minRows={20}
+                maxRows={40}
+                sx={{ fontFamily: "monospace", fontSize: "12px" }}
+              />
+            </DialogContent>
+            <DialogActions>
+              <Button variant="plain" color="neutral" onClick={() => setShowGeneratedContent(null)}>
+                {t("common.close")}
+              </Button>
+              <Button
+                variant="solid"
+                color="primary"
+                startDecorator={<CopyIcon className="w-4 h-4" />}
+                onClick={handleCopyGeneratedContent}
+              >
+                {t("agent-admin.copy-to-clipboard")}
               </Button>
             </DialogActions>
           </ModalDialog>
