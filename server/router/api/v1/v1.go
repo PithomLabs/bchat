@@ -261,6 +261,13 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	adminGroup.GET("/:slug/export", s.agentHandler.HandleExport)
 	adminGroup.GET("/:slug/files/:audienceType/:fileType/versions", s.agentHandler.HandleGetFileVersions)
 	adminGroup.POST("/:slug/files/:audienceType/:fileType/restore", s.agentHandler.HandleRestoreFileVersion)
+
+	// RAG Stats routes (admin only)
+	ragGroup := echoServer.Group("/api/v1/admin/rag")
+	ragGroup.Use(s.AuthMiddleware)
+	ragGroup.GET("/stats", s.agentHandler.HandleGetRAGStats)
+	ragGroup.GET("/tenants/:tenantId", s.agentHandler.HandleGetTenantRAGDetails)
+	ragGroup.POST("/search", s.agentHandler.HandleTestRAGSearch)
 }
 
 func (s *APIV1Service) AuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {

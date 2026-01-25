@@ -3226,3 +3226,368 @@ func (h *Handler) HandleApplyLearnings(c echo.Context) error {
 		"message":           fmt.Sprintf("%d improvements applied", appliedCount),
 	})
 }
+
+// ============================================================================
+// RAG STATS ENDPOINTS (Admin only)
+// ============================================================================
+
+// RAGStatsResponse represents the global RAG statistics response.
+type RAGStatsResponse struct {
+	Enabled             bool                   `json:"enabled"`
+	StorageProvider     string                 `json:"storageProvider"`
+	EmbeddingProvider   string                 `json:"embeddingProvider"`
+	EmbeddingModel      string                 `json:"embeddingModel"`
+	HybridSearchEnabled bool                   `json:"hybridSearchEnabled"`
+	HybridVectorWeight  float64                `json:"hybridVectorWeight"`
+	HybridTextWeight    float64                `json:"hybridTextWeight"`
+	Stats               RAGStatsData           `json:"stats"`
+	Tenants             []TenantRAGInfo        `json:"tenants"`
+}
+
+// RAGStatsData holds the core statistics.
+type RAGStatsData struct {
+	TotalChunks   int64            `json:"totalChunks"`
+	TenantCounts  map[int32]int64  `json:"tenantCounts"`
+	ContentCounts map[string]int64 `json:"contentCounts"`
+	IndexSize     int64            `json:"indexSize"`
+	LastOptimized string           `json:"lastOptimized,omitempty"`
+}
+
+// TenantRAGInfo holds per-tenant RAG summary.
+type TenantRAGInfo struct {
+	ID          int32  `json:"id"`
+	Slug        string `json:"slug"`
+	CompanyName string `json:"companyName"`
+	ChunkCount  int64  `json:"chunkCount"`
+	LastIndexed string `json:"lastIndexed,omitempty"`
+}
+
+// TenantRAGDetailsResponse holds detailed RAG info for a tenant.
+type TenantRAGDetailsResponse struct {
+	TenantID         int32            `json:"tenantId"`
+	Slug             string           `json:"slug"`
+	CompanyName      string           `json:"companyName"`
+	ChunksByType     map[string]int64 `json:"chunksByType"`
+	ChunksByAudience map[string]int64 `json:"chunksByAudience"`
+	SampleChunks     []ChunkInfo      `json:"sampleChunks"`
+}
+
+// ChunkInfo holds information about a single chunk.
+type ChunkInfo struct {
+	ID           string `json:"id"`
+	ContentType  string `json:"contentType"`
+	AudienceType string `json:"audienceType"`
+	Title        string `json:"title"`
+	Content      string `json:"content"`
+	Code         string `json:"code,omitempty"`
+	IsActive     bool   `json:"isActive"`
+	IsEmergency  bool   `json:"isEmergency,omitempty"`
+	Priority     int32  `json:"priority,omitempty"`
+	IndexedAt    string `json:"indexedAt,omitempty"`
+}
+
+// RAGSearchRequest represents a RAG search test request.
+type RAGSearchRequest struct {
+	TenantID        int32   `json:"tenantId"`
+	AudienceType    string  `json:"audienceType"`
+	Query           string  `json:"query"`
+	TopK            int     `json:"topK"`
+	MinScore        float64 `json:"minScore"`
+	UseHybridSearch bool    `json:"useHybridSearch"`
+	VectorWeight    float64 `json:"vectorWeight"`
+	TextWeight      float64 `json:"textWeight"`
+}
+
+// RAGSearchResponse holds the search test results.
+type RAGSearchResponse struct {
+	SearchMode   string             `json:"searchMode"`
+	LatencyMs    int64              `json:"latencyMs"`
+	TotalResults int                `json:"totalResults"`
+	Results      []RAGSearchResult  `json:"results"`
+}
+
+// RAGSearchResult holds a single search result.
+type RAGSearchResult struct {
+	Chunk       ChunkInfo `json:"chunk"`
+	Score       float64   `json:"score"`
+	VectorScore float64   `json:"vectorScore,omitempty"`
+	BM25Score   float64   `json:"bm25Score,omitempty"`
+}
+
+// HandleGetRAGStats returns global RAG statistics.
+// GET /api/v1/admin/rag/stats
+// Requires: ADMIN role
+func (h *Handler) HandleGetRAGStats(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	// Check admin role
+	if !h.isAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
+	}
+
+	// Get VectorDB config
+	config := h.service.vectorDBConfig
+
+	// Get stats from VectorDB
+	stats, err := h.service.vectorDB.Stats(ctx)
+	if err != nil {
+		slog.Error("failed to get RAG stats", "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get RAG statistics")
+	}
+
+	// Get all tenants for tenant info
+	tenants, err := h.store.ListAgentTenants(ctx, &store.FindAgentTenant{})
+	if err != nil {
+		slog.Error("failed to list tenants", "error", err)
+		tenants = []*store.AgentTenant{}
+	}
+
+	// Build tenant info list
+	tenantInfos := make([]TenantRAGInfo, 0, len(tenants))
+	for _, t := range tenants {
+		chunkCount := int64(0)
+		if stats.TenantCounts != nil {
+			chunkCount = stats.TenantCounts[t.ID]
+		}
+		tenantInfos = append(tenantInfos, TenantRAGInfo{
+			ID:          t.ID,
+			Slug:        t.Slug,
+			CompanyName: t.CompanyName,
+			ChunkCount:  chunkCount,
+			LastIndexed: t.UpdatedAt.Format(time.RFC3339),
+		})
+	}
+
+	// Get embedding config
+	embeddingProvider := "unknown"
+	embeddingModel := "unknown"
+	if config != nil && config.EmbeddingConfig != nil {
+		embeddingProvider = config.EmbeddingConfig.Provider
+		embeddingModel = config.EmbeddingConfig.Model
+	}
+
+	response := RAGStatsResponse{
+		Enabled:             config != nil && config.Enabled,
+		StorageProvider:     config.StorageProvider,
+		EmbeddingProvider:   embeddingProvider,
+		EmbeddingModel:      embeddingModel,
+		HybridSearchEnabled: config != nil && config.HybridSearchEnabled,
+		HybridVectorWeight:  config.HybridVectorWeight,
+		HybridTextWeight:    config.HybridTextWeight,
+		Stats: RAGStatsData{
+			TotalChunks:   stats.TotalChunks,
+			TenantCounts:  stats.TenantCounts,
+			ContentCounts: stats.ContentCounts,
+			IndexSize:     stats.IndexSize,
+		},
+		Tenants: tenantInfos,
+	}
+
+	if !stats.LastOptimized.IsZero() {
+		response.Stats.LastOptimized = stats.LastOptimized.Format(time.RFC3339)
+	}
+
+	return c.JSON(http.StatusOK, response)
+}
+
+// HandleGetTenantRAGDetails returns detailed RAG info for a specific tenant.
+// GET /api/v1/admin/rag/tenants/:tenantId
+// Requires: ADMIN role
+func (h *Handler) HandleGetTenantRAGDetails(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	// Check admin role
+	if !h.isAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
+	}
+
+	// Parse tenant ID
+	tenantIDStr := c.Param("tenantId")
+	tenantID64, err := strconv.ParseInt(tenantIDStr, 10, 32)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid tenant ID")
+	}
+	tenantID := int32(tenantID64)
+
+	// Get tenant
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{ID: &tenantID})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	// Get chunks for this tenant by searching with empty query to get all
+	// We'll search both audiences
+	chunksByType := make(map[string]int64)
+	chunksByAudience := make(map[string]int64)
+	var sampleChunks []ChunkInfo
+
+	for _, audience := range []string{"external", "internal"} {
+		result, err := h.service.vectorDB.Search(ctx, SearchQuery{
+			TenantID:     tenantID,
+			AudienceType: audience,
+			TopK:         100, // Get up to 100 for counting
+			MinScore:     0,   // Accept all
+		})
+		if err != nil {
+			slog.Warn("search failed for tenant RAG details", "tenantID", tenantID, "audience", audience, "error", err)
+			continue
+		}
+
+		chunksByAudience[audience] = int64(len(result.Chunks))
+
+		for _, chunk := range result.Chunks {
+			chunksByType[chunk.ContentType]++
+
+			// Collect sample chunks (up to 5 total)
+			if len(sampleChunks) < 5 {
+				indexedAt := ""
+				if !chunk.IndexedAt.IsZero() {
+					indexedAt = chunk.IndexedAt.Format(time.RFC3339)
+				}
+				sampleChunks = append(sampleChunks, ChunkInfo{
+					ID:           chunk.ID,
+					ContentType:  chunk.ContentType,
+					AudienceType: chunk.AudienceType,
+					Title:        chunk.Title,
+					Content:      truncateString(chunk.Content, 200),
+					Code:         chunk.Code,
+					IsActive:     chunk.IsActive,
+					IsEmergency:  chunk.IsEmergency,
+					Priority:     chunk.Priority,
+					IndexedAt:    indexedAt,
+				})
+			}
+		}
+	}
+
+	response := TenantRAGDetailsResponse{
+		TenantID:         tenantID,
+		Slug:             tenant.Slug,
+		CompanyName:      tenant.CompanyName,
+		ChunksByType:     chunksByType,
+		ChunksByAudience: chunksByAudience,
+		SampleChunks:     sampleChunks,
+	}
+
+	return c.JSON(http.StatusOK, response)
+}
+
+// HandleTestRAGSearch allows testing RAG queries.
+// POST /api/v1/admin/rag/search
+// Requires: ADMIN role
+func (h *Handler) HandleTestRAGSearch(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	// Check admin role
+	if !h.isAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
+	}
+
+	// Parse request
+	var req RAGSearchRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
+	}
+
+	if req.Query == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Query is required")
+	}
+
+	if req.TenantID <= 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "tenantId is required")
+	}
+
+	// Validate tenant exists
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{ID: &req.TenantID})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	// Set defaults
+	if req.TopK <= 0 {
+		req.TopK = 5
+	}
+	if req.TopK > 20 {
+		req.TopK = 20
+	}
+	if req.AudienceType == "" {
+		req.AudienceType = "external"
+	}
+	if req.VectorWeight <= 0 {
+		req.VectorWeight = 0.7
+	}
+	if req.TextWeight <= 0 {
+		req.TextWeight = 0.3
+	}
+
+	// Execute search
+	searchQuery := SearchQuery{
+		QueryText:       req.Query,
+		TenantID:        req.TenantID,
+		AudienceType:    req.AudienceType,
+		TopK:            req.TopK,
+		MinScore:        req.MinScore,
+		UseHybridSearch: req.UseHybridSearch,
+		VectorWeight:    req.VectorWeight,
+		TextWeight:      req.TextWeight,
+		ActiveOnly:      true,
+	}
+
+	result, err := h.service.vectorDB.Search(ctx, searchQuery)
+	if err != nil {
+		slog.Error("RAG search test failed", "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Search failed: "+err.Error())
+	}
+
+	// Build response
+	results := make([]RAGSearchResult, len(result.Chunks))
+	for i, chunk := range result.Chunks {
+		indexedAt := ""
+		if !chunk.IndexedAt.IsZero() {
+			indexedAt = chunk.IndexedAt.Format(time.RFC3339)
+		}
+
+		searchResult := RAGSearchResult{
+			Chunk: ChunkInfo{
+				ID:           chunk.ID,
+				ContentType:  chunk.ContentType,
+				AudienceType: chunk.AudienceType,
+				Title:        chunk.Title,
+				Content:      truncateString(chunk.Content, 300),
+				Code:         chunk.Code,
+				IsActive:     chunk.IsActive,
+				IsEmergency:  chunk.IsEmergency,
+				Priority:     chunk.Priority,
+				IndexedAt:    indexedAt,
+			},
+			Score: result.Scores[i],
+		}
+
+		// Include component scores for hybrid search
+		if req.UseHybridSearch && len(result.VectorScores) > i {
+			searchResult.VectorScore = result.VectorScores[i]
+		}
+		if req.UseHybridSearch && len(result.BM25Scores) > i {
+			searchResult.BM25Score = result.BM25Scores[i]
+		}
+
+		results[i] = searchResult
+	}
+
+	response := RAGSearchResponse{
+		SearchMode:   result.SearchMode,
+		LatencyMs:    result.Latency.Milliseconds(),
+		TotalResults: result.Total,
+		Results:      results,
+	}
+
+	return c.JSON(http.StatusOK, response)
+}
+
+// truncateString truncates a string to maxLen characters with ellipsis.
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
+}

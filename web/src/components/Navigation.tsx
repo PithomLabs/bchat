@@ -1,5 +1,5 @@
 import { Tooltip } from "@mui/joy";
-import { BellIcon, BotIcon, EarthIcon, FlaskConicalIcon, LibraryIcon, MessageSquareIcon, PaperclipIcon, SettingsIcon, TicketIcon, UserCircleIcon } from "lucide-react";
+import { BellIcon, BotIcon, DatabaseIcon, EarthIcon, FlaskConicalIcon, LibraryIcon, MessageSquareIcon, PaperclipIcon, SettingsIcon, TicketIcon, UserCircleIcon } from "lucide-react";
 import { observer } from "mobx-react-lite";
 import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
@@ -117,6 +117,12 @@ const Navigation = observer((props: Props) => {
     title: t("common.agent-admin"),
     icon: <SettingsIcon className="w-6 h-auto opacity-70 shrink-0" />,
   };
+  const ragStatsNavLink: NavLinkItem = {
+    id: "header-rag-stats",
+    path: Routes.RAG_STATS,
+    title: t("common.rag-stats"),
+    icon: <DatabaseIcon className="w-6 h-auto opacity-70 shrink-0" />,
+  };
   const signInNavLink: NavLinkItem = {
     id: "header-auth",
     path: Routes.AUTH,
@@ -137,7 +143,7 @@ const Navigation = observer((props: Props) => {
     chatNavLink,
     ...(canAccessInternalAgent ? [internalAgentNavLink, agentSimulationNavLink] : []),
   ];
-  const adminNavLinks: NavLinkItem[] = isAdmin ? [agentAdminNavLink] : [];
+  const adminNavLinks: NavLinkItem[] = isAdmin ? [agentAdminNavLink, ragStatsNavLink] : [];
 
   const navLinks: NavLinkItem[] = currentUser
     ? [...baseNavLinks, ...adminNavLinks]

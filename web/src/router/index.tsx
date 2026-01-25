@@ -10,6 +10,7 @@ const AdminSignIn = lazy(() => import("@/pages/AdminSignIn"));
 const AgentAdmin = lazy(() => import("@/pages/AgentAdmin"));
 const AgentSimulation = lazy(() => import("@/pages/AgentSimulation"));
 const InternalAgent = lazy(() => import("@/pages/InternalAgent"));
+const RagStats = lazy(() => import("@/pages/RagStats"));
 const Archived = lazy(() => import("@/pages/Archived"));
 const AuthCallback = lazy(() => import("@/pages/AuthCallback"));
 const Chat = lazy(() => import("@/pages/Chat"));
@@ -42,6 +43,7 @@ export enum Routes {
   INTERNAL_AGENT = "/internal-agent",
   AGENT_SIMULATION = "/agent-simulation",
   AGENT_ADMIN = "/agent-admin",
+  RAG_STATS = "/rag-stats",
 }
 
 const router = createBrowserRouter([
@@ -184,6 +186,14 @@ const router = createBrowserRouter([
             element: (
               <Suspense fallback={<Loading />}>
                 <AgentAdmin />
+              </Suspense>
+            ),
+          },
+          {
+            path: Routes.RAG_STATS,
+            element: (
+              <Suspense fallback={<Loading />}>
+                <RagStats />
               </Suspense>
             ),
           },
