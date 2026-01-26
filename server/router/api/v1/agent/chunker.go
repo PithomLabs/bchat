@@ -473,13 +473,48 @@ func buildIntentContent(intent *store.AgentIntent) string {
 
 const (
 	DefaultTokenThreshold = 30000 // Threshold for switching to RAG mode
-	MinChunkTokens        = 100   // Minimum tokens per chunk
-	MaxChunkTokens        = 800   // Maximum tokens per chunk
-	ChunkOverlapTokens    = 50    // Overlap between chunks
+	MinChunkTokens        = 30    // Minimum tokens per chunk
+	MaxChunkTokens        = 150   // Default max tokens (for Cybertron/local)
+	ChunkOverlapTokens    = 15    // Overlap between chunks
 )
 
+// GetMaxChunkTokens returns the maximum chunk size based on embedding provider.
+// Different providers have different token limits:
+// - OpenRouter (text-embedding-3-small): 8191 tokens - can use large chunks
+// - Cybertron (sentence-transformers): 512 tokens - needs small chunks
+// - Local (sentence-transformers): 512 tokens - needs small chunks
+func GetMaxChunkTokens(embeddingProvider string) int {
+	switch embeddingProvider {
+	case "openrouter":
+		return 2000 // text-embedding-3-small supports 8191 tokens, use 2000 for safety
+	case "cybertron":
+		return 150 // 512 token limit with aggressive subword tokenization
+	case "local":
+		return 150 // Same model family as Cybertron
+	case "mock":
+		return 500 // Mock doesn't have real limits
+	default:
+		return 500 // Conservative default
+	}
+}
+
+// GetMinChunkTokens returns the minimum chunk size based on embedding provider.
+func GetMinChunkTokens(embeddingProvider string) int {
+	switch embeddingProvider {
+	case "openrouter":
+		return 100 // Larger min for larger chunks
+	case "cybertron", "local":
+		return 30 // Small min for small chunks
+	default:
+		return 50
+	}
+}
+
 // EstimateTokens estimates the token count for a given text.
-// Uses a rough approximation: 1 token ≈ 4 characters for English text.
+// Note: This is approximate. Actual tokenization varies by model:
+// - GPT-style: ~4 chars/token
+// - Sentence-transformers: ~1.9 chars/token (subword)
+// We use /4 as a baseline; chunk limits are set conservatively to compensate.
 func EstimateTokens(content string) int {
 	return len(content) / 4
 }
@@ -492,15 +527,26 @@ func ShouldUseRAG(kbContent, policyContent string) bool {
 
 // ChunkMarkdownContent chunks raw markdown using heading-based splitting.
 // This is the main entry point for the new chunking strategy.
+// maxTokens controls chunk size - use GetMaxChunkTokens(provider) to get appropriate value.
 func (c *Chunker) ChunkMarkdownContent(
 	content string,
 	tenantID int32,
 	audience string,
 	fileType string, // "kb" or "policy"
 	sourceVersion int32,
+	maxTokens int, // Use GetMaxChunkTokens(embeddingProvider) for this value
 ) []DocumentChunk {
 	if strings.TrimSpace(content) == "" {
 		return nil
+	}
+
+	// Use defaults if not specified
+	if maxTokens <= 0 {
+		maxTokens = MaxChunkTokens
+	}
+	minTokens := maxTokens / 5 // Scale min proportionally
+	if minTokens < 30 {
+		minTokens = 30
 	}
 
 	now := time.Now()
@@ -517,7 +563,7 @@ func (c *Chunker) ChunkMarkdownContent(
 
 		tokens := EstimateTokens(body)
 
-		if tokens <= MaxChunkTokens {
+		if tokens <= maxTokens {
 			// Section fits in one chunk
 			code := fmt.Sprintf("%s_section_%d", fileType, i)
 			chunks = append(chunks, DocumentChunk{
@@ -544,8 +590,8 @@ func (c *Chunker) ChunkMarkdownContent(
 					}
 
 					// If subsection still too large, split by paragraphs
-					if EstimateTokens(subBody) > MaxChunkTokens {
-						paragraphChunks := splitByParagraphs(subBody, title+" > "+subTitle, MaxChunkTokens)
+					if EstimateTokens(subBody) > maxTokens {
+						paragraphChunks := splitByParagraphs(subBody, title+" > "+subTitle, maxTokens)
 						for k, pc := range paragraphChunks {
 							code := fmt.Sprintf("%s_section_%d_%d_%d", fileType, i, j, k)
 							chunks = append(chunks, DocumentChunk{
@@ -583,7 +629,7 @@ func (c *Chunker) ChunkMarkdownContent(
 				}
 			} else {
 				// No H3 headers, split by paragraphs
-				paragraphChunks := splitByParagraphs(body, title, MaxChunkTokens)
+				paragraphChunks := splitByParagraphs(body, title, maxTokens)
 				for k, pc := range paragraphChunks {
 					code := fmt.Sprintf("%s_section_%d_%d", fileType, i, k)
 					chunks = append(chunks, DocumentChunk{
@@ -604,7 +650,7 @@ func (c *Chunker) ChunkMarkdownContent(
 	}
 
 	// Apply minimum size filter - merge tiny chunks
-	chunks = mergeSmallChunks(chunks, MinChunkTokens)
+	chunks = mergeSmallChunks(chunks, minTokens, maxTokens)
 
 	return chunks
 }
@@ -700,12 +746,68 @@ type paragraphChunk struct {
 	content string
 }
 
+// splitBySentences splits text into sentences using common sentence terminators.
+// This is a fallback for when paragraph splitting produces chunks that are too large.
+func splitBySentences(text string) []string {
+	var sentences []string
+	var current strings.Builder
+
+	runes := []rune(text)
+	for i := 0; i < len(runes); i++ {
+		current.WriteRune(runes[i])
+
+		// Check for sentence terminators
+		if runes[i] == '.' || runes[i] == '!' || runes[i] == '?' {
+			// Look ahead to confirm sentence boundary
+			// (not abbreviations like "Dr.", "e.g.", numbers like "3.14")
+			if i+1 < len(runes) {
+				next := runes[i+1]
+				// Sentence ends if followed by space and uppercase, or end of text
+				if next == ' ' || next == '\n' || next == '\r' {
+					sentence := strings.TrimSpace(current.String())
+					if sentence != "" {
+						sentences = append(sentences, sentence)
+					}
+					current.Reset()
+				}
+			}
+		}
+	}
+
+	// Don't forget remaining content
+	if current.Len() > 0 {
+		sentence := strings.TrimSpace(current.String())
+		if sentence != "" {
+			sentences = append(sentences, sentence)
+		}
+	}
+
+	return sentences
+}
+
 // splitByParagraphs splits content by blank lines and groups into chunks.
+// If a single paragraph exceeds maxTokens, it will be split by sentences.
 func splitByParagraphs(content, title string, maxTokens int) []paragraphChunk {
 	paragraphs := strings.Split(content, "\n\n")
 	var chunks []paragraphChunk
 	var currentContent strings.Builder
 	chunkIndex := 0
+
+	// Helper to flush current content as a chunk
+	flushChunk := func() {
+		if currentContent.Len() > 0 {
+			chunkTitle := title
+			if chunkIndex > 0 || len(chunks) > 0 {
+				chunkTitle = fmt.Sprintf("%s (Part %d)", title, len(chunks)+1)
+			}
+			chunks = append(chunks, paragraphChunk{
+				title:   chunkTitle,
+				content: strings.TrimSpace(currentContent.String()),
+			})
+			currentContent.Reset()
+			chunkIndex++
+		}
+	}
 
 	for _, para := range paragraphs {
 		para = strings.TrimSpace(para)
@@ -713,7 +815,51 @@ func splitByParagraphs(content, title string, maxTokens int) []paragraphChunk {
 			continue
 		}
 
-		// Check if adding this paragraph would exceed limit
+		paraTokens := EstimateTokens(para)
+
+		// If single paragraph exceeds limit, split by sentences
+		if paraTokens > maxTokens {
+			// First flush any existing content
+			flushChunk()
+
+			// Split this large paragraph by sentences
+			sentences := splitBySentences(para)
+			var sentenceBuffer strings.Builder
+
+			for _, sent := range sentences {
+				combined := sentenceBuffer.String()
+				if combined != "" {
+					combined += " "
+				}
+				combined += sent
+
+				if EstimateTokens(combined) > maxTokens && sentenceBuffer.Len() > 0 {
+					// Save current sentence buffer as chunk
+					chunks = append(chunks, paragraphChunk{
+						title:   fmt.Sprintf("%s (Part %d)", title, len(chunks)+1),
+						content: strings.TrimSpace(sentenceBuffer.String()),
+					})
+					sentenceBuffer.Reset()
+					sentenceBuffer.WriteString(sent)
+				} else {
+					if sentenceBuffer.Len() > 0 {
+						sentenceBuffer.WriteString(" ")
+					}
+					sentenceBuffer.WriteString(sent)
+				}
+			}
+
+			// Flush remaining sentences
+			if sentenceBuffer.Len() > 0 {
+				chunks = append(chunks, paragraphChunk{
+					title:   fmt.Sprintf("%s (Part %d)", title, len(chunks)+1),
+					content: strings.TrimSpace(sentenceBuffer.String()),
+				})
+			}
+			continue
+		}
+
+		// Normal paragraph processing
 		combined := currentContent.String()
 		if combined != "" {
 			combined += "\n\n"
@@ -722,13 +868,8 @@ func splitByParagraphs(content, title string, maxTokens int) []paragraphChunk {
 
 		if EstimateTokens(combined) > maxTokens && currentContent.Len() > 0 {
 			// Save current chunk and start new one
-			chunks = append(chunks, paragraphChunk{
-				title:   fmt.Sprintf("%s (Part %d)", title, chunkIndex+1),
-				content: strings.TrimSpace(currentContent.String()),
-			})
-			currentContent.Reset()
+			flushChunk()
 			currentContent.WriteString(para)
-			chunkIndex++
 		} else {
 			if currentContent.Len() > 0 {
 				currentContent.WriteString("\n\n")
@@ -738,22 +879,13 @@ func splitByParagraphs(content, title string, maxTokens int) []paragraphChunk {
 	}
 
 	// Don't forget the last chunk
-	if currentContent.Len() > 0 {
-		chunkTitle := title
-		if chunkIndex > 0 {
-			chunkTitle = fmt.Sprintf("%s (Part %d)", title, chunkIndex+1)
-		}
-		chunks = append(chunks, paragraphChunk{
-			title:   chunkTitle,
-			content: strings.TrimSpace(currentContent.String()),
-		})
-	}
+	flushChunk()
 
 	return chunks
 }
 
 // mergeSmallChunks merges chunks that are too small.
-func mergeSmallChunks(chunks []DocumentChunk, minTokens int) []DocumentChunk {
+func mergeSmallChunks(chunks []DocumentChunk, minTokens, maxTokens int) []DocumentChunk {
 	if len(chunks) <= 1 {
 		return chunks
 	}
@@ -768,7 +900,7 @@ func mergeSmallChunks(chunks []DocumentChunk, minTokens int) []DocumentChunk {
 		if pendingChunk != nil {
 			// Try to merge with pending chunk
 			mergedTokens := EstimateTokens(pendingChunk.Content) + tokens
-			if mergedTokens <= MaxChunkTokens {
+			if mergedTokens <= maxTokens {
 				pendingChunk.Content += "\n\n" + chunk.Content
 				pendingChunk.Title = pendingChunk.Title // Keep original title
 

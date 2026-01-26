@@ -156,13 +156,20 @@ func (s *Service) ReindexAllContent(ctx context.Context) error {
 			}
 
 			// Use heading-based chunker for raw markdown content
+			// Get chunk size based on embedding provider
+			embeddingProvider := ""
+			if s.vectorDBConfig != nil && s.vectorDBConfig.EmbeddingConfig != nil {
+				embeddingProvider = s.vectorDBConfig.EmbeddingConfig.Provider
+			}
+			maxChunkTokens := GetMaxChunkTokens(embeddingProvider)
+
 			var allChunks []DocumentChunk
 			if kbContent != "" {
-				kbChunks := s.chunker.ChunkMarkdownContent(kbContent, tenant.ID, audience, "kb", 1)
+				kbChunks := s.chunker.ChunkMarkdownContent(kbContent, tenant.ID, audience, "kb", 1, maxChunkTokens)
 				allChunks = append(allChunks, kbChunks...)
 			}
 			if policyContent != "" {
-				policyChunks := s.chunker.ChunkMarkdownContent(policyContent, tenant.ID, audience, "policy", 1)
+				policyChunks := s.chunker.ChunkMarkdownContent(policyContent, tenant.ID, audience, "policy", 1, maxChunkTokens)
 				allChunks = append(allChunks, policyChunks...)
 			}
 
@@ -214,7 +221,19 @@ func (s *Service) ReindexTenantContent(ctx context.Context, tenantID int32, audi
 		return 0, fmt.Errorf("failed to get tenant: %w", err)
 	}
 
-	slog.Info("Starting RAG reindex for tenant", "tenantID", tenantID, "tenant", tenant.Slug, "audienceFilter", audienceType)
+	// Get chunk size based on embedding provider
+	embeddingProvider := ""
+	if s.vectorDBConfig != nil && s.vectorDBConfig.EmbeddingConfig != nil {
+		embeddingProvider = s.vectorDBConfig.EmbeddingConfig.Provider
+	}
+	maxChunkTokens := GetMaxChunkTokens(embeddingProvider)
+
+	slog.Info("Starting RAG reindex for tenant",
+		"tenantID", tenantID,
+		"tenant", tenant.Slug,
+		"audienceFilter", audienceType,
+		"embeddingProvider", embeddingProvider,
+		"maxChunkTokens", maxChunkTokens)
 
 	// Get latest version of each source file for this tenant
 	findParams := &store.FindAgentSourceFile{
@@ -257,14 +276,14 @@ func (s *Service) ReindexTenantContent(ctx context.Context, tenantID int32, audi
 			slog.Warn("Failed to delete existing chunks", "tenantID", tenantID, "audience", audience, "error", err)
 		}
 
-		// Use heading-based chunker for raw markdown content
+		// Use heading-based chunker for raw markdown content (maxChunkTokens set at function start)
 		var allChunks []DocumentChunk
 		if kbContent != "" {
-			kbChunks := s.chunker.ChunkMarkdownContent(kbContent, tenantID, audience, "kb", 1)
+			kbChunks := s.chunker.ChunkMarkdownContent(kbContent, tenantID, audience, "kb", 1, maxChunkTokens)
 			allChunks = append(allChunks, kbChunks...)
 		}
 		if policyContent != "" {
-			policyChunks := s.chunker.ChunkMarkdownContent(policyContent, tenantID, audience, "policy", 1)
+			policyChunks := s.chunker.ChunkMarkdownContent(policyContent, tenantID, audience, "policy", 1, maxChunkTokens)
 			allChunks = append(allChunks, policyChunks...)
 		}
 

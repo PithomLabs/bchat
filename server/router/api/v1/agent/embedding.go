@@ -466,9 +466,23 @@ func (e *CybertronEmbedding) Embed(ctx context.Context, texts []string) ([][]flo
 		return [][]float32{}, nil
 	}
 
+	// Cybertron models have a 512 token limit.
+	// Sentence-transformers use aggressive subword tokenization (~1.9 chars/token).
+	// For safety: 400 tokens * 1.9 chars = 760 chars. Using 750 for margin.
+	const maxChars = 750
+
 	embeddings := make([][]float32, len(texts))
 
 	for i, text := range texts {
+		// Truncate if necessary (safety net for oversized chunks)
+		if len(text) > maxChars {
+			slog.Warn("truncating text for embedding",
+				"index", i,
+				"originalLen", len(text),
+				"truncatedTo", maxChars)
+			text = text[:maxChars]
+		}
+
 		// MeanPooling = 1 (from github.com/nlpodyssey/cybertron/pkg/models/bert)
 		result, err := e.model.Encode(ctx, text, 1)
 		if err != nil {

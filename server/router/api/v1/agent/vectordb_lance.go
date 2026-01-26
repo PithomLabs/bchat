@@ -200,6 +200,76 @@ func (db *LanceVectorDB) createIndexes(ctx context.Context) error {
 	return nil
 }
 
+// getTableEmbeddingDimension returns the embedding dimension of the existing table.
+// Returns 0 if unable to determine (table doesn't exist or error).
+func (db *LanceVectorDB) getTableEmbeddingDimension(ctx context.Context) int {
+	if db.table == nil {
+		return 0
+	}
+
+	// Query one record to check embedding dimension
+	results, err := db.table.SelectWithLimit(ctx, 1, 0)
+	if err != nil {
+		slog.Debug("Could not query table for dimension check", "error", err)
+		return 0
+	}
+
+	if len(results) == 0 {
+		// Table exists but is empty - no schema conflict possible
+		return 0
+	}
+
+	// Extract embedding dimension from the result
+	if row := results[0]; row != nil {
+		if embedding, ok := row["embedding"].([]float32); ok {
+			return len(embedding)
+		}
+		if embedding, ok := row["embedding"].([]interface{}); ok {
+			return len(embedding)
+		}
+	}
+
+	return 0
+}
+
+// dropAndRecreateTable drops the existing table and creates a new one with the current schema.
+func (db *LanceVectorDB) dropAndRecreateTable(ctx context.Context) error {
+	// Close existing table handle
+	if db.table != nil {
+		if err := db.table.Close(); err != nil {
+			slog.Warn("Failed to close table before drop", "error", err)
+		}
+		db.table = nil
+	}
+
+	// Drop the table
+	if err := db.conn.DropTable(ctx, lanceTableName); err != nil {
+		return fmt.Errorf("failed to drop table: %w", err)
+	}
+
+	slog.Info("Dropped existing LanceDB table due to dimension mismatch", "table", lanceTableName)
+
+	// Create new table with current schema
+	schema, err := db.buildSchema()
+	if err != nil {
+		return fmt.Errorf("failed to build schema: %w", err)
+	}
+
+	table, err := db.conn.CreateTable(ctx, lanceTableName, schema)
+	if err != nil {
+		return fmt.Errorf("failed to create new table: %w", err)
+	}
+	db.table = table
+
+	// Recreate indexes
+	if err := db.createIndexes(ctx); err != nil {
+		slog.Warn("Failed to create indexes on new table", "error", err)
+	}
+
+	slog.Info("Created new LanceDB table with updated schema", "table", lanceTableName)
+	return nil
+}
+
 // Insert adds or updates chunks in the database.
 func (db *LanceVectorDB) Insert(ctx context.Context, chunks []DocumentChunk) error {
 	if len(chunks) == 0 {
@@ -228,6 +298,24 @@ func (db *LanceVectorDB) Insert(ctx context.Context, chunks []DocumentChunk) err
 
 		for i, idx := range indicesToEmbed {
 			chunks[idx].Embedding = embeddings[i]
+		}
+	}
+
+	// Check for embedding dimension mismatch (happens when switching embedding providers)
+	if len(chunks) > 0 && len(chunks[0].Embedding) > 0 {
+		existingDim := db.getTableEmbeddingDimension(ctx)
+		newDim := len(chunks[0].Embedding)
+
+		if existingDim > 0 && existingDim != newDim {
+			slog.Warn("Embedding dimension mismatch detected, recreating table",
+				"table", lanceTableName,
+				"existingDimension", existingDim,
+				"newDimension", newDim,
+				"reason", "embedding provider likely changed")
+
+			if err := db.dropAndRecreateTable(ctx); err != nil {
+				return fmt.Errorf("failed to recreate table for dimension change: %w", err)
+			}
 		}
 	}
 
