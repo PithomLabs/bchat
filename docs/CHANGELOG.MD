@@ -60,7 +60,44 @@ All notable changes to the bchat AI Agent System are documented in this file.
   - Database table: `agent_qa_pairs` with difficulty, category, source tracking
   - DOCS_QA.MD design document
 
+- **Chunk-Based Q&A Generation** - Fixed token limit errors for large KB files
+  - Previous: Sent entire KB to LLM (failed on 485K token files, limit 131K)
+  - Now: Chunks KB first, samples 25 chunks, generates pairs in batches
+  - Each batch: 5 chunks × 10 pairs = fits within token limits
+  - Q&A pairs now link to `source_chunk_id` for better retrieval testing
+  - Added: `generateQAPairsFromChunks()`, `sampleChunksForQA()`, `generateQAPairsFromBatch()`
+
+- **RAG Search Explorer** - Visual debugging tool for vector search
+  - Interactive search interface in Agent Admin
+  - Real-time results with visual similarity score bars (color-coded)
+  - Shows matched keywords, content previews, latency
+  - Top-K selector (3, 5, 10 results)
+  - API endpoint: `POST /api/v1/agent/:slug/rag/search`
+  - Frontend: SearchExplorer panel with collapsible UI
+
+- **DOCS_QA_TESTING.MD** - Visual RAG testing proposal document
+  - Search Explorer specification
+  - Q&A Pair Debugger design (side-by-side comparison)
+  - Embedding Visualizer concept (2D t-SNE/UMAP plots)
+  - Implementation phases and API designs
+
 ### Fixed
+- **Q&A Test Audience Mismatch** - Fixed "Not Found" on all Q&A tests
+  - Bug: `testRetrievalForPair()` searched `"external"` audience
+  - Issue: Q&A pairs generated from `"internal"` KB, index built for `"internal"`
+  - Fix: Changed search audience to `"internal"` in handlers.go:4514
+  - Result: Q&A tests now correctly search the indexed content
+
+- **Q&A Pairs Frontend URL Mismatch** - Fixed 404 errors on Q&A endpoints
+  - Bug: Frontend called `/api/v1/admin/agent/:slug/qa-pairs/...`
+  - Issue: Backend routes registered at `/api/v1/agent/:slug/qa-pairs/...`
+  - Fix: Removed `/admin` from all Q&A API URLs in agentAdmin.ts
+
+- **Q&A Pairs Foreign Key Error** - Fixed table creation SQL error
+  - Bug: Migration referenced `agent_tenant` (singular)
+  - Issue: Actual table name is `agent_tenants` (plural)
+  - Fix: Updated migration to use correct table name
+
 - **BUG-002: Empty Vector Index Creation** - Fixed IVF-PQ index error on empty tables
   - Error: `Creating empty vector indices with train=False is not yet implemented`
   - Root cause: IVF-PQ indexes require training data
