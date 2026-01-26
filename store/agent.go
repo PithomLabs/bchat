@@ -7,13 +7,14 @@ import (
 
 // AgentTenant represents a tenant (business) using the agent system.
 type AgentTenant struct {
-	ID          int32
-	Slug        string
-	CompanyName string
-	Vertical    string
-	IsActive    bool
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID                int32
+	Slug              string
+	CompanyName       string
+	Vertical          string
+	IsActive          bool
+	ProcessingOptions string // JSON-encoded ProcessingOptions for Format for RAG
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // FindAgentTenant contains filters for finding tenants.

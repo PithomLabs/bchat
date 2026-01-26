@@ -59,7 +59,7 @@ func (d *DB) ListAgentTenants(ctx context.Context, find *store.FindAgentTenant) 
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, slug, company_name, vertical, is_active, created_at, updated_at
+		SELECT id, slug, company_name, vertical, is_active, processing_options, created_at, updated_at
 		FROM agent_tenants
 		WHERE %s
 		ORDER BY created_at DESC
@@ -74,12 +74,15 @@ func (d *DB) ListAgentTenants(ctx context.Context, find *store.FindAgentTenant) 
 	var tenants []*store.AgentTenant
 	for rows.Next() {
 		var t store.AgentTenant
-		var vertical sql.NullString
-		if err := rows.Scan(&t.ID, &t.Slug, &t.CompanyName, &vertical, &t.IsActive, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		var vertical, processingOptions sql.NullString
+		if err := rows.Scan(&t.ID, &t.Slug, &t.CompanyName, &vertical, &t.IsActive, &processingOptions, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if vertical.Valid {
 			t.Vertical = vertical.String
+		}
+		if processingOptions.Valid {
+			t.ProcessingOptions = processingOptions.String
 		}
 		tenants = append(tenants, &t)
 	}
@@ -89,11 +92,15 @@ func (d *DB) ListAgentTenants(ctx context.Context, find *store.FindAgentTenant) 
 func (d *DB) UpdateAgentTenant(ctx context.Context, tenant *store.AgentTenant) (*store.AgentTenant, error) {
 	stmt := `
 		UPDATE agent_tenants
-		SET company_name = ?, vertical = ?, is_active = ?, updated_at = ?
+		SET company_name = ?, vertical = ?, is_active = ?, processing_options = ?, updated_at = ?
 		WHERE id = ?
 	`
 	now := time.Now()
-	_, err := d.db.ExecContext(ctx, stmt, tenant.CompanyName, tenant.Vertical, tenant.IsActive, now, tenant.ID)
+	var processingOptions interface{} = nil
+	if tenant.ProcessingOptions != "" {
+		processingOptions = tenant.ProcessingOptions
+	}
+	_, err := d.db.ExecContext(ctx, stmt, tenant.CompanyName, tenant.Vertical, tenant.IsActive, processingOptions, now, tenant.ID)
 	if err != nil {
 		return nil, err
 	}

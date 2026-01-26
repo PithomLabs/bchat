@@ -177,6 +177,99 @@ export const PERMISSION_PRESETS = {
   tenant_admin: ["tenant:admin"],
 };
 
+// ============================================================================
+// FORMAT FOR RAG (Rule-based processing options)
+// ============================================================================
+
+export interface ProcessingOptions {
+  // Content Extraction
+  extract_faqs: boolean;
+  extract_services: boolean;
+  extract_exclusions: boolean;
+  extract_coverage: boolean;
+  extract_safety: boolean;
+
+  // Text Normalization
+  remove_whitespace: boolean;
+  strip_html: boolean;
+  fix_encoding: boolean;
+  remove_page_numbers: boolean;
+  remove_header_footer: boolean;
+
+  // Structure Splitting
+  split_h2: boolean;
+  split_h3: boolean;
+  split_paragraphs: boolean;
+  split_sentences: boolean;
+  preserve_lists: boolean;
+
+  // Chunking Controls
+  max_chunk_size: number;
+  min_chunk_size: number;
+  chunk_overlap: number;
+  merge_small_chunks: boolean;
+
+  // Metadata
+  generate_titles: boolean;
+  add_source_ref: boolean;
+  preserve_hierarchy: boolean;
+}
+
+export interface ProcessedChunk {
+  id: string;
+  title: string;
+  content: string;
+  tokens: number;
+}
+
+export interface ProcessingStats {
+  original_tokens: number;
+  processed_tokens: number;
+  chunks_created: number;
+  faqs_extracted: number;
+  services_extracted: number;
+}
+
+export interface FormatForRAGResponse {
+  content: string;
+  chunks: ProcessedChunk[];
+  stats: ProcessingStats;
+}
+
+export const DEFAULT_PROCESSING_OPTIONS: ProcessingOptions = {
+  // Content Extraction - off by default
+  extract_faqs: false,
+  extract_services: false,
+  extract_exclusions: false,
+  extract_coverage: false,
+  extract_safety: false,
+
+  // Text Normalization
+  remove_whitespace: true,
+  strip_html: false,
+  fix_encoding: false,
+  remove_page_numbers: false,
+  remove_header_footer: false,
+
+  // Structure Splitting
+  split_h2: true,
+  split_h3: true,
+  split_paragraphs: true,
+  split_sentences: false,
+  preserve_lists: true,
+
+  // Chunking Controls
+  max_chunk_size: 800,
+  min_chunk_size: 100,
+  chunk_overlap: 50,
+  merge_small_chunks: true,
+
+  // Metadata
+  generate_titles: true,
+  add_source_ref: false,
+  preserve_hierarchy: true,
+};
+
 export interface UserTenantAccess {
   tenant: AgentTenant;
   permissions: string[];
@@ -568,6 +661,72 @@ const agentAdminStore = (() => {
     }
   };
 
+  const formatForRAG = async (
+    slug: string,
+    fileType: "kb" | "policy",
+    options: ProcessingOptions,
+    content?: string
+  ): Promise<{ result?: FormatForRAGResponse; error?: string }> => {
+    state.setPartial({ isSaving: true, error: null });
+    try {
+      const response = await axios.post<FormatForRAGResponse>(
+        `/api/v1/agent/${slug}/format-for-rag`,
+        {
+          content: content || "",
+          file_type: fileType,
+          options,
+        }
+      );
+      runInAction(() => {
+        state.isSaving = false;
+      });
+      return { result: response.data };
+    } catch (error: any) {
+      runInAction(() => {
+        state.isSaving = false;
+        state.error = error.response?.data?.message || "Failed to format content";
+      });
+      return { error: error.response?.data?.message || "Failed to format content" };
+    }
+  };
+
+  const saveProcessingOptions = async (
+    slug: string,
+    options: ProcessingOptions
+  ): Promise<{ success: boolean; error?: string }> => {
+    state.setPartial({ isSaving: true, error: null });
+    try {
+      await axios.post(`/api/v1/agent/${slug}/processing-options`, options);
+      runInAction(() => {
+        state.isSaving = false;
+      });
+      return { success: true };
+    } catch (error: any) {
+      runInAction(() => {
+        state.isSaving = false;
+        state.error = error.response?.data?.message || "Failed to save processing options";
+      });
+      return { success: false, error: error.response?.data?.message || "Failed to save processing options" };
+    }
+  };
+
+  const loadProcessingOptions = async (
+    slug: string
+  ): Promise<{ options: ProcessingOptions; hasCustom: boolean; error?: string }> => {
+    try {
+      const response = await axios.get<{ options: ProcessingOptions; hasCustom: boolean }>(
+        `/api/v1/agent/${slug}/processing-options`
+      );
+      return { options: response.data.options, hasCustom: response.data.hasCustom };
+    } catch (error: any) {
+      return {
+        options: DEFAULT_PROCESSING_OPTIONS,
+        hasCustom: false,
+        error: error.response?.data?.message || "Failed to load processing options",
+      };
+    }
+  };
+
   const deleteTenant = async (slug: string): Promise<boolean> => {
     state.setPartial({ isSaving: true, error: null });
 
@@ -881,6 +1040,11 @@ const agentAdminStore = (() => {
     // Auto-generate annotated content
     generateKB,
     generatePolicy,
+    // Format for RAG (rule-based processing)
+    formatForRAG,
+    // Processing options persistence
+    saveProcessingOptions,
+    loadProcessingOptions,
     // File content preview
     fetchFileContent,
   };

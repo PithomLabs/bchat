@@ -3810,3 +3810,191 @@ func (h *Handler) HandleGeneratePolicy(c echo.Context) error {
 		"content": annotatedPolicy,
 	})
 }
+
+// FormatForRAGRequest is the request body for format-for-rag endpoint.
+type FormatForRAGRequest struct {
+	Content  string            `json:"content"`
+	FileType string            `json:"file_type"` // "kb" or "policy"
+	Options  ProcessingOptions `json:"options"`
+}
+
+// FormatForRAGResponse is the response for format-for-rag endpoint.
+type FormatForRAGResponse struct {
+	Content string           `json:"content"`
+	Chunks  []ProcessedChunk `json:"chunks"`
+	Stats   ProcessingStats  `json:"stats"`
+}
+
+// HandleFormatForRAG applies rule-based processing to content without LLM.
+// POST /api/v1/agent/:slug/format-for-rag
+// Requires: ADMIN role
+func (h *Handler) HandleFormatForRAG(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	// Check admin role
+	if !h.isAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
+	}
+
+	// Get tenant (verify it exists)
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	// Parse request body
+	var req FormatForRAGRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body: "+err.Error())
+	}
+
+	// Validate request
+	if req.Content == "" {
+		// If no content provided, try to load from database
+		audience := "external"
+		fileType := req.FileType
+		if fileType == "" {
+			fileType = "kb"
+		}
+		latestOnly := true
+		sourceFile, err := h.store.GetAgentSourceFile(ctx, &store.FindAgentSourceFile{
+			TenantID:     &tenant.ID,
+			AudienceType: &audience,
+			FileType:     &fileType,
+			LatestOnly:   latestOnly,
+		})
+		if err != nil || sourceFile == nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "No content provided and no "+fileType+" file found in database")
+		}
+		req.Content = sourceFile.Content
+	}
+
+	if req.FileType == "" {
+		req.FileType = "kb"
+	}
+
+	if req.FileType != "kb" && req.FileType != "policy" {
+		return echo.NewHTTPError(http.StatusBadRequest, "file_type must be 'kb' or 'policy'")
+	}
+
+	// Apply defaults for zero values in options
+	opts := req.Options
+	if opts.MaxChunkSize == 0 {
+		opts.MaxChunkSize = 800
+	}
+	if opts.MinChunkSize == 0 {
+		opts.MinChunkSize = 100
+	}
+
+	slog.Info("Processing content for RAG",
+		"tenant", slug,
+		"file_type", req.FileType,
+		"content_length", len(req.Content),
+		"options", opts,
+	)
+
+	// Create processor and process content
+	processor := NewContentProcessor(opts)
+	result := processor.Process(req.Content, req.FileType)
+
+	slog.Info("Content processed for RAG",
+		"tenant", slug,
+		"original_tokens", result.Stats.OriginalTokens,
+		"processed_tokens", result.Stats.ProcessedTokens,
+		"chunks_created", result.Stats.ChunksCreated,
+		"faqs_extracted", result.Stats.FAQsExtracted,
+	)
+
+	return c.JSON(http.StatusOK, FormatForRAGResponse{
+		Content: result.Content,
+		Chunks:  result.Chunks,
+		Stats:   result.Stats,
+	})
+}
+
+// HandleSaveProcessingOptions saves processing options as defaults for a tenant.
+// POST /api/v1/agent/:slug/processing-options
+// Requires: ADMIN role
+func (h *Handler) HandleSaveProcessingOptions(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	// Check admin role
+	if !h.isAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
+	}
+
+	// Get tenant
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	// Parse request body (ProcessingOptions)
+	var opts ProcessingOptions
+	if err := c.Bind(&opts); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body: "+err.Error())
+	}
+
+	// Serialize options to JSON
+	optsJSON, err := serializeProcessingOptions(opts)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to serialize options: "+err.Error())
+	}
+
+	// Update tenant with processing options
+	tenant.ProcessingOptions = optsJSON
+	if _, err := h.store.UpdateAgentTenant(ctx, tenant); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to save processing options: "+err.Error())
+	}
+
+	slog.Info("Saved processing options for tenant",
+		"tenant", slug,
+		"options", optsJSON,
+	)
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"message": "Processing options saved successfully",
+		"options": opts,
+	})
+}
+
+// HandleGetProcessingOptions retrieves saved processing options for a tenant.
+// GET /api/v1/agent/:slug/processing-options
+// Requires: ADMIN role
+func (h *Handler) HandleGetProcessingOptions(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	// Check admin role
+	if !h.isAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
+	}
+
+	// Get tenant
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	// Parse saved options or return defaults
+	var opts ProcessingOptions
+	if tenant.ProcessingOptions != "" {
+		opts, err = deserializeProcessingOptions(tenant.ProcessingOptions)
+		if err != nil {
+			slog.Warn("Failed to deserialize processing options, using defaults",
+				"tenant", slug,
+				"error", err,
+			)
+			opts = DefaultProcessingOptions()
+		}
+	} else {
+		opts = DefaultProcessingOptions()
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"options":  opts,
+		"hasCustom": tenant.ProcessingOptions != "",
+	})
+}

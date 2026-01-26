@@ -1,13 +1,13 @@
-import { Button, Chip, DialogActions, DialogContent, DialogTitle, Divider, FormControl, FormHelperText, FormLabel, Input, Modal, ModalClose, ModalDialog, Option, Select, Switch, Textarea } from "@mui/joy";
-import { ArrowLeftIcon, BuildingIcon, CheckIcon, CopyIcon, EditIcon, EyeIcon, FileTextIcon, HistoryIcon, PlusIcon, RefreshCwIcon, SettingsIcon, SparklesIcon, Trash2Icon, UploadIcon, XIcon } from "lucide-react";
+import { Button, Checkbox, Chip, DialogActions, DialogContent, DialogTitle, Divider, FormControl, FormHelperText, FormLabel, Input, Modal, ModalClose, ModalDialog, Option, Select, Slider, Switch, Textarea } from "@mui/joy";
+import { ArrowLeftIcon, BuildingIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, EditIcon, EyeIcon, FileTextIcon, HistoryIcon, PlusIcon, RefreshCwIcon, SettingsIcon, SparklesIcon, Trash2Icon, UploadIcon, XIcon, ZapIcon } from "lucide-react";
 import { observer } from "mobx-react-lite";
 import { ChangeEvent, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import MobileHeader from "@/components/MobileHeader";
 import useResponsiveWidth from "@/hooks/useResponsiveWidth";
 import { agentAdminStore, userStore } from "@/store/v2";
-import type { AgentTenant, CreateTenantRequest, LLMConfig, SetLLMConfigRequest, UserPermission, GrantPermissionRequest } from "@/store/v2/agentAdmin";
-import { LLM_MODEL_OPTIONS, PERMISSION_PRESETS } from "@/store/v2/agentAdmin";
+import type { AgentTenant, CreateTenantRequest, LLMConfig, SetLLMConfigRequest, UserPermission, GrantPermissionRequest, ProcessingOptions, FormatForRAGResponse } from "@/store/v2/agentAdmin";
+import { LLM_MODEL_OPTIONS, PERMISSION_PRESETS, DEFAULT_PROCESSING_OPTIONS } from "@/store/v2/agentAdmin";
 import { cn } from "@/utils";
 import { useTranslate } from "@/utils/i18n";
 import { User_Role } from "@/types/proto/api/v1/user_service";
@@ -20,8 +20,14 @@ const AgentAdmin = observer(() => {
   const [showVersionsModal, setShowVersionsModal] = useState<{ slug: string; audienceType: string; fileType: string } | null>(null);
   const [isRebuilding, setIsRebuilding] = useState(false);
   // Auto-generate annotated content state
-  const [showGeneratedContent, setShowGeneratedContent] = useState<{ type: "kb" | "policy"; content: string } | null>(null);
-  const [isGenerating, setIsGenerating] = useState<"kb" | "policy" | null>(null);
+  const [showGeneratedContent, setShowGeneratedContent] = useState<{ type: "kb" | "policy" | "rag"; content: string; stats?: FormatForRAGResponse["stats"] } | null>(null);
+  const [isGenerating, setIsGenerating] = useState<"kb" | "policy" | "rag" | null>(null);
+  // Processing options for Format for RAG
+  const [processingOptions, setProcessingOptions] = useState<ProcessingOptions>(DEFAULT_PROCESSING_OPTIONS);
+  const [showProcessingOptions, setShowProcessingOptions] = useState(false);
+  const [formatFileType, setFormatFileType] = useState<"kb" | "policy">("kb");
+  const [hasCustomOptions, setHasCustomOptions] = useState(false);
+  const [isSavingOptions, setIsSavingOptions] = useState(false);
 
   const { tenants, selectedTenant, isLoading, isSaving, error, fileVersions, llmConfig, tenantPermissions, myPermissions, script, isLoadingScript } = agentAdminStore.state;
 
@@ -62,6 +68,15 @@ const AgentAdmin = observer(() => {
       // Fetch script if user can read
       if (isAdmin || agentAdminStore.hasPermission("tenant:read")) {
         agentAdminStore.fetchScript(selectedTenant.tenant.slug);
+      }
+      // Load saved processing options for this tenant
+      if (isAdmin) {
+        agentAdminStore.loadProcessingOptions(selectedTenant.tenant.slug).then((result) => {
+          if (!result.error) {
+            setProcessingOptions(result.options);
+            setHasCustomOptions(result.hasCustom);
+          }
+        });
       }
     }
   }, [selectedTenant?.tenant.slug, selectedTenant?.tenant.id, isAdmin]);
@@ -150,6 +165,54 @@ const AgentAdmin = observer(() => {
     } else {
       toast.error(result.error || "Failed to generate POLICY.MD");
     }
+  };
+
+  // Format content for RAG (rule-based, no LLM)
+  const handleFormatForRAG = async () => {
+    if (!selectedTenant) return;
+    setIsGenerating("rag");
+    const result = await agentAdminStore.formatForRAG(
+      selectedTenant.tenant.slug,
+      formatFileType,
+      processingOptions
+    );
+    setIsGenerating(null);
+    if (result.result) {
+      setShowGeneratedContent({
+        type: "rag",
+        content: result.result.content,
+        stats: result.result.stats,
+      });
+    } else {
+      toast.error(result.error || "Failed to format content");
+    }
+  };
+
+  // Update a processing option
+  const updateProcessingOption = <K extends keyof ProcessingOptions>(key: K, value: ProcessingOptions[K]) => {
+    setProcessingOptions((prev) => ({ ...prev, [key]: value }));
+  };
+
+  // Save processing options as tenant defaults
+  const handleSaveProcessingOptions = async () => {
+    if (!selectedTenant) return;
+    setIsSavingOptions(true);
+    const result = await agentAdminStore.saveProcessingOptions(
+      selectedTenant.tenant.slug,
+      processingOptions
+    );
+    setIsSavingOptions(false);
+    if (result.success) {
+      setHasCustomOptions(true);
+      toast.success(t("agent-admin.processing-options-saved"));
+    } else {
+      toast.error(result.error || t("agent-admin.processing-options-save-failed"));
+    }
+  };
+
+  // Reset processing options to defaults
+  const handleResetProcessingOptions = () => {
+    setProcessingOptions(DEFAULT_PROCESSING_OPTIONS);
   };
 
   // Copy generated content to clipboard
@@ -325,7 +388,7 @@ const AgentAdmin = observer(() => {
               canRestore={canRestore}
             />
 
-            {/* Auto-Generate Annotated Content - Admin only */}
+            {/* Auto-Generate & Format Content - Admin only */}
             {isAdmin && (
               <div className="bg-purple-50 dark:bg-purple-900/20 rounded-xl border border-purple-200 dark:border-purple-800 p-4">
                 <div className="flex flex-col gap-3">
@@ -336,7 +399,284 @@ const AgentAdmin = observer(() => {
                     </h3>
                     <p className="text-sm text-purple-600 dark:text-purple-400">{t("agent-admin.auto-generate-desc")}</p>
                   </div>
+
+                  {/* Processing Options Toggle */}
+                  <button
+                    onClick={() => setShowProcessingOptions(!showProcessingOptions)}
+                    className="flex items-center gap-2 text-sm text-purple-600 dark:text-purple-400 hover:text-purple-800 dark:hover:text-purple-200"
+                  >
+                    {showProcessingOptions ? <ChevronUpIcon className="w-4 h-4" /> : <ChevronDownIcon className="w-4 h-4" />}
+                    {t("agent-admin.processing-options")}
+                  </button>
+
+                  {/* Processing Options Panel */}
+                  {showProcessingOptions && (
+                    <div className="bg-white dark:bg-zinc-900 rounded-lg border border-purple-200 dark:border-purple-700 p-4 space-y-4">
+                      {/* File Type Selection */}
+                      <div className="flex items-center gap-4 pb-3 border-b border-purple-100 dark:border-purple-800">
+                        <span className="text-sm font-medium text-purple-700 dark:text-purple-300">Process:</span>
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            variant={formatFileType === "kb" ? "solid" : "outlined"}
+                            color="primary"
+                            onClick={() => setFormatFileType("kb")}
+                          >
+                            KB.MD
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={formatFileType === "policy" ? "solid" : "outlined"}
+                            color="primary"
+                            onClick={() => setFormatFileType("policy")}
+                          >
+                            POLICY.MD
+                          </Button>
+                        </div>
+                      </div>
+
+                      {/* Content Extraction */}
+                      <div>
+                        <h4 className="text-xs font-semibold text-purple-700 dark:text-purple-300 mb-2 uppercase tracking-wide">
+                          {t("agent-admin.content-extraction")}
+                        </h4>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                          <Checkbox
+                            label={t("agent-admin.extract-faqs")}
+                            checked={processingOptions.extract_faqs}
+                            onChange={(e) => updateProcessingOption("extract_faqs", e.target.checked)}
+                            size="sm"
+                          />
+                          <Checkbox
+                            label={t("agent-admin.extract-services")}
+                            checked={processingOptions.extract_services}
+                            onChange={(e) => updateProcessingOption("extract_services", e.target.checked)}
+                            size="sm"
+                          />
+                          <Checkbox
+                            label={t("agent-admin.extract-exclusions")}
+                            checked={processingOptions.extract_exclusions}
+                            onChange={(e) => updateProcessingOption("extract_exclusions", e.target.checked)}
+                            size="sm"
+                          />
+                          <Checkbox
+                            label={t("agent-admin.extract-coverage")}
+                            checked={processingOptions.extract_coverage}
+                            onChange={(e) => updateProcessingOption("extract_coverage", e.target.checked)}
+                            size="sm"
+                          />
+                          <Checkbox
+                            label={t("agent-admin.extract-safety")}
+                            checked={processingOptions.extract_safety}
+                            onChange={(e) => updateProcessingOption("extract_safety", e.target.checked)}
+                            size="sm"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Text Normalization */}
+                      <div>
+                        <h4 className="text-xs font-semibold text-purple-700 dark:text-purple-300 mb-2 uppercase tracking-wide">
+                          {t("agent-admin.text-normalization")}
+                        </h4>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                          <Checkbox
+                            label={t("agent-admin.remove-whitespace")}
+                            checked={processingOptions.remove_whitespace}
+                            onChange={(e) => updateProcessingOption("remove_whitespace", e.target.checked)}
+                            size="sm"
+                          />
+                          <Checkbox
+                            label={t("agent-admin.strip-html")}
+                            checked={processingOptions.strip_html}
+                            onChange={(e) => updateProcessingOption("strip_html", e.target.checked)}
+                            size="sm"
+                          />
+                          <Checkbox
+                            label={t("agent-admin.fix-encoding")}
+                            checked={processingOptions.fix_encoding}
+                            onChange={(e) => updateProcessingOption("fix_encoding", e.target.checked)}
+                            size="sm"
+                          />
+                          <Checkbox
+                            label={t("agent-admin.remove-page-numbers")}
+                            checked={processingOptions.remove_page_numbers}
+                            onChange={(e) => updateProcessingOption("remove_page_numbers", e.target.checked)}
+                            size="sm"
+                          />
+                          <Checkbox
+                            label={t("agent-admin.remove-headers-footers")}
+                            checked={processingOptions.remove_header_footer}
+                            onChange={(e) => updateProcessingOption("remove_header_footer", e.target.checked)}
+                            size="sm"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Structure Splitting */}
+                      <div>
+                        <h4 className="text-xs font-semibold text-purple-700 dark:text-purple-300 mb-2 uppercase tracking-wide">
+                          {t("agent-admin.structure-splitting")}
+                        </h4>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                          <Checkbox
+                            label={t("agent-admin.split-h2")}
+                            checked={processingOptions.split_h2}
+                            onChange={(e) => updateProcessingOption("split_h2", e.target.checked)}
+                            size="sm"
+                          />
+                          <Checkbox
+                            label={t("agent-admin.split-h3")}
+                            checked={processingOptions.split_h3}
+                            onChange={(e) => updateProcessingOption("split_h3", e.target.checked)}
+                            size="sm"
+                          />
+                          <Checkbox
+                            label={t("agent-admin.split-paragraphs")}
+                            checked={processingOptions.split_paragraphs}
+                            onChange={(e) => updateProcessingOption("split_paragraphs", e.target.checked)}
+                            size="sm"
+                          />
+                          <Checkbox
+                            label={t("agent-admin.split-sentences")}
+                            checked={processingOptions.split_sentences}
+                            onChange={(e) => updateProcessingOption("split_sentences", e.target.checked)}
+                            size="sm"
+                          />
+                          <Checkbox
+                            label={t("agent-admin.preserve-lists")}
+                            checked={processingOptions.preserve_lists}
+                            onChange={(e) => updateProcessingOption("preserve_lists", e.target.checked)}
+                            size="sm"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Chunking Controls */}
+                      <div>
+                        <h4 className="text-xs font-semibold text-purple-700 dark:text-purple-300 mb-2 uppercase tracking-wide">
+                          {t("agent-admin.chunking-controls")}
+                        </h4>
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-4">
+                            <span className="text-xs text-gray-600 dark:text-gray-400 w-24">{t("agent-admin.max-chunk-size")}</span>
+                            <Slider
+                              value={processingOptions.max_chunk_size}
+                              onChange={(_, value) => updateProcessingOption("max_chunk_size", value as number)}
+                              min={400}
+                              max={1200}
+                              step={50}
+                              valueLabelDisplay="auto"
+                              sx={{ flex: 1 }}
+                            />
+                            <span className="text-xs text-gray-500 w-16">{processingOptions.max_chunk_size} {t("agent-admin.tokens")}</span>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <span className="text-xs text-gray-600 dark:text-gray-400 w-24">{t("agent-admin.min-chunk-size")}</span>
+                            <Slider
+                              value={processingOptions.min_chunk_size}
+                              onChange={(_, value) => updateProcessingOption("min_chunk_size", value as number)}
+                              min={50}
+                              max={200}
+                              step={10}
+                              valueLabelDisplay="auto"
+                              sx={{ flex: 1 }}
+                            />
+                            <span className="text-xs text-gray-500 w-16">{processingOptions.min_chunk_size} {t("agent-admin.tokens")}</span>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <span className="text-xs text-gray-600 dark:text-gray-400 w-24">{t("agent-admin.chunk-overlap")}</span>
+                            <Slider
+                              value={processingOptions.chunk_overlap}
+                              onChange={(_, value) => updateProcessingOption("chunk_overlap", value as number)}
+                              min={0}
+                              max={100}
+                              step={10}
+                              valueLabelDisplay="auto"
+                              sx={{ flex: 1 }}
+                            />
+                            <span className="text-xs text-gray-500 w-16">{processingOptions.chunk_overlap} {t("agent-admin.tokens")}</span>
+                          </div>
+                          <Checkbox
+                            label={t("agent-admin.merge-small-chunks")}
+                            checked={processingOptions.merge_small_chunks}
+                            onChange={(e) => updateProcessingOption("merge_small_chunks", e.target.checked)}
+                            size="sm"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Metadata */}
+                      <div>
+                        <h4 className="text-xs font-semibold text-purple-700 dark:text-purple-300 mb-2 uppercase tracking-wide">
+                          {t("agent-admin.metadata-options")}
+                        </h4>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                          <Checkbox
+                            label={t("agent-admin.generate-titles")}
+                            checked={processingOptions.generate_titles}
+                            onChange={(e) => updateProcessingOption("generate_titles", e.target.checked)}
+                            size="sm"
+                          />
+                          <Checkbox
+                            label={t("agent-admin.add-source-ref")}
+                            checked={processingOptions.add_source_ref}
+                            onChange={(e) => updateProcessingOption("add_source_ref", e.target.checked)}
+                            size="sm"
+                          />
+                          <Checkbox
+                            label={t("agent-admin.preserve-hierarchy")}
+                            checked={processingOptions.preserve_hierarchy}
+                            onChange={(e) => updateProcessingOption("preserve_hierarchy", e.target.checked)}
+                            size="sm"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Save/Reset Options */}
+                      <div className="flex items-center justify-between pt-3 border-t border-purple-100 dark:border-purple-800">
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            variant="outlined"
+                            color="primary"
+                            onClick={handleSaveProcessingOptions}
+                            loading={isSavingOptions}
+                            disabled={isSavingOptions}
+                          >
+                            {t("agent-admin.save-as-default")}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="plain"
+                            color="neutral"
+                            onClick={handleResetProcessingOptions}
+                            disabled={isSavingOptions}
+                          >
+                            {t("agent-admin.reset-to-defaults")}
+                          </Button>
+                        </div>
+                        {hasCustomOptions && (
+                          <Chip size="sm" variant="soft" color="success">
+                            {t("agent-admin.custom-options-saved")}
+                          </Chip>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Action Buttons */}
                   <div className="flex gap-2 flex-wrap">
+                    <Button
+                      variant="solid"
+                      color="success"
+                      onClick={handleFormatForRAG}
+                      loading={isGenerating === "rag"}
+                      disabled={isGenerating !== null}
+                      startDecorator={<ZapIcon className="w-4 h-4" />}
+                    >
+                      {isGenerating === "rag" ? t("agent-admin.formatting") : t("agent-admin.format-for-rag")}
+                    </Button>
                     <Button
                       variant="outlined"
                       color="primary"
@@ -358,6 +698,9 @@ const AgentAdmin = observer(() => {
                       {isGenerating === "policy" ? t("agent-admin.generating") : t("agent-admin.generate-policy")}
                     </Button>
                   </div>
+                  <p className="text-xs text-purple-500 dark:text-purple-400">
+                    {t("agent-admin.format-for-rag-desc")}
+                  </p>
                 </div>
               </div>
             )}
@@ -463,10 +806,42 @@ const AgentAdmin = observer(() => {
             <DialogTitle>
               {showGeneratedContent?.type === "kb"
                 ? t("agent-admin.generated-kb-title")
-                : t("agent-admin.generated-policy-title")}
+                : showGeneratedContent?.type === "policy"
+                  ? t("agent-admin.generated-policy-title")
+                  : t("agent-admin.formatted-content-title")}
             </DialogTitle>
             <Divider />
             <DialogContent sx={{ overflow: "auto" }}>
+              {/* Stats for RAG formatting */}
+              {showGeneratedContent?.type === "rag" && showGeneratedContent.stats && (
+                <div className="mb-4 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-700">
+                  <h4 className="text-sm font-medium text-green-700 dark:text-green-300 mb-2">
+                    {t("agent-admin.processing-stats")}
+                  </h4>
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm">
+                    <div>
+                      <span className="text-gray-500 dark:text-gray-400">{t("agent-admin.original-tokens")}:</span>
+                      <span className="ml-1 font-medium">{showGeneratedContent.stats.original_tokens}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500 dark:text-gray-400">{t("agent-admin.processed-tokens")}:</span>
+                      <span className="ml-1 font-medium">{showGeneratedContent.stats.processed_tokens}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500 dark:text-gray-400">{t("agent-admin.chunks-created")}:</span>
+                      <span className="ml-1 font-medium">{showGeneratedContent.stats.chunks_created}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500 dark:text-gray-400">{t("agent-admin.faqs-found")}:</span>
+                      <span className="ml-1 font-medium">{showGeneratedContent.stats.faqs_extracted}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500 dark:text-gray-400">{t("agent-admin.services-found")}:</span>
+                      <span className="ml-1 font-medium">{showGeneratedContent.stats.services_extracted}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
               <Textarea
                 value={showGeneratedContent?.content || ""}
                 readOnly

@@ -1,9 +1,11 @@
 # Environment Variables Reference
 
 **Status:** Active
-**Date:** 2026-01-23
+**Date:** 2026-01-26
 **Related Documents:**
 - [DOCS_RAG_PIPELINE.MD](./DOCS_RAG_PIPELINE.MD) - RAG pipeline configuration
+- [DOCS_CYBERTRON.MD](./DOCS_CYBERTRON.MD) - Cybertron embedding implementation
+- [DOCS_TASKFILE.MD](./DOCS_TASKFILE.MD) - Build and run commands
 - [DOCS_DOCKERFILE.MD](./DOCS_DOCKERFILE.MD) - Docker deployment
 
 ---
@@ -19,7 +21,7 @@ This document provides a comprehensive reference for all environment variables u
 | Category | Key Variables |
 |----------|--------------|
 | **Core** | `OPENROUTER_API_KEY`, `LLM_MODEL` |
-| **Embedding** | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL` |
+| **Embedding** | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `CYBERTRON_MODELS_DIR` |
 | **RAG** | `RAG_PIPELINE_ENABLED`, `REINDEX_RAG`, `HYBRID_SEARCH_ENABLED` |
 | **Storage** | `LANCEDB_STORAGE_PROVIDER`, `LANCEDB_LOCAL_PATH` |
 
@@ -173,20 +175,21 @@ Selects the embedding service provider.
 | Property | Value |
 |----------|-------|
 | Type | String |
-| Default | `local` |
-| Options | `mock`, `local`, `openrouter` |
+| Default | `cybertron` |
+| Options | `cybertron`, `mock`, `local`, `openrouter` |
 
 ```bash
-export EMBEDDING_PROVIDER=openrouter
+export EMBEDDING_PROVIDER=cybertron
 ```
 
 **Provider Comparison:**
 
 | Provider | Dimensions | Cost | Use Case |
 |----------|------------|------|----------|
-| `mock` | 384 | Free | Testing pipeline flow |
-| `local` | 384 | Free | Development with real embeddings |
-| `openrouter` | 1536 | ~$0.02/1M tokens | Production |
+| `cybertron` | 384/768 | Free | **Recommended** - Native Go, no dependencies |
+| `mock` | 384 | Free | Testing pipeline flow (no semantic accuracy) |
+| `local` | 384 | Free | Development with Python embedding server |
+| `openrouter` | 1536 | ~$0.02/1M tokens | Production (API-based) |
 
 ---
 
@@ -203,22 +206,47 @@ Model name for generating embeddings.
 
 | Provider | Default Model | Dimensions |
 |----------|---------------|------------|
+| `cybertron` | `sentence-transformers/all-MiniLM-L6-v2` | 384 |
 | `openrouter` | `openai/text-embedding-3-small` | 1536 |
 | `local` | `all-MiniLM-L6-v2` | 384 |
 | `mock` | N/A (random vectors) | 384 |
 
 ```bash
-# For OpenRouter (production)
+# For Cybertron (native Go, recommended)
+export EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+
+# For OpenRouter (production API)
 export EMBEDDING_MODEL=openai/text-embedding-3-small
 
-# For local sentence-transformers
+# For local sentence-transformers Python server
 export EMBEDDING_MODEL=all-MiniLM-L6-v2
 ```
+
+**Available Cybertron Models (Native Go):**
+- `sentence-transformers/all-MiniLM-L6-v2` - 384 dimensions (default, fast)
+- `sentence-transformers/all-MiniLM-L12-v2` - 384 dimensions (better quality)
+- `sentence-transformers/all-mpnet-base-v2` - 768 dimensions (best quality, slower)
+- `sentence-transformers/paraphrase-MiniLM-L6-v2` - 384 dimensions
 
 **Available OpenRouter Embedding Models:**
 - `openai/text-embedding-3-small` - 1536 dimensions (default, recommended)
 - `openai/text-embedding-3-large` - 3072 dimensions (higher quality)
 - `openai/text-embedding-ada-002` - 1536 dimensions (legacy)
+
+### CYBERTRON_MODELS_DIR
+
+Directory for storing downloaded Cybertron models.
+
+| Property | Value |
+|----------|-------|
+| Type | String |
+| Default | `~/.cybertron/models` |
+
+```bash
+export CYBERTRON_MODELS_DIR=/opt/models/cybertron
+```
+
+Models are downloaded automatically on first use (~90-420MB per model).
 
 ---
 
@@ -498,9 +526,45 @@ export AWS_SECRET_ACCESS_KEY=tsec_xxxxxxxxxxxxx
 
 ## Configuration Presets
 
-### Development (Fastest)
+### Development with Cybertron (Recommended)
 
-No external dependencies, no rebuild required.
+Native Go embeddings, no external dependencies, semantically accurate.
+
+```bash
+export OPENROUTER_API_KEY=sk-or-v1-your-key
+export LLM_MODEL=openai/gpt-4o-mini
+export RAG_PIPELINE_ENABLED=true
+export LANCEDB_STORAGE_PROVIDER=local
+export EMBEDDING_PROVIDER=cybertron
+export EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+```
+
+Or simply run:
+```bash
+task run:rag:cybertron
+```
+
+### Development with Cybertron (High Quality)
+
+Better semantic quality, slower inference.
+
+```bash
+export OPENROUTER_API_KEY=sk-or-v1-your-key
+export LLM_MODEL=openai/gpt-4o-mini
+export RAG_PIPELINE_ENABLED=true
+export LANCEDB_STORAGE_PROVIDER=local
+export EMBEDDING_PROVIDER=cybertron
+export EMBEDDING_MODEL=sentence-transformers/all-mpnet-base-v2
+```
+
+Or simply run:
+```bash
+task run:rag:cybertron:quality
+```
+
+### Development (Mock - Pipeline Testing Only)
+
+No external dependencies, but NO semantic accuracy.
 
 ```bash
 export OPENROUTER_API_KEY=sk-or-v1-your-key
@@ -510,9 +574,9 @@ export LANCEDB_STORAGE_PROVIDER=memory
 export EMBEDDING_PROVIDER=mock
 ```
 
-### Development (Quality Embeddings)
+### Development (Python Embedding Server)
 
-Real semantic search, requires local embedding server.
+Real semantic search, requires local Python embedding server.
 
 ```bash
 export OPENROUTER_API_KEY=sk-or-v1-your-key
@@ -575,14 +639,23 @@ RAG_PIPELINE_ENABLED=true
 LANCEDB_STORAGE_PROVIDER=local
 LANCEDB_LOCAL_PATH=build/data/lancedb
 
-# Embeddings
-EMBEDDING_PROVIDER=openrouter
-EMBEDDING_MODEL=openai/text-embedding-3-small
+# Embeddings (Cybertron recommended for development)
+EMBEDDING_PROVIDER=cybertron
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+
+# For production with API budget, use OpenRouter instead:
+# EMBEDDING_PROVIDER=openrouter
+# EMBEDDING_MODEL=openai/text-embedding-3-small
 ```
 
 Load with:
 ```bash
 source .env && ./build/memos --mode dev
+```
+
+Or use Taskfile commands which set env vars automatically:
+```bash
+task run:rag:cybertron  # Recommended
 ```
 
 ---
@@ -629,5 +702,5 @@ task build:backend:rag
 
 ---
 
-*Document Version: 1.1*
-*Updated: 2026-01-23* - Updated LLM_VERIFIER_ENABLED description after Phase 5B
+*Document Version: 1.2*
+*Updated: 2026-01-26* - Added Cybertron as default embedding provider, updated presets

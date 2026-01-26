@@ -6,9 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
+
+	"github.com/nlpodyssey/cybertron/pkg/tasks"
+	"github.com/nlpodyssey/cybertron/pkg/tasks/textencoding"
 )
 
 // EmbeddingService defines the interface for generating text embeddings.
@@ -23,17 +28,18 @@ type EmbeddingService interface {
 
 // EmbeddingConfig holds configuration for embedding services.
 type EmbeddingConfig struct {
-	Provider         string // "local" or "openrouter"
+	Provider         string // "cybertron", "local", "openrouter", or "mock"
 	Model            string // Model name/path
 	Dimension        int    // Vector dimension (384 for MiniLM, 1536 for OpenAI)
 	OpenRouterAPIKey string // For OpenRouter provider
 	LocalEndpoint    string // For local provider (default: http://localhost:8001/embed)
+	CybertronDir     string // For cybertron provider - models directory
 	BatchSize        int    // Max texts per batch (default: 32)
 }
 
 // NewEmbeddingConfigFromEnv creates an EmbeddingConfig from environment variables.
 func NewEmbeddingConfigFromEnv() *EmbeddingConfig {
-	provider := getEnvOrDefault("EMBEDDING_PROVIDER", "local")
+	provider := getEnvOrDefault("EMBEDDING_PROVIDER", "cybertron")
 	var dimension int
 	var model string
 
@@ -41,6 +47,9 @@ func NewEmbeddingConfigFromEnv() *EmbeddingConfig {
 	case "openrouter":
 		model = getEnvOrDefault("EMBEDDING_MODEL", "openai/text-embedding-3-small")
 		dimension = 1536 // Default for text-embedding-3-small
+	case "cybertron":
+		model = getEnvOrDefault("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+		dimension = getCybertronDimension(model)
 	default:
 		model = getEnvOrDefault("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 		dimension = 384 // Default for MiniLM
@@ -52,7 +61,22 @@ func NewEmbeddingConfigFromEnv() *EmbeddingConfig {
 		Dimension:        dimension,
 		OpenRouterAPIKey: os.Getenv("OPENROUTER_API_KEY"),
 		LocalEndpoint:    getEnvOrDefault("EMBEDDING_LOCAL_ENDPOINT", "http://localhost:8001/embed"),
+		CybertronDir:     getEnvOrDefault("CYBERTRON_MODELS_DIR", ""),
 		BatchSize:        32,
+	}
+}
+
+// getCybertronDimension returns the embedding dimension for known Cybertron models.
+func getCybertronDimension(modelName string) int {
+	switch modelName {
+	case "sentence-transformers/all-mpnet-base-v2":
+		return 768
+	case "sentence-transformers/all-MiniLM-L6-v2",
+		"sentence-transformers/all-MiniLM-L12-v2",
+		"sentence-transformers/paraphrase-MiniLM-L6-v2":
+		return 384
+	default:
+		return 384 // Default for unknown models
 	}
 }
 
@@ -65,8 +89,11 @@ func NewEmbeddingService(config *EmbeddingConfig) (EmbeddingService, error) {
 		return NewMockEmbedding(config), nil
 	case "local":
 		return NewLocalEmbedding(config)
+	case "cybertron":
+		return NewCybertronEmbedding(config)
 	default:
-		return NewLocalEmbedding(config)
+		// Default to cybertron for zero-dependency experience
+		return NewCybertronEmbedding(config)
 	}
 }
 
@@ -366,6 +393,113 @@ func (e *MockEmbedding) Dimension() int {
 // Provider returns "mock".
 func (e *MockEmbedding) Provider() string {
 	return "mock"
+}
+
+// ============================================================================
+// CYBERTRON EMBEDDING SERVICE (Native Go, Zero Dependencies)
+// ============================================================================
+
+// CybertronEmbedding implements EmbeddingService using pure Go transformers.
+// This provides zero-dependency local embeddings without requiring Python or external servers.
+type CybertronEmbedding struct {
+	model     textencoding.Interface
+	modelName string
+	dimension int
+	modelsDir string
+}
+
+// NewCybertronEmbedding creates a new Cybertron embedding service.
+func NewCybertronEmbedding(config *EmbeddingConfig) (*CybertronEmbedding, error) {
+	modelName := config.Model
+	if modelName == "" {
+		modelName = "sentence-transformers/all-MiniLM-L6-v2"
+	}
+
+	modelsDir := config.CybertronDir
+	if modelsDir == "" {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			homeDir = "."
+		}
+		modelsDir = filepath.Join(homeDir, ".cybertron", "models")
+	}
+
+	// Determine dimension based on model
+	dimension := getCybertronDimension(modelName)
+	if config.Dimension > 0 {
+		dimension = config.Dimension
+	}
+
+	slog.Info("Loading Cybertron embedding model",
+		"model", modelName,
+		"dimension", dimension,
+		"models_dir", modelsDir,
+	)
+
+	// Load model (downloads on first use)
+	model, err := tasks.Load[textencoding.Interface](&tasks.Config{
+		ModelsDir:        modelsDir,
+		ModelName:        modelName,
+		DownloadPolicy:   tasks.DownloadMissing,
+		ConversionPolicy: tasks.ConvertMissing,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to load Cybertron model %s: %w", modelName, err)
+	}
+
+	slog.Info("Cybertron embedding model loaded successfully",
+		"model", modelName,
+		"dimension", dimension,
+	)
+
+	return &CybertronEmbedding{
+		model:     model,
+		modelName: modelName,
+		dimension: dimension,
+		modelsDir: modelsDir,
+	}, nil
+}
+
+// Embed generates embeddings using Cybertron.
+func (e *CybertronEmbedding) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return [][]float32{}, nil
+	}
+
+	embeddings := make([][]float32, len(texts))
+
+	for i, text := range texts {
+		// MeanPooling = 1 (from github.com/nlpodyssey/cybertron/pkg/models/bert)
+		result, err := e.model.Encode(ctx, text, 1)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode text %d: %w", i, err)
+		}
+
+		// Convert mat.Matrix to []float32
+		vector := result.Vector.Data().F64()
+		embedding := make([]float32, len(vector))
+		for j, v := range vector {
+			embedding[j] = float32(v)
+		}
+		embeddings[i] = embedding
+
+		// Log progress for large batches
+		if len(texts) > 100 && (i+1)%100 == 0 {
+			slog.Debug("Cybertron embedding progress", "completed", i+1, "total", len(texts))
+		}
+	}
+
+	return embeddings, nil
+}
+
+// Dimension returns the embedding vector dimension.
+func (e *CybertronEmbedding) Dimension() int {
+	return e.dimension
+}
+
+// Provider returns "cybertron".
+func (e *CybertronEmbedding) Provider() string {
+	return "cybertron"
 }
 
 // ============================================================================

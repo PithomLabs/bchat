@@ -1,10 +1,11 @@
 # Taskfile Commands Reference
 
 **Status:** Active
-**Date:** 2026-01-23
+**Date:** 2026-01-26
 **Related Documents:**
 - [DOCS_RAG_PIPELINE.MD](./DOCS_RAG_PIPELINE.MD) - RAG pipeline configuration
 - [DOCS_ENV_VAR.MD](./DOCS_ENV_VAR.MD) - Environment variables
+- [DOCS_CYBERTRON.MD](./DOCS_CYBERTRON.MD) - Cybertron embedding implementation
 
 ---
 
@@ -37,6 +38,8 @@ go install github.com/go-task/task/v3/cmd/task@latest
 | `task dev:backend` | Run dev server |
 | `task dev:backend:rag` | Run dev server with RAG (go run) |
 | `task run:rag` | Run compiled binary with RAG + OpenRouter |
+| `task run:rag:cybertron` | Run with Cybertron embeddings (native Go, recommended) |
+| `task run:rag:cybertron:quality` | Run with high-quality Cybertron embeddings |
 | `task run:rag:mock` | Run compiled binary with RAG + mock embeddings |
 
 ---
@@ -280,7 +283,68 @@ LANCEDB_STORAGE_PROVIDER=local
 EMBEDDING_PROVIDER=mock
 ```
 
-**Note:** Mock embeddings generate random vectors - useful for testing the pipeline without API costs.
+**Note:** Mock embeddings generate random vectors - useful for testing the pipeline without API costs, but no semantic accuracy.
+
+---
+
+### task run:rag:cybertron
+
+**Recommended.** Run the compiled binary with RAG enabled using Cybertron embeddings (native Go, no external dependencies).
+
+```bash
+task run:rag:cybertron
+```
+
+**What it does:**
+1. Builds the backend with RAG support (if needed)
+2. Sets RAG environment variables with Cybertron embeddings
+3. Runs the compiled binary
+
+**Environment set automatically:**
+```bash
+RAG_PIPELINE_ENABLED=true
+LANCEDB_STORAGE_PROVIDER=local
+EMBEDDING_PROVIDER=cybertron
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+```
+
+**First run:** Downloads the model (~90MB) to `~/.cybertron/models`. Subsequent runs are instant.
+
+**Benefits:**
+- No external server or API key required
+- Semantically accurate embeddings (unlike mock)
+- Pure Go implementation, single binary
+- Fast (384 dimensions)
+
+---
+
+### task run:rag:cybertron:quality
+
+Run the compiled binary with RAG enabled using high-quality Cybertron embeddings.
+
+```bash
+task run:rag:cybertron:quality
+```
+
+**What it does:**
+1. Builds the backend with RAG support (if needed)
+2. Sets RAG environment variables with high-quality Cybertron model
+3. Runs the compiled binary
+
+**Environment set automatically:**
+```bash
+RAG_PIPELINE_ENABLED=true
+LANCEDB_STORAGE_PROVIDER=local
+EMBEDDING_PROVIDER=cybertron
+EMBEDDING_MODEL=sentence-transformers/all-mpnet-base-v2
+```
+
+**First run:** Downloads the model (~420MB) to `~/.cybertron/models`.
+
+**Trade-offs:**
+- Better semantic quality (768 dimensions vs 384)
+- Slower inference
+- Larger model download
 
 ---
 
@@ -372,7 +436,32 @@ task run:rag:mock
 task dev:frontend
 ```
 
-**Note:** Mock embeddings generate random vectors - useful for testing the RAG pipeline without API costs.
+**Note:** Mock embeddings generate random vectors - useful for testing the RAG pipeline without API costs, but no semantic accuracy.
+
+---
+
+### Development with RAG (Cybertron Embeddings) - Recommended
+
+RAG development with native Go embeddings - no external server or API keys needed:
+
+```bash
+# Single command - builds and runs with Cybertron embeddings
+task run:rag:cybertron
+
+# Terminal 2 (optional): Frontend dev server
+task dev:frontend
+```
+
+**Benefits:**
+- No external dependencies (pure Go)
+- Semantically accurate embeddings
+- No API costs
+- First run downloads model (~90MB), then cached
+
+**For higher quality (slower):**
+```bash
+task run:rag:cybertron:quality
+```
 
 ---
 
@@ -510,14 +599,18 @@ EMBEDDING_PROVIDER=mock ./build/memos --mode dev
 
 ## Run Matrix
 
-| Command | Builds First | RAG Enabled | Embedding Provider | API Key Required |
-|---------|--------------|-------------|-------------------|------------------|
-| `task dev:backend` | No | No | - | No |
-| `task dev:backend:rag` | No | Yes | local | No (needs embedding server) |
-| `task run:rag` | Yes | Yes | openrouter | Yes |
-| `task run:rag:mock` | Yes | Yes | mock | No |
+| Command | Builds First | RAG Enabled | Embedding Provider | API Key Required | Semantic Accuracy |
+|---------|--------------|-------------|-------------------|------------------|-------------------|
+| `task dev:backend` | No | No | - | No | - |
+| `task dev:backend:rag` | No | Yes | local | No (needs server) | Yes |
+| `task run:rag` | Yes | Yes | openrouter | Yes | Yes |
+| `task run:rag:cybertron` | Yes | Yes | cybertron | No | Yes |
+| `task run:rag:cybertron:quality` | Yes | Yes | cybertron | No | Best |
+| `task run:rag:mock` | Yes | Yes | mock | No | No |
+
+**Recommendation:** Use `task run:rag:cybertron` for development - it's free, fast, and semantically accurate.
 
 ---
 
-*Document Version: 1.1*
-*Updated: 2026-01-23*
+*Document Version: 1.2*
+*Updated: 2026-01-26*
