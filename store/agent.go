@@ -529,6 +529,29 @@ type FindAgentScoringConfig struct {
 	TenantID *int32
 }
 
+// AgentQAPair represents a Q&A test pair for evaluating embedding/retrieval quality.
+type AgentQAPair struct {
+	ID             int32     `json:"id"`
+	TenantID       int32     `json:"tenant_id"`
+	Question       string    `json:"question"`
+	ExpectedAnswer string    `json:"expected_answer"`
+	SourceSection  string    `json:"source_section,omitempty"`
+	SourceChunkID  string    `json:"source_chunk_id,omitempty"`
+	Difficulty     string    `json:"difficulty"` // easy, medium, hard
+	Category       string    `json:"category"`   // faq, service, policy, coverage, etc.
+	IsActive       bool      `json:"is_active"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// FindAgentQAPair contains filters for finding Q&A pairs.
+type FindAgentQAPair struct {
+	ID       *int32
+	TenantID *int32
+	Category *string
+	IsActive *bool
+}
+
 // AgentStore interface defines all agent-related database operations.
 type AgentStore interface {
 	// Tenant operations
@@ -632,6 +655,13 @@ type AgentStore interface {
 	// Scoring config operations
 	GetOrCreateAgentScoringConfig(ctx context.Context, tenantID int32) (*AgentScoringConfig, error)
 	UpdateAgentScoringConfig(ctx context.Context, config *AgentScoringConfig) (*AgentScoringConfig, error)
+
+	// Q&A pair operations (for embedding/retrieval testing)
+	CreateAgentQAPair(ctx context.Context, pair *AgentQAPair) (*AgentQAPair, error)
+	ListAgentQAPairs(ctx context.Context, find *FindAgentQAPair) ([]*AgentQAPair, error)
+	UpdateAgentQAPair(ctx context.Context, pair *AgentQAPair) (*AgentQAPair, error)
+	DeleteAgentQAPair(ctx context.Context, id int32) error
+	DeleteAgentQAPairsByTenant(ctx context.Context, tenantID int32) error
 }
 
 // Store methods that delegate to the driver
@@ -890,4 +920,24 @@ func (s *Store) GetOrCreateAgentScoringConfig(ctx context.Context, tenantID int3
 
 func (s *Store) UpdateAgentScoringConfig(ctx context.Context, config *AgentScoringConfig) (*AgentScoringConfig, error) {
 	return s.driver.UpdateAgentScoringConfig(ctx, config)
+}
+
+func (s *Store) CreateAgentQAPair(ctx context.Context, pair *AgentQAPair) (*AgentQAPair, error) {
+	return s.driver.CreateAgentQAPair(ctx, pair)
+}
+
+func (s *Store) ListAgentQAPairs(ctx context.Context, find *FindAgentQAPair) ([]*AgentQAPair, error) {
+	return s.driver.ListAgentQAPairs(ctx, find)
+}
+
+func (s *Store) UpdateAgentQAPair(ctx context.Context, pair *AgentQAPair) (*AgentQAPair, error) {
+	return s.driver.UpdateAgentQAPair(ctx, pair)
+}
+
+func (s *Store) DeleteAgentQAPair(ctx context.Context, id int32) error {
+	return s.driver.DeleteAgentQAPair(ctx, id)
+}
+
+func (s *Store) DeleteAgentQAPairsByTenant(ctx context.Context, tenantID int32) error {
+	return s.driver.DeleteAgentQAPairsByTenant(ctx, tenantID)
 }

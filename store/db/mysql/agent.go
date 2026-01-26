@@ -302,3 +302,25 @@ func (d *DB) GetOrCreateAgentScoringConfig(ctx context.Context, tenantID int32) 
 func (d *DB) UpdateAgentScoringConfig(ctx context.Context, config *store.AgentScoringConfig) (*store.AgentScoringConfig, error) {
 	return nil, errNotImplemented
 }
+
+// Agent Q&A Pair methods
+
+func (d *DB) CreateAgentQAPair(ctx context.Context, pair *store.AgentQAPair) (*store.AgentQAPair, error) {
+	return nil, errNotImplemented
+}
+
+func (d *DB) ListAgentQAPairs(ctx context.Context, find *store.FindAgentQAPair) ([]*store.AgentQAPair, error) {
+	return nil, errNotImplemented
+}
+
+func (d *DB) UpdateAgentQAPair(ctx context.Context, pair *store.AgentQAPair) (*store.AgentQAPair, error) {
+	return nil, errNotImplemented
+}
+
+func (d *DB) DeleteAgentQAPair(ctx context.Context, id int32) error {
+	return errNotImplemented
+}
+
+func (d *DB) DeleteAgentQAPairsByTenant(ctx context.Context, tenantID int32) error {
+	return errNotImplemented
+}

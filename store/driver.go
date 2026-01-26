@@ -195,4 +195,11 @@ type Driver interface {
 	// Scoring config model related methods.
 	GetOrCreateAgentScoringConfig(ctx context.Context, tenantID int32) (*AgentScoringConfig, error)
 	UpdateAgentScoringConfig(ctx context.Context, config *AgentScoringConfig) (*AgentScoringConfig, error)
+
+	// Q&A pair model related methods (for embedding/retrieval testing).
+	CreateAgentQAPair(ctx context.Context, pair *AgentQAPair) (*AgentQAPair, error)
+	ListAgentQAPairs(ctx context.Context, find *FindAgentQAPair) ([]*AgentQAPair, error)
+	UpdateAgentQAPair(ctx context.Context, pair *AgentQAPair) (*AgentQAPair, error)
+	DeleteAgentQAPair(ctx context.Context, id int32) error
+	DeleteAgentQAPairsByTenant(ctx context.Context, tenantID int32) error
 }

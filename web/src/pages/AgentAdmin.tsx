@@ -1,5 +1,5 @@
 import { Button, Checkbox, Chip, DialogActions, DialogContent, DialogTitle, Divider, FormControl, FormHelperText, FormLabel, Input, Modal, ModalClose, ModalDialog, Option, Select, Slider, Switch, Textarea } from "@mui/joy";
-import { ArrowLeftIcon, BuildingIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, EditIcon, EyeIcon, FileTextIcon, HistoryIcon, PlusIcon, RefreshCwIcon, SettingsIcon, SparklesIcon, Trash2Icon, UploadIcon, XIcon, ZapIcon } from "lucide-react";
+import { ArrowLeftIcon, BuildingIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, EditIcon, EyeIcon, FileTextIcon, HistoryIcon, PlusIcon, RefreshCwIcon, SearchIcon, SettingsIcon, SparklesIcon, Trash2Icon, UploadIcon, XIcon, ZapIcon } from "lucide-react";
 import { observer } from "mobx-react-lite";
 import { ChangeEvent, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
@@ -28,8 +28,15 @@ const AgentAdmin = observer(() => {
   const [formatFileType, setFormatFileType] = useState<"kb" | "policy">("kb");
   const [hasCustomOptions, setHasCustomOptions] = useState(false);
   const [isSavingOptions, setIsSavingOptions] = useState(false);
+  // Q&A Pairs state
+  const [showQAModal, setShowQAModal] = useState(false);
 
-  const { tenants, selectedTenant, isLoading, isSaving, error, fileVersions, llmConfig, tenantPermissions, myPermissions, script, isLoadingScript } = agentAdminStore.state;
+  // RAG Search Explorer state
+  const [showSearchExplorer, setShowSearchExplorer] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchTopK, setSearchTopK] = useState(5);
+
+  const { tenants, selectedTenant, isLoading, isSaving, error, fileVersions, llmConfig, tenantPermissions, myPermissions, script, isLoadingScript, qaPairs, qaTestResults, isGeneratingQA, isTestingQA, ragSearchResults, isSearchingRAG } = agentAdminStore.state;
 
   // Get current user and determine if they're an admin
   const currentUserName = userStore.state.currentUser;
@@ -77,6 +84,8 @@ const AgentAdmin = observer(() => {
             setHasCustomOptions(result.hasCustom);
           }
         });
+        // Fetch Q&A pairs for this tenant
+        agentAdminStore.fetchQAPairs(selectedTenant.tenant.slug);
       }
     }
   }, [selectedTenant?.tenant.slug, selectedTenant?.tenant.id, isAdmin]);
@@ -118,6 +127,50 @@ const AgentAdmin = observer(() => {
       toast.success(t("agent-admin.rebuild-index-success", { chunks: result.chunks || 0 }));
     } else {
       toast.error(result.error || t("agent-admin.rebuild-index-failed"));
+    }
+  };
+
+  const handleGenerateQAPairs = async () => {
+    if (!selectedTenant) return;
+    const result = await agentAdminStore.generateQAPairs(selectedTenant.tenant.slug, 50);
+    if (result.success) {
+      toast.success(t("agent-admin.qa-generated", { count: result.count || 0 }));
+    } else {
+      toast.error(result.error || t("agent-admin.qa-generate-failed"));
+    }
+  };
+
+  const handleTestAllQAPairs = async () => {
+    if (!selectedTenant) return;
+    const result = await agentAdminStore.testAllQAPairs(selectedTenant.tenant.slug);
+    if (result.success && result.results) {
+      const recall = (result.results.recall_at_5 * 100).toFixed(0);
+      toast.success(t("agent-admin.qa-test-complete", {
+        found: result.results.found,
+        total: result.results.total_pairs,
+        recall,
+      }));
+    } else {
+      toast.error(result.error || t("agent-admin.qa-test-failed"));
+    }
+  };
+
+  const handleDeleteQAPair = async (pairId: number) => {
+    if (!selectedTenant) return;
+    await agentAdminStore.deleteQAPair(selectedTenant.tenant.slug, pairId);
+  };
+
+  // RAG Search Explorer handler
+  const handleRAGSearch = async () => {
+    if (!selectedTenant || !searchQuery.trim()) return;
+    const result = await agentAdminStore.searchRAG(
+      selectedTenant.tenant.slug,
+      searchQuery.trim(),
+      "internal",
+      searchTopK
+    );
+    if (!result.success) {
+      toast.error(result.error || "Search failed");
     }
   };
 
@@ -733,6 +786,198 @@ const AgentAdmin = observer(() => {
               </div>
             )}
 
+            {/* Q&A Pairs Testing - Admin only */}
+            {isAdmin && (
+              <div className="bg-purple-50 dark:bg-purple-900/20 rounded-xl border border-purple-200 dark:border-purple-800 p-4">
+                <div className="flex justify-between items-center mb-3">
+                  <div>
+                    <h3 className="font-medium text-purple-700 dark:text-purple-300">
+                      {t("agent-admin.qa-pairs-title")}
+                    </h3>
+                    <p className="text-sm text-purple-600 dark:text-purple-400">
+                      {t("agent-admin.qa-pairs-desc")}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      color="primary"
+                      variant="outlined"
+                      onClick={handleGenerateQAPairs}
+                      loading={isGeneratingQA}
+                    >
+                      <SparklesIcon className="w-4 h-4 mr-2" />
+                      {t("agent-admin.generate-qa")}
+                    </Button>
+                    <Button
+                      color="primary"
+                      onClick={() => setShowQAModal(true)}
+                      disabled={qaPairs.length === 0}
+                    >
+                      <ZapIcon className="w-4 h-4 mr-2" />
+                      {t("agent-admin.test-qa")} ({qaPairs.length})
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Quick stats if test results exist */}
+                {qaTestResults && (
+                  <div className="grid grid-cols-4 gap-3 mt-3 p-3 bg-white dark:bg-gray-800 rounded-lg">
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-purple-600">{qaTestResults.total_pairs}</div>
+                      <div className="text-xs text-gray-500">Total Pairs</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-green-600">{qaTestResults.found}</div>
+                      <div className="text-xs text-gray-500">Found</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-red-600">{qaTestResults.not_found}</div>
+                      <div className="text-xs text-gray-500">Not Found</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-blue-600">
+                        {(qaTestResults.recall_at_5 * 100).toFixed(0)}%
+                      </div>
+                      <div className="text-xs text-gray-500">Recall@5</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* RAG Search Explorer - Admin only */}
+            {isAdmin && (
+              <div className="bg-cyan-50 dark:bg-cyan-900/20 rounded-xl border border-cyan-200 dark:border-cyan-800 p-4">
+                <div className="flex justify-between items-center mb-3">
+                  <div>
+                    <h3 className="font-medium text-cyan-700 dark:text-cyan-300">
+                      {t("agent-admin.search-explorer-title")}
+                    </h3>
+                    <p className="text-sm text-cyan-600 dark:text-cyan-400">
+                      {t("agent-admin.search-explorer-desc")}
+                    </p>
+                  </div>
+                  <Button
+                    color="primary"
+                    variant="outlined"
+                    onClick={() => setShowSearchExplorer(!showSearchExplorer)}
+                  >
+                    <SearchIcon className="w-4 h-4 mr-2" />
+                    {showSearchExplorer ? t("common.close") : t("agent-admin.open-explorer")}
+                  </Button>
+                </div>
+
+                {/* Search Explorer Panel */}
+                {showSearchExplorer && (
+                  <div className="mt-4 space-y-4">
+                    {/* Search Input */}
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder={t("agent-admin.search-placeholder")}
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && handleRAGSearch()}
+                        className="flex-1"
+                      />
+                      <Select
+                        value={searchTopK}
+                        onChange={(_, v) => v && setSearchTopK(v)}
+                        sx={{ minWidth: 80 }}
+                      >
+                        <Option value={3}>Top 3</Option>
+                        <Option value={5}>Top 5</Option>
+                        <Option value={10}>Top 10</Option>
+                      </Select>
+                      <Button
+                        color="primary"
+                        onClick={handleRAGSearch}
+                        loading={isSearchingRAG}
+                        disabled={!searchQuery.trim()}
+                      >
+                        <SearchIcon className="w-4 h-4" />
+                      </Button>
+                    </div>
+
+                    {/* Search Results */}
+                    {ragSearchResults && (
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-center text-sm text-gray-600 dark:text-gray-400">
+                          <span>{ragSearchResults.total_results} results for "{ragSearchResults.query}"</span>
+                          <span>{ragSearchResults.latency_ms}ms</span>
+                        </div>
+
+                        {ragSearchResults.results.map((result) => (
+                          <div
+                            key={result.chunk_id}
+                            className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4"
+                          >
+                            {/* Score Bar */}
+                            <div className="flex items-center gap-3 mb-2">
+                              <span className="font-medium text-gray-700 dark:text-gray-300">
+                                #{result.rank}
+                              </span>
+                              <div className="flex-1 h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                                <div
+                                  className={cn(
+                                    "h-full rounded-full transition-all",
+                                    result.score_percent >= 80 ? "bg-green-500" :
+                                    result.score_percent >= 60 ? "bg-yellow-500" :
+                                    result.score_percent >= 40 ? "bg-orange-500" : "bg-red-500"
+                                  )}
+                                  style={{ width: `${result.score_percent}%` }}
+                                />
+                              </div>
+                              <span className={cn(
+                                "font-bold min-w-[3rem] text-right",
+                                result.score_percent >= 80 ? "text-green-600" :
+                                result.score_percent >= 60 ? "text-yellow-600" :
+                                result.score_percent >= 40 ? "text-orange-600" : "text-red-600"
+                              )}>
+                                {result.score_percent}%
+                              </span>
+                            </div>
+
+                            {/* Title */}
+                            <div className="font-medium text-gray-800 dark:text-gray-200 mb-1">
+                              {result.title || "Untitled Section"}
+                            </div>
+
+                            {/* Content Preview */}
+                            <div className="text-sm text-gray-600 dark:text-gray-400 mb-2 line-clamp-3">
+                              {result.content_preview}
+                            </div>
+
+                            {/* Keywords & Meta */}
+                            <div className="flex flex-wrap gap-2 items-center text-xs">
+                              {result.matched_keywords.length > 0 && (
+                                <div className="flex gap-1 items-center">
+                                  <span className="text-gray-500">Matched:</span>
+                                  {result.matched_keywords.slice(0, 5).map((kw) => (
+                                    <Chip key={kw} size="sm" color="success" variant="soft">
+                                      {kw}
+                                    </Chip>
+                                  ))}
+                                </div>
+                              )}
+                              <Chip size="sm" variant="outlined">
+                                {result.content_type}
+                              </Chip>
+                            </div>
+                          </div>
+                        ))}
+
+                        {ragSearchResults.results.length === 0 && (
+                          <div className="text-center py-8 text-gray-500">
+                            No results found. Try a different query or rebuild the index.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Delete Tenant - Admin only */}
             {isAdmin && (
               <div className="bg-red-50 dark:bg-red-900/20 rounded-xl border border-red-200 dark:border-red-800 p-4">
@@ -861,6 +1106,86 @@ const AgentAdmin = observer(() => {
                 onClick={handleCopyGeneratedContent}
               >
                 {t("agent-admin.copy-to-clipboard")}
+              </Button>
+            </DialogActions>
+          </ModalDialog>
+        </Modal>
+
+        {/* Q&A Pairs Modal */}
+        <Modal open={showQAModal} onClose={() => setShowQAModal(false)}>
+          <ModalDialog sx={{ maxWidth: 900, width: "90vw", maxHeight: "90vh" }}>
+            <ModalClose />
+            <DialogTitle>{t("agent-admin.qa-pairs-title")}</DialogTitle>
+            <Divider />
+            <DialogContent sx={{ overflow: "auto" }}>
+              {/* Test button and results summary */}
+              <div className="flex justify-between items-center mb-4">
+                <div className="text-sm text-gray-600 dark:text-gray-400">
+                  {t("agent-admin.qa-pairs-loaded", { count: qaPairs.length })}
+                </div>
+                <Button
+                  color="primary"
+                  onClick={handleTestAllQAPairs}
+                  loading={isTestingQA}
+                  disabled={qaPairs.length === 0}
+                >
+                  <ZapIcon className="w-4 h-4 mr-2" />
+                  {t("agent-admin.qa-run-tests")}
+                </Button>
+              </div>
+
+              {/* No pairs message */}
+              {qaPairs.length === 0 && (
+                <div className="text-center py-8 text-gray-500">
+                  {t("agent-admin.qa-no-pairs")}
+                </div>
+              )}
+
+              {/* Pairs list with results */}
+              <div className="space-y-2">
+                {qaPairs.map((pair) => {
+                  const result = qaTestResults?.results?.find((r) => r.pair_id === pair.id);
+                  return (
+                    <div key={pair.id} className="p-3 border rounded-lg dark:border-gray-700">
+                      <div className="flex justify-between">
+                        <div className="flex-1 pr-4">
+                          <div className="font-medium text-gray-900 dark:text-gray-100">{pair.question}</div>
+                          <div className="text-sm text-gray-500 dark:text-gray-400 mt-1">{pair.expected_answer}</div>
+                          <div className="flex gap-2 mt-2">
+                            <Chip size="sm" color="neutral">{pair.difficulty}</Chip>
+                            <Chip size="sm" color="primary">{pair.category}</Chip>
+                            {pair.source_section && (
+                              <Chip size="sm" variant="outlined">{pair.source_section}</Chip>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {result && (
+                            <Chip
+                              size="sm"
+                              color={result.found ? "success" : "danger"}
+                            >
+                              {result.found ? `Rank #${result.rank}` : "Not Found"}
+                            </Chip>
+                          )}
+                          <Button
+                            size="sm"
+                            variant="plain"
+                            color="danger"
+                            onClick={() => handleDeleteQAPair(pair.id)}
+                          >
+                            <Trash2Icon className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button variant="plain" color="neutral" onClick={() => setShowQAModal(false)}>
+                {t("common.close")}
               </Button>
             </DialogActions>
           </ModalDialog>

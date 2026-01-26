@@ -251,6 +251,20 @@ func (s *Service) ReindexTenantContent(ctx context.Context, tenantID int32, audi
 		return 0, fmt.Errorf("failed to list source files: %w", err)
 	}
 
+	// DEBUG: Log found files
+	slog.Info("DEBUG: Found source files for reindex",
+		"tenantID", tenantID,
+		"audienceFilter", audienceType,
+		"fileCount", len(files))
+	for _, f := range files {
+		slog.Info("DEBUG: Source file details",
+			"id", f.ID,
+			"audience", f.AudienceType,
+			"fileType", f.FileType,
+			"contentLen", len(f.Content),
+			"version", f.Version)
+	}
+
 	// Group files by audience type
 	audienceFiles := make(map[string]map[string]string) // audience -> fileType -> content
 	for _, f := range files {
@@ -296,8 +310,15 @@ func (s *Service) ReindexTenantContent(ctx context.Context, tenantID int32, audi
 			continue
 		}
 
+		// DEBUG: Log chunks about to insert
+		slog.Info("DEBUG: About to insert chunks",
+			"tenantID", tenantID,
+			"audience", audience,
+			"chunkCount", len(allChunks))
+
 		// Insert chunks
 		if err := s.vectorDB.Insert(ctx, allChunks); err != nil {
+			slog.Error("DEBUG: Insert failed", "error", err)
 			return totalChunks, fmt.Errorf("failed to insert chunks for audience %s: %w", audience, err)
 		}
 
@@ -2337,6 +2358,52 @@ func (s *Service) GenerateAnnotatedPolicy(ctx context.Context, tenantID int32, c
 	}
 
 	return resp.Choices[0].Message.Content.Text, nil
+}
+
+// CallLLMSimple makes a simple LLM call with a system prompt and user message.
+// This is a helper for handlers that need to make LLM calls.
+func (s *Service) CallLLMSimple(ctx context.Context, tenantID int32, systemPrompt, userMessage string) (string, error) {
+	model, apiKey := s.getLLMConfig(ctx, tenantID)
+	if apiKey == "" {
+		return "", fmt.Errorf("no API key configured")
+	}
+
+	client := openrouter.NewClient(apiKey)
+	resp, err := client.CreateChatCompletion(ctx, openrouter.ChatCompletionRequest{
+		Model: model,
+		Messages: []openrouter.ChatCompletionMessage{
+			openrouter.SystemMessage(systemPrompt),
+			openrouter.UserMessage(userMessage),
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("LLM request failed: %w", err)
+	}
+
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("no response from LLM")
+	}
+
+	return resp.Choices[0].Message.Content.Text, nil
+}
+
+// SearchVectorDB performs a direct vector search for testing/evaluation purposes.
+// Returns nil if RAG is not enabled.
+func (s *Service) SearchVectorDB(ctx context.Context, tenantID int32, audienceType, query string, topK int) (*SearchResult, error) {
+	if s.vectorDB == nil {
+		return nil, fmt.Errorf("RAG pipeline not enabled")
+	}
+
+	if topK <= 0 {
+		topK = 5
+	}
+
+	return s.vectorDB.Search(ctx, SearchQuery{
+		TenantID:     tenantID,
+		AudienceType: audienceType,
+		QueryText:    query,
+		TopK:         topK,
+	})
 }
 
 // buildKBGenerationPrompt constructs the prompt for KB.MD generation.

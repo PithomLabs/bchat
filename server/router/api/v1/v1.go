@@ -268,6 +268,18 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	adminGroup.POST("/:slug/files/:audienceType/:fileType/restore", s.agentHandler.HandleRestoreFileVersion)
 	adminGroup.GET("/:slug/source-file", s.agentHandler.HandleGetSourceFileContent)
 
+	// Q&A Pairs routes (admin only)
+	adminGroup.POST("/:slug/qa-pairs/generate", s.agentHandler.HandleGenerateQAPairs)
+	adminGroup.GET("/:slug/qa-pairs", s.agentHandler.HandleListQAPairs)
+	adminGroup.POST("/:slug/qa-pairs", s.agentHandler.HandleCreateQAPair)
+	adminGroup.PUT("/:slug/qa-pairs/:id", s.agentHandler.HandleUpdateQAPair)
+	adminGroup.DELETE("/:slug/qa-pairs/:id", s.agentHandler.HandleDeleteQAPair)
+	adminGroup.POST("/:slug/qa-pairs/:id/test", s.agentHandler.HandleTestQAPair)
+	adminGroup.POST("/:slug/qa-pairs/test-all", s.agentHandler.HandleTestAllQAPairs)
+
+	// RAG Search Explorer (per-tenant, admin only)
+	adminGroup.POST("/:slug/rag/search", s.agentHandler.HandleRAGSearch)
+
 	// RAG Stats routes (admin only)
 	ragGroup := echoServer.Group("/api/v1/admin/rag")
 	ragGroup.Use(s.AuthMiddleware)

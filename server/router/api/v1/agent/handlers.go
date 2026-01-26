@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -4031,7 +4032,671 @@ func (h *Handler) HandleGetProcessingOptions(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"options":  opts,
+		"options":   opts,
 		"hasCustom": tenant.ProcessingOptions != "",
+	})
+}
+
+// ============================================================================
+// Q&A PAIR HANDLERS (for embedding/retrieval testing)
+// ============================================================================
+
+// HandleGenerateQAPairs generates Q&A pairs from KB content using LLM.
+// For large KB files, it chunks the content first and generates pairs from sampled chunks.
+func (h *Handler) HandleGenerateQAPairs(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	if !h.isAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
+	}
+
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	// Parse request
+	var req struct {
+		MaxPairs     int    `json:"max_pairs"`
+		AudienceType string `json:"audience_type"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
+	}
+	if req.MaxPairs <= 0 || req.MaxPairs > 100 {
+		req.MaxPairs = 50
+	}
+	if req.AudienceType == "" {
+		req.AudienceType = "internal"
+	}
+
+	// Get KB content
+	kbFile, err := h.store.GetAgentSourceFile(ctx, &store.FindAgentSourceFile{
+		TenantID:     &tenant.ID,
+		FileType:     stringPtr("kb"),
+		AudienceType: &req.AudienceType,
+	})
+	if err != nil || kbFile == nil || kbFile.Content == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "No KB content found for this audience")
+	}
+
+	// Delete existing pairs for this tenant
+	if err := h.store.DeleteAgentQAPairsByTenant(ctx, tenant.ID); err != nil {
+		slog.Warn("Failed to delete existing Q&A pairs", "error", err)
+	}
+
+	// Check chunker availability
+	chunker := h.service.chunker
+	if chunker == nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Chunker not initialized - RAG pipeline may be disabled")
+	}
+
+	// Chunk the KB content (same logic as indexing)
+	maxChunkTokens := 512 // Standard chunk size
+	chunks := chunker.ChunkMarkdownContent(kbFile.Content, tenant.ID, req.AudienceType, "kb", 1, maxChunkTokens)
+
+	if len(chunks) == 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "KB content could not be chunked")
+	}
+
+	slog.Info("Generating Q&A pairs from chunks",
+		"tenant", tenant.Slug,
+		"totalChunks", len(chunks),
+		"maxPairs", req.MaxPairs)
+
+	// Generate Q&A pairs from sampled chunks
+	pairs, err := h.generateQAPairsFromChunks(ctx, tenant.ID, chunks, req.MaxPairs)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to generate Q&A pairs: %v", err))
+	}
+
+	// Store generated pairs
+	var storedPairs []*store.AgentQAPair
+	for _, pair := range pairs {
+		pair.TenantID = tenant.ID
+		pair.IsActive = true
+		stored, err := h.store.CreateAgentQAPair(ctx, pair)
+		if err != nil {
+			slog.Warn("Failed to store Q&A pair", "error", err, "question", pair.Question)
+			continue
+		}
+		storedPairs = append(storedPairs, stored)
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"generated": len(storedPairs),
+		"pairs":     storedPairs,
+	})
+}
+
+// generateQAPairsFromChunks generates Q&A pairs from sampled document chunks.
+// This approach handles large KB files by processing chunks in batches.
+func (h *Handler) generateQAPairsFromChunks(ctx context.Context, tenantID int32, chunks []DocumentChunk, maxPairs int) ([]*store.AgentQAPair, error) {
+	if len(chunks) == 0 {
+		return nil, fmt.Errorf("no chunks provided")
+	}
+
+	// Sample chunks for diverse coverage
+	// Take chunks from different parts of the document
+	sampledChunks := sampleChunksForQA(chunks, 25) // Max 25 chunks to keep within token limits
+
+	// Calculate pairs per batch (process multiple chunks per LLM call for efficiency)
+	chunksPerBatch := 5
+	pairsPerBatch := 10
+
+	var allPairs []*store.AgentQAPair
+
+	// Process chunks in batches
+	for i := 0; i < len(sampledChunks); i += chunksPerBatch {
+		if len(allPairs) >= maxPairs {
+			break
+		}
+
+		end := i + chunksPerBatch
+		if end > len(sampledChunks) {
+			end = len(sampledChunks)
+		}
+		batch := sampledChunks[i:end]
+
+		// Build combined content for this batch
+		var batchContent strings.Builder
+		for j, chunk := range batch {
+			batchContent.WriteString(fmt.Sprintf("=== SECTION %d: %s ===\n", j+1, chunk.Title))
+			batchContent.WriteString(chunk.Content)
+			batchContent.WriteString("\n\n")
+		}
+
+		// Generate pairs for this batch
+		pairs, err := h.generateQAPairsFromBatch(ctx, tenantID, batchContent.String(), batch, pairsPerBatch)
+		if err != nil {
+			slog.Warn("Failed to generate pairs for batch", "batchStart", i, "error", err)
+			continue
+		}
+
+		allPairs = append(allPairs, pairs...)
+	}
+
+	// Trim to maxPairs if we generated more
+	if len(allPairs) > maxPairs {
+		allPairs = allPairs[:maxPairs]
+	}
+
+	slog.Info("Generated Q&A pairs from chunks",
+		"totalChunks", len(chunks),
+		"sampledChunks", len(sampledChunks),
+		"generatedPairs", len(allPairs))
+
+	return allPairs, nil
+}
+
+// sampleChunksForQA selects a diverse sample of chunks from different sections.
+func sampleChunksForQA(chunks []DocumentChunk, maxChunks int) []DocumentChunk {
+	if len(chunks) <= maxChunks {
+		return chunks
+	}
+
+	// Sample evenly across the document
+	step := len(chunks) / maxChunks
+	if step < 1 {
+		step = 1
+	}
+
+	sampled := make([]DocumentChunk, 0, maxChunks)
+	for i := 0; i < len(chunks) && len(sampled) < maxChunks; i += step {
+		sampled = append(sampled, chunks[i])
+	}
+
+	return sampled
+}
+
+// generateQAPairsFromBatch generates Q&A pairs from a batch of chunks.
+func (h *Handler) generateQAPairsFromBatch(ctx context.Context, tenantID int32, batchContent string, chunks []DocumentChunk, maxPairs int) ([]*store.AgentQAPair, error) {
+	prompt := fmt.Sprintf(`You are a QA test generator. Generate %d question-answer pairs from the following knowledge base sections.
+
+REQUIREMENTS:
+1. Questions should be natural language queries a real user might ask
+2. Answers must be directly derivable from the content provided
+3. Include a mix of difficulties:
+   - easy: Simple factual questions
+   - medium: Questions requiring understanding
+   - hard: Questions with nuanced answers
+4. Categorize each pair (faq, service, policy, doctrine, general)
+5. Reference the section number in source_section
+
+OUTPUT FORMAT (JSON only, no markdown code blocks):
+{"qa_pairs": [{"question": "...", "answer": "...", "source_section": "Section 1: ...", "difficulty": "easy", "category": "faq"}]}
+
+CONTENT:
+---
+%s
+---
+
+Generate exactly %d Q&A pairs. Output valid JSON only.`, maxPairs, batchContent, maxPairs)
+
+	response, err := h.service.CallLLMSimple(ctx, tenantID, "You are a QA test generator. Respond only with valid JSON.", prompt)
+	if err != nil {
+		return nil, fmt.Errorf("LLM call failed: %w", err)
+	}
+
+	// Parse JSON response
+	var result struct {
+		QAPairs []struct {
+			Question      string `json:"question"`
+			Answer        string `json:"answer"`
+			SourceSection string `json:"source_section"`
+			Difficulty    string `json:"difficulty"`
+			Category      string `json:"category"`
+		} `json:"qa_pairs"`
+	}
+
+	// Clean response (remove markdown code blocks if present)
+	cleanResponse := strings.TrimSpace(response)
+	cleanResponse = strings.TrimPrefix(cleanResponse, "```json")
+	cleanResponse = strings.TrimPrefix(cleanResponse, "```")
+	cleanResponse = strings.TrimSuffix(cleanResponse, "```")
+	cleanResponse = strings.TrimSpace(cleanResponse)
+
+	if err := json.Unmarshal([]byte(cleanResponse), &result); err != nil {
+		return nil, fmt.Errorf("failed to parse LLM response: %w", err)
+	}
+
+	pairs := make([]*store.AgentQAPair, 0, len(result.QAPairs))
+	for _, p := range result.QAPairs {
+		// Try to link to source chunk ID based on section reference
+		var sourceChunkID string
+		for i, chunk := range chunks {
+			if strings.Contains(p.SourceSection, fmt.Sprintf("Section %d", i+1)) || strings.Contains(p.SourceSection, chunk.Title) {
+				sourceChunkID = chunk.ID
+				break
+			}
+		}
+
+		pairs = append(pairs, &store.AgentQAPair{
+			Question:       p.Question,
+			ExpectedAnswer: p.Answer,
+			SourceSection:  p.SourceSection,
+			SourceChunkID:  sourceChunkID,
+			Difficulty:     p.Difficulty,
+			Category:       p.Category,
+		})
+	}
+
+	return pairs, nil
+}
+
+// HandleListQAPairs returns all Q&A pairs for a tenant.
+func (h *Handler) HandleListQAPairs(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	if !h.isAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
+	}
+
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	pairs, err := h.store.ListAgentQAPairs(ctx, &store.FindAgentQAPair{TenantID: &tenant.ID})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list Q&A pairs")
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"pairs": pairs,
+		"total": len(pairs),
+	})
+}
+
+// HandleCreateQAPair creates a single Q&A pair.
+func (h *Handler) HandleCreateQAPair(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	if !h.isAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
+	}
+
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	var pair store.AgentQAPair
+	if err := c.Bind(&pair); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
+	}
+
+	pair.TenantID = tenant.ID
+	pair.IsActive = true
+
+	created, err := h.store.CreateAgentQAPair(ctx, &pair)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create Q&A pair")
+	}
+
+	return c.JSON(http.StatusCreated, created)
+}
+
+// HandleUpdateQAPair updates a Q&A pair.
+func (h *Handler) HandleUpdateQAPair(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+	idStr := c.Param("id")
+
+	if !h.isAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
+	}
+
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	id, err := strconv.ParseInt(idStr, 10, 32)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid ID")
+	}
+
+	var pair store.AgentQAPair
+	if err := c.Bind(&pair); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
+	}
+
+	pair.ID = int32(id)
+	pair.TenantID = tenant.ID
+
+	updated, err := h.store.UpdateAgentQAPair(ctx, &pair)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update Q&A pair")
+	}
+
+	return c.JSON(http.StatusOK, updated)
+}
+
+// HandleDeleteQAPair deletes a Q&A pair.
+func (h *Handler) HandleDeleteQAPair(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+	idStr := c.Param("id")
+
+	if !h.isAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
+	}
+
+	// Verify tenant exists
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	id, err := strconv.ParseInt(idStr, 10, 32)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid ID")
+	}
+
+	if err := h.store.DeleteAgentQAPair(ctx, int32(id)); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete Q&A pair")
+	}
+
+	return c.NoContent(http.StatusNoContent)
+}
+
+// HandleTestQAPair tests retrieval for a single Q&A pair.
+func (h *Handler) HandleTestQAPair(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+	idStr := c.Param("id")
+
+	if !h.isAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
+	}
+
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	id, err := strconv.ParseInt(idStr, 10, 32)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid ID")
+	}
+
+	// Get the Q&A pair
+	pairID := int32(id)
+	pairs, err := h.store.ListAgentQAPairs(ctx, &store.FindAgentQAPair{ID: &pairID, TenantID: &tenant.ID})
+	if err != nil || len(pairs) == 0 {
+		return echo.NewHTTPError(http.StatusNotFound, "Q&A pair not found")
+	}
+	pair := pairs[0]
+
+	// Test retrieval
+	result := h.testRetrievalForPair(ctx, tenant.ID, pair)
+
+	return c.JSON(http.StatusOK, result)
+}
+
+// HandleTestAllQAPairs tests retrieval for all Q&A pairs.
+func (h *Handler) HandleTestAllQAPairs(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	if !h.isAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
+	}
+
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	// Get all pairs
+	isActive := true
+	pairs, err := h.store.ListAgentQAPairs(ctx, &store.FindAgentQAPair{TenantID: &tenant.ID, IsActive: &isActive})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list Q&A pairs")
+	}
+
+	if len(pairs) == 0 {
+		return c.JSON(http.StatusOK, map[string]interface{}{
+			"total_pairs": 0,
+			"message":     "No Q&A pairs found. Generate pairs first.",
+		})
+	}
+
+	// Test each pair
+	var results []map[string]interface{}
+	found := 0
+	totalScore := 0.0
+	var failedPairs []int32
+
+	for _, pair := range pairs {
+		result := h.testRetrievalForPair(ctx, tenant.ID, pair)
+		results = append(results, result)
+
+		if result["found"].(bool) {
+			found++
+			totalScore += result["score"].(float64)
+		} else {
+			failedPairs = append(failedPairs, pair.ID)
+		}
+	}
+
+	avgScore := 0.0
+	if found > 0 {
+		avgScore = totalScore / float64(found)
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"total_pairs":  len(pairs),
+		"found":        found,
+		"not_found":    len(pairs) - found,
+		"recall_at_5":  float64(found) / float64(len(pairs)),
+		"avg_score":    avgScore,
+		"results":      results,
+		"failed_pairs": failedPairs,
+	})
+}
+
+// testRetrievalForPair tests if the expected answer can be retrieved for a question.
+func (h *Handler) testRetrievalForPair(ctx context.Context, tenantID int32, pair *store.AgentQAPair) map[string]interface{} {
+	result := map[string]interface{}{
+		"pair_id":  pair.ID,
+		"question": pair.Question,
+		"found":    false,
+		"score":    0.0,
+		"rank":     0,
+	}
+
+	// Search using the question (use internal audience - same as indexed content)
+	searchResult, err := h.service.SearchVectorDB(ctx, tenantID, "internal", pair.Question, 5)
+	if err != nil {
+		result["error"] = err.Error()
+		return result
+	}
+
+	// Check if expected answer content appears in top 5 results
+	expectedLower := strings.ToLower(pair.ExpectedAnswer)
+	keywords := extractKeywords(expectedLower)
+
+	for i, chunk := range searchResult.Chunks {
+		if i >= 5 {
+			break
+		}
+
+		chunkLower := strings.ToLower(chunk.Content)
+		matchCount := 0
+		for _, keyword := range keywords {
+			if strings.Contains(chunkLower, keyword) {
+				matchCount++
+			}
+		}
+
+		// Consider it a match if >50% of keywords are found
+		if len(keywords) > 0 && float64(matchCount)/float64(len(keywords)) > 0.5 {
+			result["found"] = true
+			result["rank"] = i + 1
+			if i < len(searchResult.Scores) {
+				result["score"] = searchResult.Scores[i]
+			}
+			break
+		}
+	}
+
+	// If not found, include best score and preview
+	if !result["found"].(bool) && len(searchResult.Chunks) > 0 {
+		if len(searchResult.Scores) > 0 {
+			result["best_score"] = searchResult.Scores[0]
+		}
+		preview := searchResult.Chunks[0].Content
+		if len(preview) > 200 {
+			preview = preview[:200] + "..."
+		}
+		result["top_chunk_preview"] = preview
+	}
+
+	return result
+}
+
+// extractKeywords extracts significant words from text for matching.
+func extractKeywords(text string) []string {
+	// Remove common stop words and extract meaningful terms
+	stopWords := map[string]bool{
+		"a": true, "an": true, "the": true, "is": true, "are": true,
+		"was": true, "were": true, "be": true, "been": true, "being": true,
+		"have": true, "has": true, "had": true, "do": true, "does": true,
+		"did": true, "will": true, "would": true, "could": true, "should": true,
+		"may": true, "might": true, "must": true, "can": true,
+		"of": true, "at": true, "by": true, "for": true, "with": true,
+		"about": true, "to": true, "from": true, "in": true, "on": true,
+		"and": true, "or": true, "but": true, "if": true, "then": true,
+		"we": true, "our": true, "you": true, "your": true, "they": true,
+		"their": true, "it": true, "its": true, "this": true, "that": true,
+	}
+
+	words := strings.Fields(text)
+	var keywords []string
+	for _, word := range words {
+		// Clean punctuation
+		word = strings.Trim(word, ".,!?;:\"'()[]{}")
+		if len(word) > 2 && !stopWords[word] {
+			keywords = append(keywords, word)
+		}
+	}
+
+	// Limit to most significant keywords
+	if len(keywords) > 10 {
+		keywords = keywords[:10]
+	}
+
+	return keywords
+}
+
+// ============================================================================
+// RAG SEARCH EXPLORER
+// ============================================================================
+
+// HandleRAGSearch performs a RAG search and returns detailed results for debugging.
+// POST /api/v1/agent/:slug/rag/search
+func (h *Handler) HandleRAGSearch(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+	start := time.Now()
+
+	if !h.isAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
+	}
+
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	// Parse request
+	var req struct {
+		Query        string `json:"query"`
+		AudienceType string `json:"audience_type"`
+		TopK         int    `json:"top_k"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
+	}
+
+	if req.Query == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Query is required")
+	}
+	if req.AudienceType == "" {
+		req.AudienceType = "internal"
+	}
+	if req.TopK <= 0 || req.TopK > 20 {
+		req.TopK = 5
+	}
+
+	// Check if RAG is enabled
+	if h.service.vectorDB == nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "RAG pipeline not enabled")
+	}
+
+	// Perform search
+	searchResult, err := h.service.SearchVectorDB(ctx, tenant.ID, req.AudienceType, req.Query, req.TopK)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Search failed: %v", err))
+	}
+
+	// Build detailed results
+	results := make([]map[string]interface{}, 0, len(searchResult.Chunks))
+	for i, chunk := range searchResult.Chunks {
+		score := 0.0
+		if i < len(searchResult.Scores) {
+			score = searchResult.Scores[i]
+		}
+
+		// Create content preview (first 300 chars)
+		preview := chunk.Content
+		if len(preview) > 300 {
+			preview = preview[:300] + "..."
+		}
+
+		// Extract matching keywords from query
+		queryKeywords := extractKeywords(strings.ToLower(req.Query))
+		contentLower := strings.ToLower(chunk.Content)
+		matchedKeywords := []string{}
+		for _, kw := range queryKeywords {
+			if strings.Contains(contentLower, kw) {
+				matchedKeywords = append(matchedKeywords, kw)
+			}
+		}
+
+		results = append(results, map[string]interface{}{
+			"rank":             i + 1,
+			"chunk_id":         chunk.ID,
+			"score":            score,
+			"score_percent":    int(score * 100),
+			"title":            chunk.Title,
+			"content":          chunk.Content,
+			"content_preview":  preview,
+			"content_type":     chunk.ContentType,
+			"audience_type":    chunk.AudienceType,
+			"matched_keywords": matchedKeywords,
+			"keyword_match_ratio": func() float64 {
+				if len(queryKeywords) == 0 {
+					return 0
+				}
+				return float64(len(matchedKeywords)) / float64(len(queryKeywords))
+			}(),
+		})
+	}
+
+	latencyMs := time.Since(start).Milliseconds()
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"query":         req.Query,
+		"audience_type": req.AudienceType,
+		"top_k":         req.TopK,
+		"latency_ms":    latencyMs,
+		"total_results": len(results),
+		"results":       results,
 	})
 }

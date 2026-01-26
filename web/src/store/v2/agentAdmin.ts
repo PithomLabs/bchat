@@ -157,6 +157,66 @@ export interface AgentLearningMemory {
   version: number;
 }
 
+// Q&A Pairs for embedding quality testing
+export interface AgentQAPair {
+  id: number;
+  tenant_id: number;
+  question: string;
+  expected_answer: string;
+  source_section?: string;
+  source_chunk_id?: string;
+  difficulty: string;
+  category: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface QATestResult {
+  pair_id: number;
+  question: string;
+  found: boolean;
+  score: number;
+  rank: number;
+  error?: string;
+  best_score?: number;
+  top_chunk_preview?: string;
+}
+
+export interface QATestAllResponse {
+  total_pairs: number;
+  found: number;
+  not_found: number;
+  recall_at_5: number;
+  avg_score: number;
+  results: QATestResult[];
+  failed_pairs: number[];
+}
+
+// RAG Search Explorer types
+export interface RAGSearchResult {
+  rank: number;
+  chunk_id: string;
+  score: number;
+  score_percent: number;
+  title: string;
+  content: string;
+  content_preview: string;
+  content_type: string;
+  audience_type: string;
+  matched_keywords: string[];
+  keyword_match_ratio: number;
+}
+
+export interface RAGSearchResponse {
+  query: string;
+  audience_type: string;
+  top_k: number;
+  latency_ms: number;
+  total_results: number;
+  results: RAGSearchResult[];
+}
+
 // Available LLM models (free tier)
 export const LLM_MODEL_OPTIONS = [
   { value: "openai/gpt-oss-120b:free", label: "GPT-OSS 120B (Default)" },
@@ -323,6 +383,16 @@ class LocalState {
   // Learning Memory (agent self-improvement)
   learningMemory: AgentLearningMemory | null = null;
   isLoadingLearning: boolean = false;
+  // Q&A Pairs for embedding quality testing
+  qaPairs: AgentQAPair[] = [];
+  qaTestResults: QATestAllResponse | null = null;
+  isLoadingQA: boolean = false;
+  isGeneratingQA: boolean = false;
+  isTestingQA: boolean = false;
+
+  // RAG Search Explorer
+  ragSearchResults: RAGSearchResponse | null = null;
+  isSearchingRAG: boolean = false;
 
   constructor() {
     makeAutoObservable(this);
@@ -772,6 +842,105 @@ const agentAdminStore = (() => {
     }
   };
 
+  // Q&A Pairs methods for embedding quality testing
+
+  const generateQAPairs = async (slug: string, maxPairs: number = 50): Promise<{ success: boolean; count?: number; error?: string }> => {
+    state.setPartial({ isGeneratingQA: true });
+    try {
+      const response = await axios.post<{ generated: number; pairs: AgentQAPair[] }>(
+        `/api/v1/agent/${slug}/qa-pairs/generate`,
+        { max_pairs: maxPairs, audience_type: "internal" }
+      );
+      runInAction(() => {
+        state.qaPairs = response.data.pairs || [];
+        state.isGeneratingQA = false;
+      });
+      return { success: true, count: response.data.generated };
+    } catch (error: any) {
+      runInAction(() => { state.isGeneratingQA = false; });
+      return { success: false, error: error.response?.data?.message || "Failed to generate Q&A pairs" };
+    }
+  };
+
+  const fetchQAPairs = async (slug: string): Promise<void> => {
+    state.setPartial({ isLoadingQA: true });
+    try {
+      const response = await axios.get<{ pairs: AgentQAPair[]; total: number }>(
+        `/api/v1/agent/${slug}/qa-pairs`
+      );
+      runInAction(() => {
+        state.qaPairs = response.data.pairs || [];
+        state.isLoadingQA = false;
+      });
+    } catch (error) {
+      runInAction(() => {
+        state.isLoadingQA = false;
+        state.qaPairs = [];
+      });
+    }
+  };
+
+  const testAllQAPairs = async (slug: string): Promise<{ success: boolean; results?: QATestAllResponse; error?: string }> => {
+    state.setPartial({ isTestingQA: true });
+    try {
+      const response = await axios.post<QATestAllResponse>(
+        `/api/v1/agent/${slug}/qa-pairs/test-all`
+      );
+      runInAction(() => {
+        state.qaTestResults = response.data;
+        state.isTestingQA = false;
+      });
+      return { success: true, results: response.data };
+    } catch (error: any) {
+      runInAction(() => { state.isTestingQA = false; });
+      return { success: false, error: error.response?.data?.message || "Failed to test Q&A pairs" };
+    }
+  };
+
+  const deleteQAPair = async (slug: string, pairId: number): Promise<boolean> => {
+    try {
+      await axios.delete(`/api/v1/agent/${slug}/qa-pairs/${pairId}`);
+      runInAction(() => {
+        state.qaPairs = state.qaPairs.filter(p => p.id !== pairId);
+      });
+      return true;
+    } catch (error) {
+      return false;
+    }
+  };
+
+  const clearQAResults = () => {
+    state.setPartial({ qaTestResults: null });
+  };
+
+  // RAG Search Explorer
+  const searchRAG = async (
+    slug: string,
+    query: string,
+    audienceType: string = "internal",
+    topK: number = 5
+  ): Promise<{ success: boolean; error?: string }> => {
+    state.setPartial({ isSearchingRAG: true, ragSearchResults: null });
+    try {
+      const response = await axios.post<RAGSearchResponse>(
+        `/api/v1/agent/${slug}/rag/search`,
+        { query, audience_type: audienceType, top_k: topK }
+      );
+      runInAction(() => {
+        state.ragSearchResults = response.data;
+        state.isSearchingRAG = false;
+      });
+      return { success: true };
+    } catch (error: any) {
+      runInAction(() => { state.isSearchingRAG = false; });
+      return { success: false, error: error.response?.data?.message || "Search failed" };
+    }
+  };
+
+  const clearRAGSearchResults = () => {
+    state.setPartial({ ragSearchResults: null });
+  };
+
   const toggleTenantActive = async (slug: string, isActive: boolean): Promise<boolean> => {
     state.setPartial({ isSaving: true, error: null });
 
@@ -1047,6 +1216,15 @@ const agentAdminStore = (() => {
     loadProcessingOptions,
     // File content preview
     fetchFileContent,
+    // Q&A Pairs for embedding quality testing
+    generateQAPairs,
+    fetchQAPairs,
+    testAllQAPairs,
+    deleteQAPair,
+    clearQAResults,
+    // RAG Search Explorer
+    searchRAG,
+    clearRAGSearchResults,
   };
 })();
 

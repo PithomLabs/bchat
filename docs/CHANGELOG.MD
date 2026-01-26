@@ -53,6 +53,13 @@ All notable changes to the bchat AI Agent System are documented in this file.
   - Records implementation changes with timestamps
   - Includes problem, solution, and verification for each change
 
+- **Q&A Pairs Testing System** - Embedding quality evaluation framework
+  - Generate up to 50 Q&A pairs from KB content using LLM
+  - Test retrieval accuracy with Recall@K metrics
+  - API endpoints: generate, list, create, update, delete, test
+  - Database table: `agent_qa_pairs` with difficulty, category, source tracking
+  - DOCS_QA.MD design document
+
 ### Fixed
 - **BUG-002: Empty Vector Index Creation** - Fixed IVF-PQ index error on empty tables
   - Error: `Creating empty vector indices with train=False is not yet implemented`

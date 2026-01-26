@@ -1789,3 +1789,121 @@ func (d *DB) UpdateAgentScoringConfig(ctx context.Context, config *store.AgentSc
 	config.UpdatedAt = now
 	return config, nil
 }
+
+// ============================================================================
+// Q&A PAIR OPERATIONS (for embedding/retrieval testing)
+// ============================================================================
+
+func (d *DB) CreateAgentQAPair(ctx context.Context, pair *store.AgentQAPair) (*store.AgentQAPair, error) {
+	now := time.Now()
+	stmt := `
+		INSERT INTO agent_qa_pairs (
+			tenant_id, question, expected_answer, source_section, source_chunk_id,
+			difficulty, category, is_active, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	result, err := d.db.ExecContext(ctx, stmt,
+		pair.TenantID, pair.Question, pair.ExpectedAnswer, pair.SourceSection, pair.SourceChunkID,
+		pair.Difficulty, pair.Category, pair.IsActive, now, now,
+	)
+	if err != nil {
+		return nil, err
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	pair.ID = int32(id)
+	pair.CreatedAt = now
+	pair.UpdatedAt = now
+	return pair, nil
+}
+
+func (d *DB) ListAgentQAPairs(ctx context.Context, find *store.FindAgentQAPair) ([]*store.AgentQAPair, error) {
+	where, args := []string{"1 = 1"}, []any{}
+
+	if find.ID != nil {
+		where = append(where, "id = ?")
+		args = append(args, *find.ID)
+	}
+	if find.TenantID != nil {
+		where = append(where, "tenant_id = ?")
+		args = append(args, *find.TenantID)
+	}
+	if find.Category != nil {
+		where = append(where, "category = ?")
+		args = append(args, *find.Category)
+	}
+	if find.IsActive != nil {
+		where = append(where, "is_active = ?")
+		args = append(args, *find.IsActive)
+	}
+
+	query := `
+		SELECT id, tenant_id, question, expected_answer, source_section, source_chunk_id,
+			difficulty, category, is_active, created_at, updated_at
+		FROM agent_qa_pairs
+		WHERE ` + strings.Join(where, " AND ") + `
+		ORDER BY id ASC
+	`
+
+	rows, err := d.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var pairs []*store.AgentQAPair
+	for rows.Next() {
+		pair := &store.AgentQAPair{}
+		var sourceSection, sourceChunkID, difficulty, category sql.NullString
+		if err := rows.Scan(
+			&pair.ID, &pair.TenantID, &pair.Question, &pair.ExpectedAnswer,
+			&sourceSection, &sourceChunkID, &difficulty, &category,
+			&pair.IsActive, &pair.CreatedAt, &pair.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		pair.SourceSection = sourceSection.String
+		pair.SourceChunkID = sourceChunkID.String
+		pair.Difficulty = difficulty.String
+		pair.Category = category.String
+		pairs = append(pairs, pair)
+	}
+	return pairs, nil
+}
+
+func (d *DB) UpdateAgentQAPair(ctx context.Context, pair *store.AgentQAPair) (*store.AgentQAPair, error) {
+	now := time.Now()
+	stmt := `
+		UPDATE agent_qa_pairs SET
+			question = ?,
+			expected_answer = ?,
+			source_section = ?,
+			source_chunk_id = ?,
+			difficulty = ?,
+			category = ?,
+			is_active = ?,
+			updated_at = ?
+		WHERE id = ?
+	`
+	_, err := d.db.ExecContext(ctx, stmt,
+		pair.Question, pair.ExpectedAnswer, pair.SourceSection, pair.SourceChunkID,
+		pair.Difficulty, pair.Category, pair.IsActive, now, pair.ID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	pair.UpdatedAt = now
+	return pair, nil
+}
+
+func (d *DB) DeleteAgentQAPair(ctx context.Context, id int32) error {
+	_, err := d.db.ExecContext(ctx, "DELETE FROM agent_qa_pairs WHERE id = ?", id)
+	return err
+}
+
+func (d *DB) DeleteAgentQAPairsByTenant(ctx context.Context, tenantID int32) error {
+	_, err := d.db.ExecContext(ctx, "DELETE FROM agent_qa_pairs WHERE tenant_id = ?", tenantID)
+	return err
+}

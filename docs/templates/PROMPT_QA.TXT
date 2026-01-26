@@ -1,0 +1,31 @@
+You are a QA test generator. Given the following knowledge base content, generate up to 50 question-answer pairs that could be used to test a RAG system's retrieval quality.
+
+REQUIREMENTS:
+1. Questions should be natural language queries a real user might ask
+2. Answers should be directly derivable from the KB content
+3. Include a mix of:
+   - Simple factual questions (easy)
+   - Questions requiring multiple facts (medium)
+   - Questions with nuanced answers (hard)
+4. Categorize each pair (faq, service, policy, coverage, safety, general)
+5. Note which section of the KB contains the answer
+
+OUTPUT FORMAT (JSON):
+{
+  "qa_pairs": [
+    {
+      "question": "What are your business hours?",
+      "answer": "We are open Monday through Friday from 9am to 5pm.",
+      "source_section": "Contact Information",
+      "difficulty": "easy",
+      "category": "faq"
+    },
+    ...
+  ]
+}
+
+KB CONTENT:
+see attached file
+
+OUTPUT:
+Generate up to 50 diverse Q&A pairs. Output valid JSON only.
