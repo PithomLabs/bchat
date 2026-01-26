@@ -10,6 +10,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/nlpodyssey/cybertron/pkg/tasks"
@@ -34,6 +37,7 @@ type EmbeddingConfig struct {
 	OpenRouterAPIKey string // For OpenRouter provider
 	LocalEndpoint    string // For local provider (default: http://localhost:8001/embed)
 	CybertronDir     string // For cybertron provider - models directory
+	CybertronWorkers int    // For cybertron provider - number of parallel workers (default: NumCPU)
 	BatchSize        int    // Max texts per batch (default: 32)
 }
 
@@ -46,13 +50,21 @@ func NewEmbeddingConfigFromEnv() *EmbeddingConfig {
 	switch provider {
 	case "openrouter":
 		model = getEnvOrDefault("EMBEDDING_MODEL", "openai/text-embedding-3-small")
-		dimension = 1536 // Default for text-embedding-3-small
+		dimension = getOpenRouterDimension(model)
 	case "cybertron":
 		model = getEnvOrDefault("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 		dimension = getCybertronDimension(model)
 	default:
 		model = getEnvOrDefault("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 		dimension = 384 // Default for MiniLM
+	}
+
+	// Parse CYBERTRON_WORKERS (default to NumCPU)
+	workers := runtime.NumCPU()
+	if envWorkers := os.Getenv("CYBERTRON_WORKERS"); envWorkers != "" {
+		if w, err := strconv.Atoi(envWorkers); err == nil && w > 0 {
+			workers = w
+		}
 	}
 
 	return &EmbeddingConfig{
@@ -62,6 +74,7 @@ func NewEmbeddingConfigFromEnv() *EmbeddingConfig {
 		OpenRouterAPIKey: os.Getenv("OPENROUTER_API_KEY"),
 		LocalEndpoint:    getEnvOrDefault("EMBEDDING_LOCAL_ENDPOINT", "http://localhost:8001/embed"),
 		CybertronDir:     getEnvOrDefault("CYBERTRON_MODELS_DIR", ""),
+		CybertronWorkers: workers,
 		BatchSize:        32,
 	}
 }
@@ -77,6 +90,27 @@ func getCybertronDimension(modelName string) int {
 		return 384
 	default:
 		return 384 // Default for unknown models
+	}
+}
+
+// getOpenRouterDimension returns the embedding dimension for known OpenRouter models.
+// Supports both OpenAI and sentence-transformers models available via OpenRouter.
+func getOpenRouterDimension(modelName string) int {
+	switch modelName {
+	// OpenAI models
+	case "openai/text-embedding-3-large":
+		return 3072
+	case "openai/text-embedding-ada-002", "openai/text-embedding-3-small":
+		return 1536
+	// Sentence-transformers models (same dimensions as Cybertron)
+	case "sentence-transformers/all-MiniLM-L6-v2",
+		"sentence-transformers/all-MiniLM-L12-v2",
+		"sentence-transformers/paraphrase-MiniLM-L6-v2":
+		return 384
+	case "sentence-transformers/all-mpnet-base-v2":
+		return 768
+	default:
+		return 1536 // Default to OpenAI dimension
 	}
 }
 
@@ -215,17 +249,10 @@ func NewOpenRouterEmbedding(config *EmbeddingConfig) (*OpenRouterEmbedding, erro
 		model = "openai/text-embedding-3-small"
 	}
 
-	// Set dimension based on model
+	// Set dimension based on model (supports OpenAI and sentence-transformers)
 	dimension := config.Dimension
 	if dimension == 0 {
-		switch model {
-		case "openai/text-embedding-3-large":
-			dimension = 3072
-		case "openai/text-embedding-ada-002":
-			dimension = 1536
-		default: // text-embedding-3-small
-			dimension = 1536
-		}
+		dimension = getOpenRouterDimension(model)
 	}
 
 	return &OpenRouterEmbedding{
@@ -406,6 +433,7 @@ type CybertronEmbedding struct {
 	modelName string
 	dimension int
 	modelsDir string
+	workers   int // Number of parallel workers for embedding generation
 }
 
 // NewCybertronEmbedding creates a new Cybertron embedding service.
@@ -430,10 +458,17 @@ func NewCybertronEmbedding(config *EmbeddingConfig) (*CybertronEmbedding, error)
 		dimension = config.Dimension
 	}
 
+	// Set number of workers (default to NumCPU)
+	workers := config.CybertronWorkers
+	if workers <= 0 {
+		workers = runtime.NumCPU()
+	}
+
 	slog.Info("Loading Cybertron embedding model",
 		"model", modelName,
 		"dimension", dimension,
 		"models_dir", modelsDir,
+		"workers", workers,
 	)
 
 	// Load model (downloads on first use)
@@ -457,18 +492,136 @@ func NewCybertronEmbedding(config *EmbeddingConfig) (*CybertronEmbedding, error)
 		modelName: modelName,
 		dimension: dimension,
 		modelsDir: modelsDir,
+		workers:   workers,
 	}, nil
 }
 
-// Embed generates embeddings using Cybertron.
+// cybertronJob represents a text to be embedded with its index.
+type cybertronJob struct {
+	index int
+	text  string
+}
+
+// cybertronResult represents an embedding result with its index.
+type cybertronResult struct {
+	index     int
+	embedding []float32
+	err       error
+}
+
+// Embed generates embeddings using Cybertron with parallel processing.
 func (e *CybertronEmbedding) Embed(ctx context.Context, texts []string) ([][]float32, error) {
 	if len(texts) == 0 {
 		return [][]float32{}, nil
 	}
 
-	// Cybertron models have a 512 token limit.
-	// Sentence-transformers use aggressive subword tokenization (~1.9 chars/token).
-	// For safety: 400 tokens * 1.9 chars = 760 chars. Using 750 for margin.
+	// For small batches, use sequential processing (less overhead)
+	if len(texts) <= e.workers || e.workers <= 1 {
+		return e.embedSequential(ctx, texts)
+	}
+
+	return e.embedParallel(ctx, texts)
+}
+
+// embedParallel processes texts concurrently using a worker pool.
+func (e *CybertronEmbedding) embedParallel(ctx context.Context, texts []string) ([][]float32, error) {
+	const maxChars = 750
+
+	numWorkers := e.workers
+	if numWorkers > len(texts) {
+		numWorkers = len(texts)
+	}
+
+	jobs := make(chan cybertronJob, len(texts))
+	results := make(chan cybertronResult, len(texts))
+
+	// Start workers
+	var wg sync.WaitGroup
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				// Check for context cancellation
+				select {
+				case <-ctx.Done():
+					results <- cybertronResult{index: job.index, err: ctx.Err()}
+					continue
+				default:
+				}
+
+				text := job.text
+				if len(text) > maxChars {
+					text = text[:maxChars]
+				}
+
+				// MeanPooling = 1
+				result, err := e.model.Encode(ctx, text, 1)
+				if err != nil {
+					results <- cybertronResult{index: job.index, err: fmt.Errorf("failed to encode text %d: %w", job.index, err)}
+					continue
+				}
+
+				// Convert to []float32
+				vector := result.Vector.Data().F64()
+				embedding := make([]float32, len(vector))
+				for j, v := range vector {
+					embedding[j] = float32(v)
+				}
+
+				results <- cybertronResult{index: job.index, embedding: embedding}
+			}
+		}()
+	}
+
+	// Send jobs
+	for i, text := range texts {
+		jobs <- cybertronJob{index: i, text: text}
+	}
+	close(jobs)
+
+	// Wait for workers to finish and close results channel
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect results
+	embeddings := make([][]float32, len(texts))
+	var firstErr error
+	completed := 0
+
+	for result := range results {
+		if result.err != nil && firstErr == nil {
+			firstErr = result.err
+		}
+		if result.embedding != nil {
+			embeddings[result.index] = result.embedding
+		}
+		completed++
+
+		// Log progress for large batches
+		if len(texts) > 50 && completed%50 == 0 {
+			slog.Debug("Cybertron parallel embedding progress",
+				"completed", completed,
+				"total", len(texts),
+				"workers", numWorkers)
+		}
+	}
+
+	if firstErr != nil {
+		return nil, firstErr
+	}
+
+	slog.Debug("Cybertron parallel embedding complete",
+		"total", len(texts),
+		"workers", numWorkers)
+
+	return embeddings, nil
+}
+
+// embedSequential processes texts one at a time (for small batches or single worker).
+func (e *CybertronEmbedding) embedSequential(ctx context.Context, texts []string) ([][]float32, error) {
 	const maxChars = 750
 
 	embeddings := make([][]float32, len(texts))

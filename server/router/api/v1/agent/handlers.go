@@ -1007,7 +1007,7 @@ func (h *Handler) importFiles(ctx context.Context, tenantID int32, audienceType,
 	}
 
 	// Index content for RAG pipeline
-	if err := h.indexContentForRAG(ctx, tenantID, audienceType, parsedKB, parsedPolicy); err != nil {
+	if err := h.indexContentForRAG(ctx, tenantID, audienceType, parsedKB, parsedPolicy, kbContent, policyContent); err != nil {
 		slog.Warn("Failed to index content for RAG", "error", err, "tenantID", tenantID, "audience", audienceType)
 		// Don't fail the import if indexing fails - RAG is an enhancement
 	}
@@ -1021,7 +1021,8 @@ func (h *Handler) importFiles(ctx context.Context, tenantID int32, audienceType,
 }
 
 // indexContentForRAG indexes parsed KB and Policy content into the vector database.
-func (h *Handler) indexContentForRAG(ctx context.Context, tenantID int32, audienceType string, kb *ParsedKB, policy *ParsedPolicy) error {
+// Falls back to heading-based chunking when no annotations are found in the raw content.
+func (h *Handler) indexContentForRAG(ctx context.Context, tenantID int32, audienceType string, kb *ParsedKB, policy *ParsedPolicy, rawKBContent, rawPolicyContent string) error {
 	chunker := h.service.chunker
 	vectorDB := h.service.vectorDB
 
@@ -1034,16 +1035,52 @@ func (h *Handler) indexContentForRAG(ctx context.Context, tenantID int32, audien
 		return fmt.Errorf("failed to delete existing chunks: %w", err)
 	}
 
-	// Chunk KB content
+	// Helper function to check if ParsedKB has any content
+	hasKBContent := func(k *ParsedKB) bool {
+		return k != nil && (len(k.Services) > 0 || len(k.FAQs) > 0 ||
+			len(k.Safety) > 0 || len(k.Sections) > 0 ||
+			len(k.Exclusions) > 0 || len(k.Coverage) > 0)
+	}
+
+	// Helper function to check if ParsedPolicy has any content
+	hasPolicyContent := func(p *ParsedPolicy) bool {
+		return p != nil && (len(p.Rules) > 0 || len(p.Intents) > 0)
+	}
+
+	// Get embedding provider for chunk size calculation
+	embeddingProvider := ""
+	if h.service.vectorDBConfig != nil && h.service.vectorDBConfig.EmbeddingConfig != nil {
+		embeddingProvider = h.service.vectorDBConfig.EmbeddingConfig.Provider
+	}
+	maxChunkTokens := GetMaxChunkTokens(embeddingProvider)
+
 	var allChunks []DocumentChunk
-	if kb != nil {
+
+	// Chunk KB content
+	if kb != nil && hasKBContent(kb) {
+		// Use structured annotation-based chunking
 		kbChunks := chunker.ChunkKBContent(kb, tenantID, audienceType, 1)
+		allChunks = append(allChunks, kbChunks...)
+	} else if rawKBContent != "" {
+		// Fallback: chunk raw markdown content when no annotations found
+		slog.Info("No KB annotations found, using markdown-based chunking",
+			"tenantID", tenantID,
+			"audience", audienceType)
+		kbChunks := chunker.ChunkMarkdownContent(rawKBContent, tenantID, audienceType, "kb", 1, maxChunkTokens)
 		allChunks = append(allChunks, kbChunks...)
 	}
 
 	// Chunk Policy content
-	if policy != nil {
+	if policy != nil && hasPolicyContent(policy) {
+		// Use structured annotation-based chunking
 		policyChunks := chunker.ChunkPolicyContent(policy, tenantID, audienceType, 1)
+		allChunks = append(allChunks, policyChunks...)
+	} else if rawPolicyContent != "" {
+		// Fallback: chunk raw markdown content when no annotations found
+		slog.Info("No Policy annotations found, using markdown-based chunking",
+			"tenantID", tenantID,
+			"audience", audienceType)
+		policyChunks := chunker.ChunkMarkdownContent(rawPolicyContent, tenantID, audienceType, "policy", 1, maxChunkTokens)
 		allChunks = append(allChunks, policyChunks...)
 	}
 

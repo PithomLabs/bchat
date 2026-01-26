@@ -98,7 +98,7 @@ tasks:
     desc: Run compiled binary with RAG enabled (local storage, OpenRouter embeddings)
     deps: [build:backend:rag]
     cmds:
-      - RAG_PIPELINE_ENABLED=true EMBEDDING_PROVIDER=openrouter LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
+      - RAG_PIPELINE_ENABLED=true EMBEDDING_PROVIDER=openrouter EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
 
   run:rag:mock:
     desc: Run compiled binary with RAG enabled (local storage, mock embeddings)

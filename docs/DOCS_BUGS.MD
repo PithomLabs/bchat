@@ -109,5 +109,133 @@ When supporting multiple embedding providers with different dimensions:
 
 ---
 
-*Document Version: 1.0*
+## BUG-002: LanceDB Empty Vector Index Creation
+
+**Status:** Resolved
+**Date:** 2026-01-27
+**Related Documents:**
+- [DOCS_LANCE_EMBEDDING.MD](./DOCS_LANCE_EMBEDDING.MD) - Adapted embedding techniques
+- [DOCS_LANCEDB.MD](./DOCS_LANCEDB.MD) - LanceDB implementation plan
+
+### Error
+
+```
+WARN Failed to create vector index error="failed to create index: lance error: Not supported:
+Creating empty vector indices with train=False is not yet implemented.
+Index 'idx_embedding' for column 'embedding' cannot be created without training."
+```
+
+### Root Cause
+
+1. IVF-PQ (Inverted File with Product Quantization) indexes require **training data**
+2. The algorithm needs actual vectors to:
+   - Learn cluster centroids (IVF part)
+   - Build product quantization codebook (PQ part)
+3. bchat was creating indexes immediately after table creation (when table is empty)
+4. LanceDB cannot create IVF-PQ index on empty table (`train=False` not implemented)
+
+### Previous Behavior
+
+```go
+// In ensureTable() - Created indexes on EMPTY table
+table, err := db.conn.CreateTable(ctx, lanceTableName, schema)
+// ...
+if err := db.createIndexes(ctx); err != nil {
+    slog.Warn("Failed to create indexes", "error", err)
+}
+```
+
+### Solution: Deferred Index Creation
+
+**Strategy:**
+1. Skip IVF-PQ vector index creation in `createIndexes()` (only create BTree and FTS indexes)
+2. Defer vector index creation to first `Insert()` operation via new `ensureVectorIndex()` method
+3. Track index state with `hasVectorIndex` field to avoid redundant creation attempts
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `server/router/api/v1/agent/vectordb_lance.go` | Added `hasVectorIndex` field, modified `createIndexes()`, added `ensureVectorIndex()`, call from `Insert()` |
+
+### Code Changes
+
+**1. Added state tracking:**
+```go
+type LanceVectorDB struct {
+    // ...existing fields...
+    hasVectorIndex bool // Track if IVF-PQ index has been created
+}
+```
+
+**2. Modified createIndexes() - Skip IVF-PQ:**
+```go
+func (db *LanceVectorDB) createIndexes(ctx context.Context) error {
+    // Skip IVF-PQ vector index on empty table - requires training data
+    // Will be created on first Insert() via ensureVectorIndex()
+
+    // BTree and FTS indexes work on empty tables
+    // ...
+}
+```
+
+**3. Added ensureVectorIndex():**
+```go
+func (db *LanceVectorDB) ensureVectorIndex(ctx context.Context) error {
+    if db.hasVectorIndex {
+        return nil
+    }
+
+    if err := db.table.CreateIndexWithName(ctx, []string{"embedding"},
+        contracts.IndexTypeIvfPq, "idx_embedding"); err != nil {
+        if strings.Contains(err.Error(), "already exists") {
+            db.hasVectorIndex = true
+            return nil
+        }
+        return fmt.Errorf("failed to create vector index: %w", err)
+    }
+
+    db.hasVectorIndex = true
+    slog.Info("Created IVF-PQ vector index", "table", lanceTableName)
+    return nil
+}
+```
+
+**4. Called from Insert():**
+```go
+func (db *LanceVectorDB) Insert(ctx context.Context, chunks []DocumentChunk) error {
+    // ...add data to table...
+
+    // Create IVF-PQ vector index now that we have data
+    if err := db.ensureVectorIndex(ctx); err != nil {
+        slog.Warn("Failed to create vector index after insert", "error", err)
+    }
+}
+```
+
+### Verification
+
+1. Delete existing LanceDB data: `rm -rf build/data/lancedb/`
+2. Start server: `task run:rag:cybertron`
+3. Check logs - should NOT see "Failed to create vector index" warning on startup
+4. Upload KB content and click "Rebuild Index"
+5. Check logs - should see "Created IVF-PQ vector index" after insert
+6. Verify search works correctly
+
+### Behavior After Fix
+
+1. Table creation no longer attempts IVF-PQ index (no warning)
+2. BTree and FTS indexes created on empty table (still work)
+3. First `Insert()` operation creates IVF-PQ index after data is added
+4. Subsequent inserts skip index creation (already exists)
+5. Table recreation (dimension mismatch) resets `hasVectorIndex` flag
+
+### Key Lesson
+
+IVF-PQ indexes are **trained** indexes - they learn cluster centroids and codebooks from actual data. Unlike BTree or FTS indexes, they cannot be created on empty tables. Defer creation to first data insertion.
+
+---
+
+*Document Version: 1.1*
 *Created: 2026-01-26*
+*Updated: 2026-01-27*

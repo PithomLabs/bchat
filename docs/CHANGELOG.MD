@@ -4,6 +4,92 @@ All notable changes to the bchat AI Agent System are documented in this file.
 
 ---
 
+## 2026-01-27
+
+### Added
+- **Fallback Markdown Chunking** - Automatic chunking for unannotated KB content
+  - When KB.MD has no `<!-- @section -->` annotations, uses `ChunkMarkdownContent()`
+  - Splits by H2 → H3 → paragraphs → sentences (hierarchical fallback)
+  - Enables RAG for plain markdown files without manual annotation
+  - Logs: `No KB annotations found, using markdown-based chunking`
+
+- **Parallel Cybertron Embeddings** - Multi-core CPU acceleration for embeddings
+  - Worker pool pattern with configurable number of goroutines
+  - `CYBERTRON_WORKERS` env var (defaults to `runtime.NumCPU()`)
+  - 4-8x speedup on multi-core CPUs
+  - Smart routing: parallel for large batches, sequential for small ones
+
+- **OpenRouter sentence-transformers Support** - GPU-accelerated MiniLM embeddings
+  - `EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2` via OpenRouter
+  - Same 384 dimensions as Cybertron - seamless provider switching
+  - No reindexing needed when switching between Cybertron and OpenRouter
+  - Added `getOpenRouterDimension()` helper for model dimension detection
+
+- **DOCS_LANCEDB_CHATGPT.MD** - lanceEmbeddings vs bchat comparison analysis
+  - Architecture comparison (Python vs Go)
+  - Chunking strategy analysis
+  - Adaptable techniques identification
+  - Root cause analysis for unannotated KB query failures
+
+- **DOCS_LANCE_EMBEDDING.MD** - Adapted lanceEmbeddings techniques
+  - Fallback chunking implementation details
+  - Heading-based splitting algorithm
+  - Combined title+content embedding
+  - Recommendations for encoding resilience, data inspection, progress streaming
+
+- **DOCS_PROMPT.MD** - System prompt guide for KB formatting
+  - How `ChunkMarkdownContent()` algorithm works
+  - Optimal markdown structure for RAG
+  - Ready-to-use LLM prompts for formatting raw content
+  - Token limits by embedding provider
+  - Before/after transformation examples
+
+- **DOCS_CYBERTRON_PARALLEL.MD** - Parallel embedding implementation plan
+  - Worker pool architecture diagram
+  - Expected speedup calculations
+  - Thread safety considerations
+
+- **DOCS_CHANGES.MD** - Timestamped changes tracking document
+  - Records implementation changes with timestamps
+  - Includes problem, solution, and verification for each change
+
+### Fixed
+- **BUG-002: Empty Vector Index Creation** - Fixed IVF-PQ index error on empty tables
+  - Error: `Creating empty vector indices with train=False is not yet implemented`
+  - Root cause: IVF-PQ indexes require training data
+  - Solution: Deferred index creation to first `Insert()` operation
+  - Added `hasVectorIndex` tracking and `ensureVectorIndex()` method
+  - BTree and FTS indexes still created immediately (work on empty tables)
+
+- **Schema-Based Dimension Detection** - Fixed dimension mismatch on empty tables
+  - Previous: Queried data to detect dimensions (failed on empty tables)
+  - Now: Queries table schema via `db.table.Schema()` (works always)
+  - Extracts dimension from `arrow.FixedSizeListType` field
+  - Auto-recreates table when dimension mismatch detected
+
+### Changed
+- **embedding.go** - Added parallel processing and OpenRouter model support
+  - New imports: `runtime`, `strconv`, `sync`
+  - Added `CybertronWorkers` to `EmbeddingConfig`
+  - Added `workers` field to `CybertronEmbedding`
+  - New methods: `embedParallel()`, `embedSequential()`
+  - New helper: `getOpenRouterDimension()` for model dimension mapping
+
+- **vectordb_lance.go** - Improved index and schema handling
+  - `createIndexes()` now skips IVF-PQ (deferred to insert)
+  - Added `ensureVectorIndex()` for lazy index creation
+  - Rewrote `getTableEmbeddingDimension()` to use schema instead of data
+  - Added `hasVectorIndex` field to track index state
+
+- **handlers.go** - Added fallback chunking support
+  - `indexContentForRAG()` now accepts raw content parameters
+  - Added `hasKBContent()` and `hasPolicyContent()` helpers
+  - Falls back to `ChunkMarkdownContent()` when no annotations found
+
+- **DOCS_BUGS.MD** - Added BUG-002 documentation
+
+---
+
 ## 2026-01-26
 
 ### Added

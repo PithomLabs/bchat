@@ -26,11 +26,12 @@ const (
 
 // LanceVectorDB is a LanceDB-backed implementation of VectorDB.
 type LanceVectorDB struct {
-	conn     contracts.IConnection
-	table    contracts.ITable
-	embedSvc EmbeddingService
-	config   *VectorDBConfig
-	mu       sync.RWMutex
+	conn           contracts.IConnection
+	table          contracts.ITable
+	embedSvc       EmbeddingService
+	config         *VectorDBConfig
+	mu             sync.RWMutex
+	hasVectorIndex bool // Track if IVF-PQ index has been created (requires data)
 }
 
 // newLanceVectorDB creates a new LanceDB-backed vector database.
@@ -175,13 +176,13 @@ func (db *LanceVectorDB) buildSchema() (contracts.ISchema, error) {
 }
 
 // createIndexes creates necessary indexes on the table.
+// Note: IVF-PQ vector index is NOT created here because it requires training data.
+// The vector index is created lazily in ensureVectorIndex() after first Insert().
 func (db *LanceVectorDB) createIndexes(ctx context.Context) error {
-	// Create vector index for similarity search
-	if err := db.table.CreateIndexWithName(ctx, []string{"embedding"}, contracts.IndexTypeIvfPq, "idx_embedding"); err != nil {
-		slog.Warn("Failed to create vector index", "error", err)
-	}
+	// Skip IVF-PQ vector index on empty table - requires training data
+	// Will be created on first Insert() via ensureVectorIndex()
 
-	// Create BTree index for tenant filtering
+	// Create BTree index for tenant filtering - works on empty tables
 	if err := db.table.CreateIndexWithName(ctx, []string{"tenant_id"}, contracts.IndexTypeBTree, "idx_tenant"); err != nil {
 		slog.Warn("Failed to create tenant index", "error", err)
 	}
@@ -200,35 +201,54 @@ func (db *LanceVectorDB) createIndexes(ctx context.Context) error {
 	return nil
 }
 
-// getTableEmbeddingDimension returns the embedding dimension of the existing table.
+// ensureVectorIndex creates the IVF-PQ vector index if it doesn't exist.
+// This must be called AFTER data has been inserted, as IVF-PQ requires training data.
+func (db *LanceVectorDB) ensureVectorIndex(ctx context.Context) error {
+	if db.hasVectorIndex {
+		return nil
+	}
+
+	// Create IVF-PQ vector index now that we have data for training
+	if err := db.table.CreateIndexWithName(ctx, []string{"embedding"}, contracts.IndexTypeIvfPq, "idx_embedding"); err != nil {
+		// Check if index already exists (not an error)
+		if strings.Contains(err.Error(), "already exists") {
+			db.hasVectorIndex = true
+			return nil
+		}
+		return fmt.Errorf("failed to create vector index: %w", err)
+	}
+
+	db.hasVectorIndex = true
+	slog.Info("Created IVF-PQ vector index", "table", lanceTableName)
+	return nil
+}
+
+// getTableEmbeddingDimension returns the embedding dimension from the table schema.
 // Returns 0 if unable to determine (table doesn't exist or error).
 func (db *LanceVectorDB) getTableEmbeddingDimension(ctx context.Context) int {
 	if db.table == nil {
 		return 0
 	}
 
-	// Query one record to check embedding dimension
-	results, err := db.table.SelectWithLimit(ctx, 1, 0)
+	// Get schema from table (works even if table is empty)
+	schema, err := db.table.Schema(ctx)
 	if err != nil {
-		slog.Debug("Could not query table for dimension check", "error", err)
+		slog.Debug("Could not get table schema for dimension check", "error", err)
 		return 0
 	}
 
-	if len(results) == 0 {
-		// Table exists but is empty - no schema conflict possible
-		return 0
-	}
-
-	// Extract embedding dimension from the result
-	if row := results[0]; row != nil {
-		if embedding, ok := row["embedding"].([]float32); ok {
-			return len(embedding)
-		}
-		if embedding, ok := row["embedding"].([]interface{}); ok {
-			return len(embedding)
+	// Find the embedding field and extract dimension from fixed_size_list type
+	for i := 0; i < schema.NumFields(); i++ {
+		field := schema.Field(i)
+		if field.Name == "embedding" {
+			// embedding is a fixed_size_list type, extract the size
+			if listType, ok := field.Type.(*arrow.FixedSizeListType); ok {
+				return int(listType.Len())
+			}
 		}
 	}
 
+	slog.Debug("Could not find embedding field in schema")
 	return 0
 }
 
@@ -261,7 +281,10 @@ func (db *LanceVectorDB) dropAndRecreateTable(ctx context.Context) error {
 	}
 	db.table = table
 
-	// Recreate indexes
+	// Reset vector index flag - new table is empty, index will be created on first Insert()
+	db.hasVectorIndex = false
+
+	// Recreate BTree and FTS indexes (IVF-PQ vector index deferred to first Insert)
 	if err := db.createIndexes(ctx); err != nil {
 		slog.Warn("Failed to create indexes on new table", "error", err)
 	}
@@ -329,6 +352,13 @@ func (db *LanceVectorDB) Insert(ctx context.Context, chunks []DocumentChunk) err
 	// Add to table
 	if err := db.table.Add(ctx, record, nil); err != nil {
 		return fmt.Errorf("failed to add records to LanceDB: %w", err)
+	}
+
+	// Create IVF-PQ vector index now that we have data
+	// This is deferred from table creation because IVF-PQ requires training data
+	if err := db.ensureVectorIndex(ctx); err != nil {
+		slog.Warn("Failed to create vector index after insert", "error", err)
+		// Non-fatal: search will still work, just slower without index
 	}
 
 	slog.Debug("Inserted chunks into LanceDB", "count", len(chunks))

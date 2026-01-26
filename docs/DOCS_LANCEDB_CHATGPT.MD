@@ -489,3 +489,296 @@ The lanceEmbeddings codebase, while simpler, offers valuable patterns for data p
 | `server/router/api/v1/agent/embedding.go` | Multi-provider embedding service |
 | `server/router/api/v1/agent/chunker.go` | Document chunking logic |
 | `server/router/api/v1/agent/service.go` | RAG integration in chat service |
+
+---
+
+# ADDENDUM: Why Concatenated KB.MD Files Don't Query Well
+
+**Date:** 2026-01-27
+**Context:** User concatenated a folder of MD files into a single KB.MD and uploaded to bchat, but queries don't return expected results.
+
+---
+
+## A1. Root Cause: Missing Annotations
+
+bchat's KB parser **requires HTML comment annotations** to index content. When you concatenate plain MD files without adding these annotations, the content is **silently discarded**.
+
+### The Parser Flow
+
+**Location:** `parser.go:62-133`
+
+```go
+// extractAnnotationBlocks only finds HTML comment annotations
+annotationPattern := regexp.MustCompile(`<!--\s*@(\w+)(?::\s*([^>]*))?\s*-->`)
+matches := annotationPattern.FindAllStringSubmatchIndex(content, -1)
+```
+
+**What happens with your concatenated KB.MD:**
+```
+Concatenated KB.MD (no annotations)
+    ↓
+ParseKB() → extractAnnotationBlocks() finds ZERO matches
+    ↓
+Returns empty ParsedKB{Services: [], FAQs: [], Sections: []}
+    ↓
+ChunkKBContent() → Creates ZERO chunks from empty arrays
+    ↓
+vectorDB.Insert() → Inserts NOTHING
+    ↓
+Query → No results (nothing was indexed)
+```
+
+### Required Annotation Format
+
+bchat expects content wrapped in HTML comments like:
+```markdown
+<!-- @section: code="INTRO", type="general" -->
+# Introduction
+This is the introduction content...
+
+<!-- @section: code="SETUP", type="general" -->
+# Setup Guide
+This is the setup content...
+
+<!-- @faq: code="Q1" -->
+**Q: How do I install?**
+A: Run npm install...
+
+<!-- @service: code="SUPPORT", emergency: false -->
+# Support Service
+We provide 24/7 support...
+```
+
+**Without these annotations, the parser literally skips all content.**
+
+---
+
+## A2. Secondary Issue: Aggressive Token Limits
+
+Even IF content was indexed, Cybertron embedding has severe limits:
+
+| Provider | Max Chunk | Issue |
+|----------|-----------|-------|
+| **Cybertron** | 150 tokens (~600 chars) | Fragments content badly |
+| **OpenRouter** | 2000 tokens | Much better coherence |
+
+**Location:** `embedding.go:469-484`
+```go
+const maxChars = 750
+if len(text) > maxChars {
+    text = text[:maxChars]  // HARD TRUNCATION
+}
+```
+
+A concatenated KB with thousands of words gets split into tiny fragments, losing semantic coherence.
+
+---
+
+## A3. Would lanceEmbeddings Techniques Help?
+
+### YES - Here's What Would Help:
+
+| Technique | How It Helps Your Concatenated KB |
+|-----------|-----------------------------------|
+| **No annotation requirement** | lanceEmbeddings embeds ANY text as-is |
+| **Full document/section embedding** | Preserves semantic coherence |
+| **Heading-based splitting** | Splits by `##` headers naturally |
+| **Combined title+content** | Richer embeddings for retrieval |
+| **DuckDB inspection** | Verify what actually got indexed |
+
+### What lanceEmbeddings Does Differently:
+
+```python
+# lanceEmbeddings approach - NO ANNOTATIONS NEEDED
+combined = f"{title} {subtitle} {blog_text}".strip()
+embedding = model.encode(combined)  # Embeds the whole thing
+```
+
+vs bchat:
+```go
+// bchat approach - REQUIRES ANNOTATIONS
+blocks := extractAnnotationBlocks(content)  // Returns [] if no annotations
+for _, block := range blocks {              // Loop never executes
+    // Content never processed
+}
+```
+
+---
+
+## A4. Three Solutions for Your Concatenated KB.MD
+
+### Solution 1: Add Annotations to Your KB.MD (QUICKEST FIX)
+
+Transform your concatenated file by adding `<!-- @section -->` wrappers:
+
+**Before (doesn't work):**
+```markdown
+# Authentication Guide
+This explains how to authenticate...
+
+# API Reference
+The API endpoints are...
+```
+
+**After (works):**
+```markdown
+<!-- @section: code="AUTH", type="general" -->
+# Authentication Guide
+This explains how to authenticate...
+
+<!-- @section: code="API", type="general" -->
+# API Reference
+The API endpoints are...
+```
+
+**Script to auto-add annotations:**
+```python
+import re
+
+def add_section_annotations(content: str) -> str:
+    """Add @section annotations before each H1/H2 header."""
+    lines = content.split('\n')
+    result = []
+    section_num = 0
+
+    for line in lines:
+        # Match H1 or H2 headers
+        if re.match(r'^#{1,2}\s+', line):
+            section_num += 1
+            # Extract header text for code
+            header_text = re.sub(r'^#+\s+', '', line)
+            code = re.sub(r'[^a-zA-Z0-9]', '_', header_text.upper())[:20]
+            result.append(f'\n<!-- @section: code="{code}_{section_num}", type="general" -->')
+        result.append(line)
+
+    return '\n'.join(result)
+
+# Usage:
+with open('KB.MD', 'r') as f:
+    content = f.read()
+annotated = add_section_annotations(content)
+with open('KB_ANNOTATED.MD', 'w') as f:
+    f.write(annotated)
+```
+
+### Solution 2: Modify bchat to Use Generic Chunking (CODE CHANGE)
+
+bchat has `ChunkMarkdownContent()` that handles unannotated markdown, but it's not used during upload.
+
+**Change in `handlers.go` (around line 1040):**
+
+```go
+// BEFORE: Only chunks parsed KB (empty if no annotations)
+if kb != nil {
+    kbChunks := chunker.ChunkKBContent(kb, tenantID, audienceType, 1)
+    allChunks = append(allChunks, kbChunks...)
+}
+
+// AFTER: Fall back to generic chunking if parsed KB is empty
+if kb != nil {
+    kbChunks := chunker.ChunkKBContent(kb, tenantID, audienceType, 1)
+    if len(kbChunks) == 0 && len(rawContent) > 0 {
+        // No annotations found, use heading-based chunking
+        slog.Info("no annotations found, using generic markdown chunking")
+        kbChunks = chunker.ChunkMarkdownContent(
+            rawContent, tenantID, audienceType, "kb", 1,
+            chunker.GetMaxChunkTokens(embeddingProvider))
+    }
+    allChunks = append(allChunks, kbChunks...)
+}
+```
+
+### Solution 3: Use lanceEmbeddings-Style Tool Alongside bchat
+
+Create a standalone query tool for your concatenated MD:
+
+```python
+# kb_query.py - Query concatenated KB without annotations
+
+import lancedb
+from sentence_transformers import SentenceTransformer
+import re
+
+def chunk_by_headers(content: str) -> list[dict]:
+    """Split markdown by H2 headers."""
+    sections = re.split(r'\n(?=## )', content)
+    chunks = []
+    for i, section in enumerate(sections):
+        if not section.strip():
+            continue
+        # Extract title from first line
+        lines = section.strip().split('\n')
+        title = lines[0].lstrip('#').strip() if lines else f"Section {i}"
+        chunks.append({
+            "id": f"section_{i}",
+            "title": title,
+            "content": section.strip()
+        })
+    return chunks
+
+def index_kb(kb_path: str, db_path: str = "kb_index.lance"):
+    """Index a concatenated KB.MD file."""
+    model = SentenceTransformer('all-MiniLM-L6-v2')
+
+    with open(kb_path, 'r', encoding='utf-8', errors='replace') as f:
+        content = f.read()
+
+    chunks = chunk_by_headers(content)
+
+    for chunk in chunks:
+        # Combine title + content for richer embedding
+        combined = f"{chunk['title']}\n\n{chunk['content']}"
+        chunk['embedding'] = model.encode(combined).tolist()
+
+    db = lancedb.connect(db_path)
+    table = db.create_table("kb", chunks, mode="overwrite")
+    print(f"Indexed {len(chunks)} sections from KB")
+    return table
+
+def query_kb(query: str, db_path: str = "kb_index.lance", top_k: int = 5):
+    """Query the indexed KB."""
+    model = SentenceTransformer('all-MiniLM-L6-v2')
+    embedding = model.encode(query).tolist()
+
+    db = lancedb.connect(db_path)
+    table = db.open_table("kb")
+
+    results = table.search(embedding).limit(top_k).to_pandas()
+    return results
+
+# Usage:
+# index_kb("KB.MD")
+# results = query_kb("How do I authenticate?")
+# print(results[['title', 'content', '_distance']])
+```
+
+---
+
+## A5. Comparison of Solutions
+
+| Solution | Effort | Works With bchat | Preserves Semantics |
+|----------|--------|------------------|---------------------|
+| **Add annotations** | 30 min | Yes | Depends on chunk size |
+| **Modify bchat code** | 2-4 hours | Yes | Better (uses heading chunking) |
+| **Standalone tool** | 1-2 hours | Separate | Best (full section embedding) |
+
+---
+
+## A6. Recommended Approach
+
+**Immediate fix:** Use Solution 1 (add annotations) - quickest path to working queries.
+
+**Better long-term:** Use Solution 2 (modify bchat) - makes bchat handle generic markdown gracefully.
+
+**Best for your specific use case:** If you just need to query MD files and don't need bchat's chat agent features, Solution 3 (standalone tool) using lanceEmbeddings patterns gives the cleanest results.
+
+---
+
+## A7. Key lanceEmbeddings Techniques That Apply
+
+1. **No annotation requirement** - Embed content as-is
+2. **Header-based splitting** - Split by `##` instead of requiring `<!-- @section -->`
+3. **Combined title+content embedding** - `f"{title}\n\n{content}"` for richer vectors
+4. **Larger chunk sizes** - Full sections instead of 150-token fragments
+5. **Direct vector search** - No intent classification needed for knowledge queries
+6. **Encoding fallback** - `errors='replace'` handles encoding issues gracefully

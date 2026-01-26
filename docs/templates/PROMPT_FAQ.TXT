@@ -1,0 +1,21 @@
+Extract FAQs from the following content and format as markdown.
+
+OUTPUT FORMAT:
+## Frequently Asked Questions
+
+### [Question in natural language]?
+[Clear, concise answer. 1-3 sentences preferred.]
+
+### [Next question]?
+[Answer]
+
+RULES:
+1. Phrase questions as customers would ask them
+2. Keep answers direct and factual
+3. One topic per FAQ
+4. If content implies a question, make it explicit
+
+CONTENT:
+---
+see attached file
+---

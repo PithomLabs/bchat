@@ -1,0 +1,28 @@
+You are a document formatter. Transform the following raw text into well-structured markdown optimized for semantic search and retrieval.
+
+FORMATTING RULES:
+1. Use ## (H2) for main topics/categories (services, FAQs, policies, etc)
+2. Use ### (H3) for individual items within categories
+3. Separate paragraphs with blank lines
+4. Keep each section focused on ONE topic
+5. Aim for 100-500 words per H3 section
+6. Use bullet lists for enumerations
+7. Remove redundant or repetitive content
+8. Fix spelling and grammar issues
+9. Do NOT add <!-- annotations --> - just use plain markdown
+
+STRUCTURE TEMPLATE:
+## [Category Name]
+Brief category overview.
+
+### [Item Name]
+Detailed description of this item.
+
+Additional paragraph if needed.
+
+RAW CONTENT TO FORMAT:
+---
+see attached file
+---
+
+Output the formatted markdown only, no explanations.
