@@ -4,6 +4,71 @@ All notable changes to the bchat AI Agent System are documented in this file.
 
 ---
 
+## 2026-01-26
+
+### Added
+- **Cybertron Embedding Provider** - Native Go embedding service using nlpodyssey/cybertron
+  - Zero external dependencies (no Python, no API calls)
+  - Supports `sentence-transformers/all-MiniLM-L6-v2` (384 dim) and `all-mpnet-base-v2` (768 dim)
+  - Auto-downloads models on first use to `~/.cybertron/models/`
+  - Configured via `EMBEDDING_PROVIDER=cybertron`
+
+- **Provider-Adaptive Chunk Sizing** - Automatic chunk size based on embedding provider
+  - `GetMaxChunkTokens(provider)` returns optimal chunk size per provider
+  - OpenRouter: 2000 tokens (8191 token limit)
+  - Cybertron: 150 tokens (512 token limit with aggressive subword tokenization)
+  - Prevents "sequence too long" errors across all providers
+
+- **LanceDB Dimension Mismatch Auto-Fix** - Automatic table recreation on provider switch
+  - Detects embedding dimension mismatch before insert
+  - Auto-drops and recreates table with correct schema
+  - Logs warning: `Embedding dimension mismatch detected, recreating table`
+  - No manual intervention required when switching providers
+
+- **Taskfile Command** - `task run:rag:cybertron` for offline RAG testing
+  - Runs with Cybertron embeddings (no API key needed)
+  - Sets `EMBEDDING_PROVIDER=cybertron` automatically
+
+- **DOCS_CYBERTRON.MD** - Cybertron embedding implementation guide
+  - Model specifications and limitations
+  - Configuration options
+  - Troubleshooting guide
+
+- **DOCS_CYBERTRON_DEBUG.MD** - Sequence length error debugging documentation
+  - Root cause analysis of 512 token limit issues
+  - Three-layer fix (reduced MaxChunkTokens, sentence splitting, truncation safety)
+  - Token estimation lessons (subword tokenization ~1.9-2.5 chars/token)
+  - Provider-adaptive chunking solution
+
+- **DOCS_RAG_ALTERNATIVES.MD** - RAG processing alternatives comparison
+  - Provider comparison (OpenRouter vs Cybertron)
+  - Chunk size by provider reference table
+  - Pre-summarization alternatives (NotebookLM, API, Ollama)
+  - Offline fallback strategy
+
+- **DOCS_BUGS.MD** - Bug documentation file
+  - BUG-001: LanceDB embedding dimension mismatch
+
+### Fixed
+- **Cybertron Sequence Length Errors** - Multiple iterations to fix "input sequence too long" errors
+  - Reduced `MaxChunkTokens` from 800 → 400 → 250 → 150
+  - Reduced `maxChars` truncation safety from 1800 → 1000 → 750
+  - Added `splitBySentences()` for large paragraphs without `\n\n` breaks
+  - Key insight: Subword tokenization is 40-60% more aggressive than `len/4` estimate
+
+- **LanceDB Schema Mismatch** - Fixed "Append with different schema" error
+  - Error occurred when switching from Cybertron (384 dim) to OpenRouter (1536 dim)
+  - Added `getTableEmbeddingDimension()` to detect existing schema
+  - Added `dropAndRecreateTable()` for automatic schema migration
+
+### Changed
+- **chunker.go** - Now accepts `maxTokens` parameter for provider-adaptive chunking
+- **embedding.go** - Added 750 char truncation safety net for Cybertron
+- **service.go** - Uses `GetMaxChunkTokens(embeddingProvider)` for chunk sizing
+- **vectordb_lance.go** - Added dimension mismatch detection and auto-recreation
+
+---
+
 ## 2026-01-23
 
 ### Removed

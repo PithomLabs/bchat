@@ -39,6 +39,7 @@ git tag -a v0.5.9 -m "rag stats"
 git tag -a v0.5.10 -m "parse MD files"
 git tag -a v0.5.11 -m "rag reindex"
 git tag -a v0.5.12 -m "updated docs"
+git tag -a v0.5.13 -m "cybertron"
 git push origin --tags
 ```
 
