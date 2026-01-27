@@ -474,23 +474,20 @@ func buildIntentContent(intent *store.AgentIntent) string {
 const (
 	DefaultTokenThreshold = 30000 // Threshold for switching to RAG mode
 	MinChunkTokens        = 30    // Minimum tokens per chunk
-	MaxChunkTokens        = 150   // Default max tokens (for Cybertron/local)
+	MaxChunkTokens        = 150   // Default max tokens (for local)
 	ChunkOverlapTokens    = 15    // Overlap between chunks
 )
 
 // GetMaxChunkTokens returns the maximum chunk size based on embedding provider.
 // Different providers have different token limits:
 // - OpenRouter (text-embedding-3-small): 8191 tokens - can use large chunks
-// - Cybertron (sentence-transformers): 512 tokens - needs small chunks
 // - Local (sentence-transformers): 512 tokens - needs small chunks
 func GetMaxChunkTokens(embeddingProvider string) int {
 	switch embeddingProvider {
 	case "openrouter":
 		return 2000 // text-embedding-3-small supports 8191 tokens, use 2000 for safety
-	case "cybertron":
-		return 150 // 512 token limit with aggressive subword tokenization
 	case "local":
-		return 150 // Same model family as Cybertron
+		return 150 // 512 token limit with aggressive subword tokenization
 	case "mock":
 		return 500 // Mock doesn't have real limits
 	default:
@@ -503,7 +500,7 @@ func GetMinChunkTokens(embeddingProvider string) int {
 	switch embeddingProvider {
 	case "openrouter":
 		return 100 // Larger min for larger chunks
-	case "cybertron", "local":
+	case "local":
 		return 30 // Small min for small chunks
 	default:
 		return 50

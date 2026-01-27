@@ -4,7 +4,6 @@
 **Date:** 2026-01-26
 **Related Documents:**
 - [DOCS_LANCEDB.MD](./DOCS_LANCEDB.MD) - RAG implementation overview
-- [DOCS_CYBERTRON.MD](./DOCS_CYBERTRON.MD) - Cybertron native Go embeddings
 - [DOCS_ENV_VAR.MD](./DOCS_ENV_VAR.MD) - Environment variables reference
 
 ---
@@ -160,17 +159,15 @@ Key points:
 | `LANCEDB_S3_ENDPOINT` | `fly.storage.tigris.dev` | S3 endpoint for Tigrisdata |
 | `LANCEDB_S3_REGION` | `auto` | S3 region |
 | `LANCEDB_S3_BUCKET` | (required) | S3 bucket name |
-| `EMBEDDING_PROVIDER` | `openrouter` | Embedding provider (`cybertron`, `openrouter`, `local`, `mock`) |
+| `EMBEDDING_PROVIDER` | `openrouter` | Embedding provider (`openrouter`, `local`, `mock`) |
 | `EMBEDDING_MODEL` | `openai/text-embedding-3-small` | Embedding model (varies by provider) |
-| `CYBERTRON_MODELS_DIR` | `~/.cybertron/models` | Directory for Cybertron model cache |
 | `LLM_VERIFIER_ENABLED` | `false` | Enable LLM response verification |
 
 **Embedding Provider Options:**
 
 | Provider | Use Case | Cost | Notes |
 |----------|----------|------|-------|
-| `cybertron` | Development/Production | Free | Native Go, no external deps, semantically accurate |
-| `openrouter` | Production | API costs | Higher quality (1536 dim), requires API key |
+| `openrouter` | Development/Production | API costs | 1536 dim, requires API key |
 | `mock` | Testing only | Free | NO semantic accuracy - pipeline testing only |
 | `local` | Development | Free | Requires Python embedding server |
 
@@ -370,23 +367,20 @@ sqlite3 /var/opt/memos/memos.db ".tables"
 docker build -f Dockerfile.fly -t bchat:rag .
 ```
 
-### Run with Cybertron Embeddings (Recommended)
+### Run with OpenRouter Embeddings (Recommended)
 
-Native Go embeddings, no external dependencies, semantically accurate.
+Production-quality embeddings via OpenRouter API.
 
 ```bash
 docker run -p 5230:5230 \
   -v $(pwd)/data:/var/opt/memos \
-  -v ~/.cybertron:/root/.cybertron \
   -e LANCEDB_STORAGE_PROVIDER=local \
   -e LANCEDB_LOCAL_PATH=/var/opt/memos/lancedb \
-  -e EMBEDDING_PROVIDER=cybertron \
-  -e EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2 \
+  -e EMBEDDING_PROVIDER=openrouter \
+  -e EMBEDDING_MODEL=openai/text-embedding-3-small \
   -e OPENROUTER_API_KEY=sk-or-xxxxx \
   bchat:rag
 ```
-
-**Note:** Mount `~/.cybertron` to cache downloaded models between container restarts.
 
 ### Run with Mock Embeddings (Pipeline Testing Only)
 
@@ -405,10 +399,10 @@ docker run -p 5230:5230 \
 ```bash
 docker run -p 5230:5230 \
   -v $(pwd)/data:/var/opt/memos \
-  -v ~/.cybertron:/root/.cybertron \
   -e LANCEDB_STORAGE_PROVIDER=local \
   -e LANCEDB_LOCAL_PATH=/var/opt/memos/lancedb \
-  -e EMBEDDING_PROVIDER=cybertron \
+  -e EMBEDDING_PROVIDER=openrouter \
+  -e EMBEDDING_MODEL=openai/text-embedding-3-small \
   -e OPENROUTER_API_KEY=sk-or-xxxxx \
   bchat:rag
 ```
@@ -499,13 +493,12 @@ Or use dedicated CPUs:
 
 | Provider | Cost | Notes |
 |----------|------|-------|
-| `cybertron` | Free | Native Go, ~90MB model download on first use |
 | `mock` | Free | No semantic accuracy - testing only |
-| `openrouter` | ~$0.02/1M tokens | Higher quality embeddings |
+| `openrouter` | ~$0.02/1M tokens | Production-quality embeddings |
 
-**Recommendation:** Use `cybertron` for development and cost-sensitive production. Use `openrouter` when highest embedding quality is required.
+**Recommendation:** Use `openrouter` for development and production. Use `mock` only for testing the RAG pipeline flow.
 
 ---
 
-*Document Version: 1.1*
-*Updated: 2026-01-26* - Added Cybertron embedding provider
+*Document Version: 1.2*
+*Updated: 2026-01-27* - Removed Cybertron, OpenRouter is now default

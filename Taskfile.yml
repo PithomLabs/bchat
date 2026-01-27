@@ -106,20 +106,8 @@ tasks:
     cmds:
       - RAG_PIPELINE_ENABLED=true EMBEDDING_PROVIDER=mock LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
 
-  run:rag:cybertron:
-    desc: Run with Cybertron embeddings (native Go, no external server)
-    deps: [build:backend:rag]
-    cmds:
-      - RAG_PIPELINE_ENABLED=true EMBEDDING_PROVIDER=cybertron EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
-
-  run:rag:cybertron:quality:
-    desc: Run with high-quality Cybertron embeddings (mpnet, 768 dim, slowest)
-    deps: [build:backend:rag]
-    cmds:
-      - RAG_PIPELINE_ENABLED=true EMBEDDING_PROVIDER=cybertron EMBEDDING_MODEL=sentence-transformers/all-mpnet-base-v2 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
-
   run:rag:l12:
-    desc: Run with Cybertron L12 embeddings (better quality than L6, same 384 dim)
+    desc: Run with L12 embeddings via OpenRouter (better quality than L6, same 384 dim)
     deps: [build:backend:rag]
     cmds:
       - RAG_PIPELINE_ENABLED=true EMBEDDING_PROVIDER=openrouter EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L12-v2 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data

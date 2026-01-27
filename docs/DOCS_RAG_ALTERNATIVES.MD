@@ -3,8 +3,6 @@
 **Status:** Active
 **Date:** 2026-01-26
 **Related Documents:**
-- [DOCS_CYBERTRON.MD](./DOCS_CYBERTRON.MD) - Cybertron embedding implementation
-- [DOCS_CYBERTRON_DEBUG.MD](./DOCS_CYBERTRON_DEBUG.MD) - Sequence length fixes
 - [DOCS_RAG_PIPELINE.MD](./DOCS_RAG_PIPELINE.MD) - RAG pipeline overview
 
 ---
@@ -24,12 +22,11 @@ Different embedding providers have different token limits:
 | Provider | Model | Max Tokens | Recommended Chunk Size |
 |----------|-------|------------|------------------------|
 | OpenRouter | text-embedding-3-small | 8,191 | 2,000 tokens |
-| Cybertron | all-MiniLM-L6-v2 | 512 | 150 tokens |
 | Local | all-MiniLM-L6-v2 | 512 | 150 tokens |
 
 A 1.7MB KB file produces:
 - **OpenRouter**: ~250 chunks → 2-3 min indexing
-- **Cybertron**: ~3,500 chunks → 30+ min indexing
+- **Local**: ~3,500 chunks → 30+ min indexing
 
 ### The Solution
 
@@ -40,10 +37,8 @@ func GetMaxChunkTokens(embeddingProvider string) int {
     switch embeddingProvider {
     case "openrouter":
         return 2000  // text-embedding-3-small: 8191 token limit
-    case "cybertron":
-        return 150   // 512 token limit with subword tokenization
     case "local":
-        return 150   // Same as Cybertron
+        return 150   // 512 token limit with subword tokenization
     default:
         return 500
     }
@@ -55,11 +50,11 @@ func GetMaxChunkTokens(embeddingProvider string) int {
 The chunk size is automatically selected when you run with different providers:
 
 ```bash
-# OpenRouter (fast, larger chunks)
-EMBEDDING_PROVIDER=openrouter task run:rag
+# OpenRouter (recommended, larger chunks)
+task run:rag
 
-# Cybertron (offline, smaller chunks)
-EMBEDDING_PROVIDER=cybertron task run:rag:cybertron
+# Mock (testing only)
+task run:rag:mock
 ```
 
 Logs will show the configuration:
@@ -80,7 +75,7 @@ KB.MD → Chunk by headers → Embed all chunks → Store in LanceDB
 | Provider | Chunks | Time | Cost | Quality |
 |----------|--------|------|------|---------|
 | OpenRouter | ~250 | 2-3 min | $0.02 | High detail |
-| Cybertron | ~3500 | 30+ min | Free | High detail |
+| Local | ~3500 | 30+ min | Free | High detail |
 
 ### Alternative: Pre-Summarization
 
@@ -108,15 +103,15 @@ KB.MD → LLM Summarization → Chunk summaries → Embed → Store
 
 ## Offline Fallback Strategy
 
-The system supports automatic fallback for offline scenarios:
+The system supports local embedding servers for offline scenarios:
 
-1. **Primary**: OpenRouter with large chunks (fast)
-2. **Fallback**: Cybertron with small chunks (offline)
+1. **Primary**: OpenRouter with large chunks (fast, requires API key)
+2. **Fallback**: Local embedding server with small chunks (offline)
 
-To enable:
+To enable local embeddings:
 ```bash
-# Use Cybertron for offline capability
-EMBEDDING_PROVIDER=cybertron task run:rag:cybertron
+# Use local embedding server (requires Python server running)
+EMBEDDING_PROVIDER=local EMBEDDING_LOCAL_ENDPOINT=http://localhost:8001/embed task run:rag
 ```
 
 ---
@@ -150,7 +145,7 @@ Store both summaries and originals:
 
 | Variable | Values | Default | Description |
 |----------|--------|---------|-------------|
-| `EMBEDDING_PROVIDER` | `openrouter`, `cybertron`, `local`, `mock` | `cybertron` | Embedding provider |
+| `EMBEDDING_PROVIDER` | `openrouter`, `local`, `mock` | `openrouter` | Embedding provider |
 | `RAG_PIPELINE_ENABLED` | `true`, `false` | `false` | Enable RAG pipeline |
 
 ### Chunk Size by Provider
@@ -158,7 +153,6 @@ Store both summaries and originals:
 | Provider | Max Tokens | ~Chars | Min Tokens |
 |----------|------------|--------|------------|
 | openrouter | 2000 | 8000 | 100 |
-| cybertron | 150 | 600 | 30 |
 | local | 150 | 600 | 30 |
 | mock | 500 | 2000 | 50 |
 
@@ -166,22 +160,16 @@ Store both summaries and originals:
 
 ## Troubleshooting
 
-### Slow Indexing with Cybertron
+### Slow Indexing with Local Provider
 
-**Expected behavior**: Cybertron uses small chunks (150 tokens) due to 512 token limit.
+**Expected behavior**: Local provider uses small chunks (150 tokens) due to 512 token limit.
 
 **Solutions:**
 1. Use OpenRouter for faster indexing: `EMBEDDING_PROVIDER=openrouter`
 2. Accept longer indexing time (one-time per file upload)
 3. Consider pre-summarizing very large files
 
-### "Sequence too long" Errors
-
-See [DOCS_CYBERTRON_DEBUG.MD](./DOCS_CYBERTRON_DEBUG.MD) for details.
-
-**Quick fix**: Ensure you're using the latest code with provider-adaptive chunking.
-
 ---
 
-*Document Version: 1.0*
-*Created: 2026-01-26*
+*Document Version: 1.1*
+*Updated: 2026-01-27* - Removed Cybertron, OpenRouter is now default

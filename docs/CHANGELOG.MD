@@ -31,16 +31,16 @@ All notable changes to the bchat AI Agent System are documented in this file.
   - Enables RAG for plain markdown files without manual annotation
   - Logs: `No KB annotations found, using markdown-based chunking`
 
-- **Parallel Cybertron Embeddings** - Multi-core CPU acceleration for embeddings
-  - Worker pool pattern with configurable number of goroutines
-  - `CYBERTRON_WORKERS` env var (defaults to `runtime.NumCPU()`)
-  - 4-8x speedup on multi-core CPUs
-  - Smart routing: parallel for large batches, sequential for small ones
+### Removed
+- **Cybertron Embedding Provider** - Removed native Go embedding service
+  - Removed `github.com/nlpodyssey/cybertron` dependency
+  - Removed `CYBERTRON_MODELS_DIR`, `CYBERTRON_WORKERS` environment variables
+  - Removed `task run:rag:cybertron` and `task run:rag:cybertron:quality` commands
+  - OpenRouter is now the default embedding provider (`EMBEDDING_PROVIDER=openrouter`)
+  - Deleted DOCS_CYBERTRON.MD, DOCS_CYBERTRON_DEBUG.MD, DOCS_CYBERTRON_PARALLEL.MD
 
 - **OpenRouter sentence-transformers Support** - GPU-accelerated MiniLM embeddings
   - `EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2` via OpenRouter
-  - Same 384 dimensions as Cybertron - seamless provider switching
-  - No reindexing needed when switching between Cybertron and OpenRouter
   - Added `getOpenRouterDimension()` helper for model dimension detection
 
 - **DOCS_LANCEDB_CHATGPT.MD** - lanceEmbeddings vs bchat comparison analysis

@@ -8,16 +8,14 @@ Quick reference for common tasks in this codebase. Use this for fast execution.
 
 ```bash
 # Development (recommended)
-task run:rag:cybertron          # Native Go embeddings, no deps
+task run:rag                     # OpenRouter embeddings (needs OPENROUTER_API_KEY)
 
 # Build
 task build                       # Frontend + backend
 task build:rag                   # With LanceDB support
 
 # Other run options
-task run:rag:cybertron:quality   # Better quality, slower
-task run:rag:mock                # Pipeline testing only
-task run:rag                     # OpenRouter (needs API key)
+task run:rag:mock                # Pipeline testing only (not semantically accurate)
 ```
 
 ---
@@ -255,7 +253,7 @@ slog.Debug("Debug info", "data", data)
 | Env vars not working in Taskfile | Use inline: `VAR=value ./binary` not `env:` block |
 | Frontend state not updating | Wrap in `runInAction()` |
 | Store method not accessible | Add to return object |
-| Mock embeddings not semantic | Use `cybertron` instead |
+| Mock embeddings not semantic | Use `openrouter` instead |
 | Migration not running | Check filename: `NN__snake_case.sql` |
 | CGO errors | Run `task setup:lancedb` first |
 
@@ -265,14 +263,15 @@ slog.Debug("Debug info", "data", data)
 
 ```bash
 # Minimum for development
-EMBEDDING_PROVIDER=cybertron
+OPENROUTER_API_KEY=sk-or-v1-xxx
+EMBEDDING_PROVIDER=openrouter
 RAG_PIPELINE_ENABLED=true
 
 # Full production
 OPENROUTER_API_KEY=sk-or-v1-xxx
 LLM_MODEL=openai/gpt-4o-mini
-EMBEDDING_PROVIDER=cybertron
-EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+EMBEDDING_PROVIDER=openrouter
+EMBEDDING_MODEL=openai/text-embedding-3-small
 RAG_PIPELINE_ENABLED=true
 LANCEDB_STORAGE_PROVIDER=local
 ```
@@ -283,10 +282,9 @@ LANCEDB_STORAGE_PROVIDER=local
 
 | Provider | Command | Semantic | Cost |
 |----------|---------|----------|------|
-| `cybertron` | `task run:rag:cybertron` | Yes | Free |
-| `cybertron` (quality) | `task run:rag:cybertron:quality` | Best | Free |
-| `mock` | `task run:rag:mock` | No | Free |
 | `openrouter` | `task run:rag` | Yes | API |
+| `mock` | `task run:rag:mock` | No | Free |
+| `local` | Custom server required | Yes | Free |
 
 ---
 

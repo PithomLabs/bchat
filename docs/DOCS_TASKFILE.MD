@@ -5,7 +5,6 @@
 **Related Documents:**
 - [DOCS_RAG_PIPELINE.MD](./DOCS_RAG_PIPELINE.MD) - RAG pipeline configuration
 - [DOCS_ENV_VAR.MD](./DOCS_ENV_VAR.MD) - Environment variables
-- [DOCS_CYBERTRON.MD](./DOCS_CYBERTRON.MD) - Cybertron embedding implementation
 
 ---
 
@@ -37,10 +36,8 @@ go install github.com/go-task/task/v3/cmd/task@latest
 | `task build:rag` | Build with RAG/LanceDB support |
 | `task dev:backend` | Run dev server |
 | `task dev:backend:rag` | Run dev server with RAG (go run) |
-| `task run:rag` | Run compiled binary with RAG + OpenRouter |
-| `task run:rag:cybertron` | Run with Cybertron L6 embeddings (native Go, fast, free) |
+| `task run:rag` | Run compiled binary with RAG + OpenRouter embeddings |
 | `task run:rag:l12` | Run with L12 embeddings via OpenRouter (better quality, same 384 dim) |
-| `task run:rag:cybertron:quality` | Run with Cybertron mpnet embeddings (best quality, 768 dim) |
 | `task run:rag:mock` | Run compiled binary with RAG + mock embeddings |
 
 ---
@@ -288,37 +285,6 @@ EMBEDDING_PROVIDER=mock
 
 ---
 
-### task run:rag:cybertron
-
-**Recommended.** Run the compiled binary with RAG enabled using Cybertron embeddings (native Go, no external dependencies).
-
-```bash
-task run:rag:cybertron
-```
-
-**What it does:**
-1. Builds the backend with RAG support (if needed)
-2. Sets RAG environment variables with Cybertron embeddings
-3. Runs the compiled binary
-
-**Environment set automatically:**
-```bash
-RAG_PIPELINE_ENABLED=true
-LANCEDB_STORAGE_PROVIDER=local
-EMBEDDING_PROVIDER=cybertron
-EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
-```
-
-**First run:** Downloads the model (~90MB) to `~/.cybertron/models`. Subsequent runs are instant.
-
-**Benefits:**
-- No external server or API key required
-- Semantically accurate embeddings (unlike mock)
-- Pure Go implementation, single binary
-- Fast (384 dimensions)
-
----
-
 ### task run:rag:l12
 
 Run with L12 embeddings for better quality while maintaining same 384 dimensions.
@@ -345,36 +311,6 @@ EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L12-v2
 - Same 384 dimensions - no reindexing when switching from L6
 - Slightly slower than L6
 - Requires OpenRouter API key
-
----
-
-### task run:rag:cybertron:quality
-
-Run the compiled binary with RAG enabled using high-quality Cybertron embeddings.
-
-```bash
-task run:rag:cybertron:quality
-```
-
-**What it does:**
-1. Builds the backend with RAG support (if needed)
-2. Sets RAG environment variables with high-quality Cybertron model
-3. Runs the compiled binary
-
-**Environment set automatically:**
-```bash
-RAG_PIPELINE_ENABLED=true
-LANCEDB_STORAGE_PROVIDER=local
-EMBEDDING_PROVIDER=cybertron
-EMBEDDING_MODEL=sentence-transformers/all-mpnet-base-v2
-```
-
-**First run:** Downloads the model (~420MB) to `~/.cybertron/models`.
-
-**Trade-offs:**
-- Better semantic quality (768 dimensions vs 384)
-- Slower inference
-- Larger model download
 
 ---
 
@@ -470,32 +406,7 @@ task dev:frontend
 
 ---
 
-### Development with RAG (Cybertron Embeddings) - Recommended
-
-RAG development with native Go embeddings - no external server or API keys needed:
-
-```bash
-# Single command - builds and runs with Cybertron embeddings
-task run:rag:cybertron
-
-# Terminal 2 (optional): Frontend dev server
-task dev:frontend
-```
-
-**Benefits:**
-- No external dependencies (pure Go)
-- Semantically accurate embeddings
-- No API costs
-- First run downloads model (~90MB), then cached
-
-**For higher quality (slower):**
-```bash
-task run:rag:cybertron:quality
-```
-
----
-
-### Development with RAG (OpenRouter Embeddings)
+### Development with RAG (OpenRouter Embeddings) - Recommended
 
 RAG development with production-quality embeddings:
 
@@ -633,18 +544,15 @@ EMBEDDING_PROVIDER=mock ./build/memos --mode dev
 |---------|--------------|-------------|-------------------|------------|---------|---------|
 | `task dev:backend` | No | No | - | - | No | - |
 | `task dev:backend:rag` | No | Yes | local | 384 | No (needs server) | Good |
-| `task run:rag` | Yes | Yes | openrouter | 384 | Yes | Good |
-| `task run:rag:cybertron` | Yes | Yes | cybertron (L6) | 384 | No | Good |
+| `task run:rag` | Yes | Yes | openrouter | 1536 | Yes | Good |
 | `task run:rag:l12` | Yes | Yes | openrouter (L12) | 384 | Yes | Better |
-| `task run:rag:cybertron:quality` | Yes | Yes | cybertron (mpnet) | 768 | No | Best |
 | `task run:rag:mock` | Yes | Yes | mock | 384 | No | None |
 
 **Recommendations:**
-- **Free development:** `task run:rag:cybertron` (L6, fast, no API key)
-- **Better quality:** `task run:rag:l12` (L12, same 384 dim, requires API key)
-- **Best quality:** `task run:rag:cybertron:quality` (mpnet, 768 dim, requires reindex)
+- **Development/Production:** `task run:rag` (OpenRouter, requires API key)
+- **Pipeline testing only:** `task run:rag:mock` (no semantic accuracy)
 
 ---
 
-*Document Version: 1.2*
-*Updated: 2026-01-26*
+*Document Version: 1.3*
+*Updated: 2026-01-27* - Removed Cybertron, OpenRouter is now default

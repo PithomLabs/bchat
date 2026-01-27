@@ -21,7 +21,6 @@ See `docs/DOCS_CHAT_DESIGN_4_IMP_2-PROGRESS.MD` for detailed progress report.
 - `docs/DOCS_SIMULATION.MD` - Agent simulation feature specification
 - `docs/DOCS_RAG_PIPELINE.MD` - RAG pipeline architecture and configuration
 - `docs/DOCS_LANCEDB.MD` - LanceDB RAG implementation plan
-- `docs/DOCS_CYBERTRON.MD` - Cybertron native Go embedding provider
 
 ## Hybrid Search & Evaluation Documents
 - `docs/DOCS_HYBRID_SEARCH.MD` - Hybrid search (vector + BM25) implementation plan
@@ -299,8 +298,8 @@ LLM_MODEL=openai/gpt-4o-mini
 
 # RAG Pipeline (optional)
 RAG_PIPELINE_ENABLED=true|false
-EMBEDDING_PROVIDER=cybertron|mock|local|openrouter  # cybertron recommended
-EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+EMBEDDING_PROVIDER=openrouter|mock|local  # openrouter is default
+EMBEDDING_MODEL=openai/text-embedding-3-small
 LANCEDB_STORAGE_PROVIDER=local|s3
 ```
 
@@ -341,17 +340,11 @@ LANCEDB_STORAGE_PROVIDER=local|s3
 ### Running with RAG (Recommended)
 
 ```bash
-# Best option: Cybertron (native Go, no dependencies, semantically accurate)
-task run:rag:cybertron
-
-# Higher quality embeddings (slower)
-task run:rag:cybertron:quality
+# Production (requires OPENROUTER_API_KEY)
+task run:rag
 
 # Testing pipeline only (no semantic accuracy)
 task run:rag:mock
-
-# Production (requires OPENROUTER_API_KEY)
-task run:rag
 ```
 
 ---
@@ -359,10 +352,9 @@ task run:rag
 ## Best Practices & Tips
 
 ### Embedding Providers
-- **Use `cybertron`** for development - free, fast, semantically accurate, no external dependencies
+- **Use `openrouter`** for development and production - requires OPENROUTER_API_KEY
 - **Use `mock`** only for testing pipeline flow - NOT semantically accurate
-- **Use `openrouter`** for production with API budget
-- First Cybertron run downloads model (~90MB), then cached in `~/.cybertron/models`
+- **Use `local`** if running a local embedding server
 
 ### Taskfile Environment Variables
 - Use inline env vars in commands (e.g., `VAR=value ./binary`), NOT `env:` blocks
@@ -407,14 +399,9 @@ task run:rag
 ---
 
 ## Recent Work (2026-01-26)
-1. **Cybertron Embedding Provider** - Native Go embeddings, no external dependencies
-   - `task run:rag:cybertron` - Fast, free, semantically accurate
-   - `task run:rag:cybertron:quality` - Higher quality (768 dim vs 384)
-   - Supports `all-MiniLM-L6-v2`, `all-mpnet-base-v2`, and other sentence-transformers models
-2. **Format for RAG Phase 1** - Store processing options per tenant
+1. **Format for RAG Phase 1** - Store processing options per tenant
    - "Save as Default" button in Agent Admin
    - Options loaded automatically when Format for RAG opens
-3. Created DOCS_CYBERTRON.MD - Cybertron implementation plan and reference
 
 ### Previous Work (2026-01-23)
 1. Added "Rebuild Index" button to Agent Admin for per-tenant RAG reindexing
@@ -480,17 +467,16 @@ RAG_PIPELINE_ENABLED=true|false  # Default: false
 LANCEDB_STORAGE_PROVIDER=local|s3  # Default: local
 LANCEDB_LOCAL_PATH=build/data/lancedb  # For local storage
 
-# Embedding (cybertron is recommended default)
-EMBEDDING_PROVIDER=cybertron|mock|local|openrouter  # Default: cybertron
-EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2  # For cybertron
-CYBERTRON_MODELS_DIR=~/.cybertron/models  # Model cache directory
+# Embedding
+EMBEDDING_PROVIDER=openrouter|mock|local  # Default: openrouter
+EMBEDDING_MODEL=openai/text-embedding-3-small  # For openrouter
 
 # Optional verifier
 LLM_VERIFIER_ENABLED=true|false  # Default: false
 ```
 
 ### Design Decisions Confirmed
-- **Embedding Model:** Cybertron (development, recommended) + OpenRouter API (production with budget)
+- **Embedding Model:** OpenRouter API (default)
 - **Index Storage:** Local filesystem (testing) + Tigrisdata S3 (production on fly.io)
 - **Re-indexing:** On every file upload
 - **Feature Flag:** Global environment variable
