@@ -1,12 +1,12 @@
 import { Button, Checkbox, Chip, DialogActions, DialogContent, DialogTitle, Divider, FormControl, FormHelperText, FormLabel, Input, Modal, ModalClose, ModalDialog, Option, Select, Slider, Switch, Textarea } from "@mui/joy";
-import { ArrowLeftIcon, BuildingIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, EditIcon, EyeIcon, FileTextIcon, HistoryIcon, PlusIcon, RefreshCwIcon, SearchIcon, SettingsIcon, SparklesIcon, Trash2Icon, UploadIcon, XIcon, ZapIcon } from "lucide-react";
+import { ArrowLeftIcon, BuildingIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, EditIcon, EyeIcon, FileTextIcon, HistoryIcon, MessageCircleIcon, PlusIcon, RefreshCwIcon, SearchIcon, SettingsIcon, SparklesIcon, Trash2Icon, UploadIcon, XIcon, ZapIcon } from "lucide-react";
 import { observer } from "mobx-react-lite";
 import { ChangeEvent, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import MobileHeader from "@/components/MobileHeader";
 import useResponsiveWidth from "@/hooks/useResponsiveWidth";
 import { agentAdminStore, userStore } from "@/store/v2";
-import type { AgentTenant, CreateTenantRequest, LLMConfig, SetLLMConfigRequest, UserPermission, GrantPermissionRequest, ProcessingOptions, FormatForRAGResponse } from "@/store/v2/agentAdmin";
+import type { AgentTenant, AgentTranscript, CreateTenantRequest, LLMConfig, SetLLMConfigRequest, UserPermission, GrantPermissionRequest, ProcessingOptions, FormatForRAGResponse } from "@/store/v2/agentAdmin";
 import { LLM_MODEL_OPTIONS, PERMISSION_PRESETS, DEFAULT_PROCESSING_OPTIONS } from "@/store/v2/agentAdmin";
 import { cn } from "@/utils";
 import { useTranslate } from "@/utils/i18n";
@@ -36,7 +36,12 @@ const AgentAdmin = observer(() => {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchTopK, setSearchTopK] = useState(5);
 
-  const { tenants, selectedTenant, isLoading, isSaving, error, fileVersions, llmConfig, tenantPermissions, myPermissions, script, isLoadingScript, qaPairs, qaTestResults, isGeneratingQA, isTestingQA, ragSearchResults, isSearchingRAG } = agentAdminStore.state;
+  // Transcripts state
+  const [showTranscripts, setShowTranscripts] = useState(false);
+  const [selectedTranscript, setSelectedTranscript] = useState<AgentTranscript | null>(null);
+  const [showTranscriptModal, setShowTranscriptModal] = useState(false);
+
+  const { tenants, selectedTenant, isLoading, isSaving, error, fileVersions, llmConfig, tenantPermissions, myPermissions, script, isLoadingScript, qaPairs, qaTestResults, isGeneratingQA, isTestingQA, ragSearchResults, isSearchingRAG, transcripts, isLoadingTranscripts, tenantSettings } = agentAdminStore.state;
 
   // Get current user and determine if they're an admin
   const currentUserName = userStore.state.currentUser;
@@ -86,6 +91,9 @@ const AgentAdmin = observer(() => {
         });
         // Fetch Q&A pairs for this tenant
         agentAdminStore.fetchQAPairs(selectedTenant.tenant.slug);
+        // Fetch tenant settings and transcripts
+        agentAdminStore.fetchTenantSettings(selectedTenant.tenant.slug);
+        agentAdminStore.fetchTranscripts(selectedTenant.tenant.slug);
       }
     }
   }, [selectedTenant?.tenant.slug, selectedTenant?.tenant.id, isAdmin]);
@@ -978,6 +986,126 @@ const AgentAdmin = observer(() => {
               </div>
             )}
 
+            {/* Chat Transcripts - Admin only */}
+            {isAdmin && (
+              <div className="bg-green-50 dark:bg-green-900/20 rounded-xl border border-green-200 dark:border-green-800 p-4">
+                <div className="flex justify-between items-center mb-3">
+                  <div>
+                    <h3 className="font-medium text-green-700 dark:text-green-300">
+                      {t("agent-admin.transcripts")}
+                    </h3>
+                    <p className="text-sm text-green-600 dark:text-green-400">
+                      {t("agent-admin.transcripts-desc")}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <Checkbox
+                      label={t("agent-admin.record-transcripts")}
+                      checked={tenantSettings?.recordTranscripts ?? true}
+                      onChange={async (e) => {
+                        const success = await agentAdminStore.updateTenantSettings(
+                          selectedTenant.tenant.slug,
+                          { recordTranscripts: e.target.checked }
+                        );
+                        if (success) {
+                          toast.success(t("agent-admin.settings-saved"));
+                        }
+                      }}
+                      size="sm"
+                    />
+                    <Button
+                      color="primary"
+                      variant="outlined"
+                      onClick={() => setShowTranscripts(!showTranscripts)}
+                    >
+                      <MessageCircleIcon className="w-4 h-4 mr-2" />
+                      {showTranscripts ? t("common.close") : t("agent-admin.transcript-view")} ({transcripts.length})
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Transcripts List */}
+                {showTranscripts && (
+                  <div className="mt-4 space-y-3">
+                    {isLoadingTranscripts ? (
+                      <div className="text-center py-4 text-gray-500">Loading...</div>
+                    ) : transcripts.length === 0 ? (
+                      <div className="text-center py-4 text-gray-500">
+                        {t("agent-admin.transcripts-empty")}
+                      </div>
+                    ) : (
+                      <div className="space-y-2 max-h-96 overflow-y-auto">
+                        {transcripts.map((transcript) => (
+                          <div
+                            key={transcript.id}
+                            className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-3 hover:border-green-300 dark:hover:border-green-700 transition-colors"
+                          >
+                            <div className="flex justify-between items-start">
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <Chip size="sm" variant="soft" color="primary">
+                                    {transcript.audienceType}
+                                  </Chip>
+                                  <span className="text-xs text-gray-500">
+                                    {new Date(transcript.startedAt).toLocaleString()}
+                                  </span>
+                                  {transcript.isCompleted && (
+                                    <Chip size="sm" variant="soft" color="success">
+                                      Completed
+                                    </Chip>
+                                  )}
+                                </div>
+                                <div className="text-sm text-gray-700 dark:text-gray-300">
+                                  {transcript.customerName && (
+                                    <span className="font-medium">{transcript.customerName}</span>
+                                  )}
+                                  {transcript.detectedIntent && (
+                                    <span className="ml-2 text-gray-500">- {transcript.detectedIntent}</span>
+                                  )}
+                                  <span className="ml-2 text-gray-400">({transcript.messageCount} messages)</span>
+                                </div>
+                              </div>
+                              <div className="flex gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="plain"
+                                  color="primary"
+                                  onClick={() => {
+                                    setSelectedTranscript(transcript);
+                                    setShowTranscriptModal(true);
+                                  }}
+                                >
+                                  <EyeIcon className="w-4 h-4" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="plain"
+                                  color="danger"
+                                  onClick={async () => {
+                                    if (window.confirm(t("agent-admin.transcript-delete-confirm"))) {
+                                      const success = await agentAdminStore.deleteTranscript(
+                                        selectedTenant.tenant.slug,
+                                        transcript.id
+                                      );
+                                      if (success) {
+                                        toast.success(t("agent-admin.transcript-deleted"));
+                                      }
+                                    }
+                                  }}
+                                >
+                                  <Trash2Icon className="w-4 h-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Delete Tenant - Admin only */}
             {isAdmin && (
               <div className="bg-red-50 dark:bg-red-900/20 rounded-xl border border-red-200 dark:border-red-800 p-4">
@@ -1185,6 +1313,96 @@ const AgentAdmin = observer(() => {
             </DialogContent>
             <DialogActions>
               <Button variant="plain" color="neutral" onClick={() => setShowQAModal(false)}>
+                {t("common.close")}
+              </Button>
+            </DialogActions>
+          </ModalDialog>
+        </Modal>
+
+        {/* Transcript View Modal */}
+        <Modal open={showTranscriptModal && selectedTranscript !== null} onClose={() => setShowTranscriptModal(false)}>
+          <ModalDialog sx={{ maxWidth: 700, width: "90vw", maxHeight: "90vh" }}>
+            <ModalClose />
+            <DialogTitle className="flex items-center gap-2">
+              <MessageCircleIcon className="w-5 h-5" />
+              {t("agent-admin.transcript-view")}
+            </DialogTitle>
+            <Divider />
+            <DialogContent sx={{ overflow: "auto" }}>
+              {selectedTranscript && (
+                <div className="space-y-4">
+                  {/* Transcript metadata */}
+                  <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3 text-sm">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <span className="text-gray-500">Session:</span>{" "}
+                        <span className="font-mono text-xs">{selectedTranscript.sessionId}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-500">Audience:</span>{" "}
+                        <Chip size="sm" variant="soft" color="primary">
+                          {selectedTranscript.audienceType}
+                        </Chip>
+                      </div>
+                      <div>
+                        <span className="text-gray-500">Started:</span>{" "}
+                        {new Date(selectedTranscript.startedAt).toLocaleString()}
+                      </div>
+                      <div>
+                        <span className="text-gray-500">Messages:</span>{" "}
+                        {selectedTranscript.messageCount}
+                      </div>
+                      {selectedTranscript.customerName && (
+                        <div>
+                          <span className="text-gray-500">Customer:</span>{" "}
+                          {selectedTranscript.customerName}
+                        </div>
+                      )}
+                      {selectedTranscript.detectedIntent && (
+                        <div>
+                          <span className="text-gray-500">Intent:</span>{" "}
+                          {selectedTranscript.detectedIntent}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Messages */}
+                  <div className="space-y-3">
+                    {selectedTranscript.messages.map((msg, idx) => (
+                      <div
+                        key={idx}
+                        className={cn(
+                          "p-3 rounded-lg",
+                          msg.role === "user"
+                            ? "bg-blue-50 dark:bg-blue-900/20 ml-8"
+                            : "bg-gray-100 dark:bg-gray-800 mr-8"
+                        )}
+                      >
+                        <div className="flex justify-between items-center mb-1">
+                          <span className={cn(
+                            "text-xs font-medium",
+                            msg.role === "user" ? "text-blue-600" : "text-gray-600"
+                          )}>
+                            {msg.role === "user" ? "Customer" : "Agent"}
+                          </span>
+                          {msg.timestamp && (
+                            <span className="text-xs text-gray-400">
+                              {new Date(msg.timestamp).toLocaleTimeString()}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap">
+                          {msg.content}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button variant="plain" color="neutral" onClick={() => setShowTranscriptModal(false)}>
                 {t("common.close")}
               </Button>
             </DialogActions>

@@ -131,7 +131,7 @@ func (d *DB) GetTenantConfig(ctx context.Context, find *store.FindTenantConfig) 
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, tenant_id, llm_model, simulation_human_model, openrouter_api_key_encrypted, openrouter_api_key_nonce, features, retrieval_mode, content_tokens, updated_at, updated_by
+		SELECT id, tenant_id, llm_model, simulation_human_model, openrouter_api_key_encrypted, openrouter_api_key_nonce, features, retrieval_mode, content_tokens, record_transcripts, updated_at, updated_by
 		FROM tenant_config
 		WHERE %s
 		LIMIT 1
@@ -144,13 +144,14 @@ func (d *DB) GetTenantConfig(ctx context.Context, find *store.FindTenantConfig) 
 	var featuresJSON sql.NullString
 	var retrievalMode sql.NullString
 	var contentTokens sql.NullInt32
+	var recordTranscripts sql.NullInt64
 	var updatedAtUnix int64
 	var updatedBy sql.NullInt32
 
 	err := d.db.QueryRowContext(ctx, query, args...).Scan(
 		&config.ID, &config.TenantID, &llmModel, &simulationHumanModel,
 		&apiKeyEncrypted, &apiKeyNonce, &featuresJSON,
-		&retrievalMode, &contentTokens,
+		&retrievalMode, &contentTokens, &recordTranscripts,
 		&updatedAtUnix, &updatedBy,
 	)
 	if err == sql.ErrNoRows {
@@ -181,6 +182,8 @@ func (d *DB) GetTenantConfig(ctx context.Context, find *store.FindTenantConfig) 
 	if contentTokens.Valid {
 		config.ContentTokens = contentTokens.Int32
 	}
+	// Default to true if not set (NULL or 1)
+	config.RecordTranscripts = !recordTranscripts.Valid || recordTranscripts.Int64 == 1
 	config.UpdatedAt = time.Unix(updatedAtUnix, 0)
 	if updatedBy.Valid {
 		config.UpdatedBy = &updatedBy.Int32
@@ -201,9 +204,15 @@ func (d *DB) UpsertTenantConfig(ctx context.Context, config *store.TenantConfig)
 		config.RetrievalMode = "long_context"
 	}
 
+	// Convert bool to int for SQLite
+	recordTranscriptsInt := 0
+	if config.RecordTranscripts {
+		recordTranscriptsInt = 1
+	}
+
 	stmt := `
-		INSERT INTO tenant_config (tenant_id, llm_model, simulation_human_model, openrouter_api_key_encrypted, openrouter_api_key_nonce, features, retrieval_mode, content_tokens, updated_at, updated_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO tenant_config (tenant_id, llm_model, simulation_human_model, openrouter_api_key_encrypted, openrouter_api_key_nonce, features, retrieval_mode, content_tokens, record_transcripts, updated_at, updated_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(tenant_id) DO UPDATE SET
 			llm_model = excluded.llm_model,
 			simulation_human_model = excluded.simulation_human_model,
@@ -212,13 +221,14 @@ func (d *DB) UpsertTenantConfig(ctx context.Context, config *store.TenantConfig)
 			features = excluded.features,
 			retrieval_mode = excluded.retrieval_mode,
 			content_tokens = excluded.content_tokens,
+			record_transcripts = excluded.record_transcripts,
 			updated_at = excluded.updated_at,
 			updated_by = excluded.updated_by
 		RETURNING id
 	`
 	if err := d.db.QueryRowContext(ctx, stmt,
 		config.TenantID, config.LLMModel, config.SimulationHumanModel, config.OpenRouterAPIKeyEncrypted, config.OpenRouterAPIKeyNonce,
-		string(featuresJSON), config.RetrievalMode, config.ContentTokens, now.Unix(), config.UpdatedBy,
+		string(featuresJSON), config.RetrievalMode, config.ContentTokens, recordTranscriptsInt, now.Unix(), config.UpdatedBy,
 	).Scan(&config.ID); err != nil {
 		return nil, err
 	}

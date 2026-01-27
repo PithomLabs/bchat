@@ -33,6 +33,7 @@ type TenantConfig struct {
 	Features                  map[string]interface{}
 	RetrievalMode             string // "long_context" or "rag" - determines KB retrieval strategy
 	ContentTokens             int32  // Estimated token count of KB + Policy content
+	RecordTranscripts         bool   // Whether to record chat conversation transcripts (default: true)
 	UpdatedAt                 time.Time
 	UpdatedBy                 *int32
 }

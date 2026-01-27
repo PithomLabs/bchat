@@ -202,4 +202,11 @@ type Driver interface {
 	UpdateAgentQAPair(ctx context.Context, pair *AgentQAPair) (*AgentQAPair, error)
 	DeleteAgentQAPair(ctx context.Context, id int32) error
 	DeleteAgentQAPairsByTenant(ctx context.Context, tenantID int32) error
+
+	// Transcript model related methods (chat conversation recording).
+	CreateAgentTranscript(ctx context.Context, transcript *AgentTranscript) (*AgentTranscript, error)
+	GetAgentTranscript(ctx context.Context, find *FindAgentTranscript) (*AgentTranscript, error)
+	ListAgentTranscripts(ctx context.Context, find *FindAgentTranscript) ([]*AgentTranscript, error)
+	UpdateAgentTranscript(ctx context.Context, transcript *AgentTranscript) error
+	DeleteAgentTranscript(ctx context.Context, id string) error
 }

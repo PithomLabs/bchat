@@ -41,6 +41,8 @@ git tag -a v0.5.11 -m "rag reindex"
 git tag -a v0.5.12 -m "updated docs"
 git tag -a v0.5.13 -m "cybertron"
 git tag -a v0.5.14 -m "fixed rebuild index/rag"
+git tag -a v0.5.15 -m "QA pairs, RAG Search Explorer"
+git tag -a v0.5.16 -m "save chat transcript"
 git push origin --tags
 ```
 

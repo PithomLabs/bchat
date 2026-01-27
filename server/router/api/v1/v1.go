@@ -280,6 +280,15 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	// RAG Search Explorer (per-tenant, admin only)
 	adminGroup.POST("/:slug/rag/search", s.agentHandler.HandleRAGSearch)
 
+	// Transcript routes (admin only)
+	adminGroup.GET("/:slug/transcripts", s.agentHandler.HandleListTranscripts)
+	adminGroup.GET("/:slug/transcripts/:id", s.agentHandler.HandleGetTranscript)
+	adminGroup.DELETE("/:slug/transcripts/:id", s.agentHandler.HandleDeleteTranscript)
+
+	// Tenant settings routes (admin only)
+	adminGroup.GET("/:slug/settings", s.agentHandler.HandleGetTenantSettings)
+	adminGroup.PUT("/:slug/settings", s.agentHandler.HandleUpdateTenantSettings)
+
 	// RAG Stats routes (admin only)
 	ragGroup := echoServer.Group("/api/v1/admin/rag")
 	ragGroup.Use(s.AuthMiddleware)

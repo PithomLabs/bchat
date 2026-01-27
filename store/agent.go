@@ -552,6 +552,38 @@ type FindAgentQAPair struct {
 	IsActive *bool
 }
 
+// AgentTranscript represents a recorded chat conversation transcript.
+type AgentTranscript struct {
+	ID               string         `json:"id"`
+	TenantID         int32          `json:"tenant_id"`
+	SessionID        string         `json:"session_id"`
+	AudienceType     string         `json:"audience_type"`
+	Messages         []AgentMessage `json:"messages"`
+	MessageCount     int            `json:"message_count"`
+	ClientIP         string         `json:"client_ip,omitempty"`
+	UserAgent        string         `json:"user_agent,omitempty"`
+	CustomerName     string         `json:"customer_name,omitempty"`
+	CustomerPhone    string         `json:"customer_phone,omitempty"`
+	CustomerEmail    string         `json:"customer_email,omitempty"`
+	CustomerLocation string         `json:"customer_location,omitempty"`
+	DetectedIntent   string         `json:"detected_intent,omitempty"`
+	StartedAt        time.Time      `json:"started_at"`
+	EndedAt          *time.Time     `json:"ended_at,omitempty"`
+	LastMessageAt    time.Time      `json:"last_message_at"`
+	IsCompleted      bool           `json:"is_completed"`
+	CompletionReason string         `json:"completion_reason,omitempty"`
+}
+
+// FindAgentTranscript contains filters for finding transcripts.
+type FindAgentTranscript struct {
+	ID           *string
+	TenantID     *int32
+	SessionID    *string
+	AudienceType *string
+	Limit        int
+	Offset       int
+}
+
 // AgentStore interface defines all agent-related database operations.
 type AgentStore interface {
 	// Tenant operations
@@ -662,6 +694,13 @@ type AgentStore interface {
 	UpdateAgentQAPair(ctx context.Context, pair *AgentQAPair) (*AgentQAPair, error)
 	DeleteAgentQAPair(ctx context.Context, id int32) error
 	DeleteAgentQAPairsByTenant(ctx context.Context, tenantID int32) error
+
+	// Transcript operations (chat conversation recording)
+	CreateAgentTranscript(ctx context.Context, transcript *AgentTranscript) (*AgentTranscript, error)
+	GetAgentTranscript(ctx context.Context, find *FindAgentTranscript) (*AgentTranscript, error)
+	ListAgentTranscripts(ctx context.Context, find *FindAgentTranscript) ([]*AgentTranscript, error)
+	UpdateAgentTranscript(ctx context.Context, transcript *AgentTranscript) error
+	DeleteAgentTranscript(ctx context.Context, id string) error
 }
 
 // Store methods that delegate to the driver
@@ -940,4 +979,24 @@ func (s *Store) DeleteAgentQAPair(ctx context.Context, id int32) error {
 
 func (s *Store) DeleteAgentQAPairsByTenant(ctx context.Context, tenantID int32) error {
 	return s.driver.DeleteAgentQAPairsByTenant(ctx, tenantID)
+}
+
+func (s *Store) CreateAgentTranscript(ctx context.Context, transcript *AgentTranscript) (*AgentTranscript, error) {
+	return s.driver.CreateAgentTranscript(ctx, transcript)
+}
+
+func (s *Store) GetAgentTranscript(ctx context.Context, find *FindAgentTranscript) (*AgentTranscript, error) {
+	return s.driver.GetAgentTranscript(ctx, find)
+}
+
+func (s *Store) ListAgentTranscripts(ctx context.Context, find *FindAgentTranscript) ([]*AgentTranscript, error) {
+	return s.driver.ListAgentTranscripts(ctx, find)
+}
+
+func (s *Store) UpdateAgentTranscript(ctx context.Context, transcript *AgentTranscript) error {
+	return s.driver.UpdateAgentTranscript(ctx, transcript)
+}
+
+func (s *Store) DeleteAgentTranscript(ctx context.Context, id string) error {
+	return s.driver.DeleteAgentTranscript(ctx, id)
 }

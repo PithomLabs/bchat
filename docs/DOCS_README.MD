@@ -571,6 +571,7 @@ See [DOCS_HALLUCINATION_GROUNDING.MD](./DOCS_HALLUCINATION_GROUNDING.MD) for det
 | Document | Description |
 |----------|-------------|
 | [DOCS_RAG_PIPELINE.MD](./DOCS_RAG_PIPELINE.MD) | RAG architecture details |
+| [DOCS_RAG_PROCESS.MD](./DOCS_RAG_PROCESS.MD) | Deep analysis of chat-to-RAG integration flow |
 | [DOCS_LANCEDB.MD](./DOCS_LANCEDB.MD) | LanceDB implementation plan |
 | [DOCS_HYBRID_SEARCH.MD](./DOCS_HYBRID_SEARCH.MD) | Hybrid search implementation plan |
 | [DOCS_HYBRID_SEARCH_EXPLAINED.MD](./DOCS_HYBRID_SEARCH_EXPLAINED.MD) | Hybrid search technical deep-dive |
@@ -589,6 +590,7 @@ See [DOCS_HALLUCINATION_GROUNDING.MD](./DOCS_HALLUCINATION_GROUNDING.MD) for det
 |----------|-------------|
 | [DOCS_WIDGET.MD](./DOCS_WIDGET.MD) | External chat widget integration |
 | [DOCS_SIMULATION.MD](./DOCS_SIMULATION.MD) | Simulation feature specification |
+| [DOCS_SAVE_TRANSCRIPT.MD](./DOCS_SAVE_TRANSCRIPT.MD) | Chat transcript recording feature plan |
 
 ### For Claude Code Users
 

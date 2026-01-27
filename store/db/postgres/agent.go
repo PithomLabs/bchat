@@ -324,3 +324,25 @@ func (d *DB) DeleteAgentQAPair(ctx context.Context, id int32) error {
 func (d *DB) DeleteAgentQAPairsByTenant(ctx context.Context, tenantID int32) error {
 	return errNotImplemented
 }
+
+// Agent Transcript methods
+
+func (d *DB) CreateAgentTranscript(ctx context.Context, transcript *store.AgentTranscript) (*store.AgentTranscript, error) {
+	return nil, errNotImplemented
+}
+
+func (d *DB) GetAgentTranscript(ctx context.Context, find *store.FindAgentTranscript) (*store.AgentTranscript, error) {
+	return nil, errNotImplemented
+}
+
+func (d *DB) ListAgentTranscripts(ctx context.Context, find *store.FindAgentTranscript) ([]*store.AgentTranscript, error) {
+	return nil, errNotImplemented
+}
+
+func (d *DB) UpdateAgentTranscript(ctx context.Context, transcript *store.AgentTranscript) error {
+	return errNotImplemented
+}
+
+func (d *DB) DeleteAgentTranscript(ctx context.Context, id string) error {
+	return errNotImplemented
+}

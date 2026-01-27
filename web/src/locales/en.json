@@ -290,7 +290,17 @@
     "preview-kb": "Preview Knowledge Base",
     "preview-policy": "Preview Policy",
     "simulation-human-model": "Model for Human in Simulation",
-    "simulation-human-model-hint": "LLM model used to simulate human/customer in agent simulations"
+    "simulation-human-model-hint": "LLM model used to simulate human/customer in agent simulations",
+    "record-transcripts": "Record Chat Transcripts",
+    "record-transcripts-desc": "Save all external chat conversations for review and analysis",
+    "transcripts": "Chat Transcripts",
+    "transcripts-desc": "View recorded external chat conversations",
+    "transcripts-empty": "No transcripts recorded yet",
+    "transcript-view": "View Transcript",
+    "transcript-delete": "Delete Transcript",
+    "transcript-delete-confirm": "Are you sure you want to delete this transcript?",
+    "transcript-deleted": "Transcript deleted",
+    "settings-saved": "Settings saved"
   },
   "agent-simulation": {
     "title": "Agent Simulation",

@@ -302,30 +302,22 @@ func (db *LanceVectorDB) Insert(ctx context.Context, chunks []DocumentChunk) err
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// Generate embeddings for chunks that don't have them
-	var textsToEmbed []string
-	var indicesToEmbed []int
+	// Batch size for embedding and insertion (handles large files)
+	const batchSize = 100
 
-	for i, chunk := range chunks {
-		if len(chunk.Embedding) == 0 {
-			textsToEmbed = append(textsToEmbed, fmt.Sprintf("%s: %s", chunk.Title, chunk.Content))
-			indicesToEmbed = append(indicesToEmbed, i)
-		}
-	}
+	totalChunks := len(chunks)
+	slog.Info("Starting batched insert", "totalChunks", totalChunks, "batchSize", batchSize)
 
-	if len(textsToEmbed) > 0 {
-		embeddings, err := db.embedSvc.Embed(ctx, textsToEmbed)
+	// Check for dimension mismatch before processing (use first chunk as sample)
+	// We need to embed at least one chunk to check dimensions
+	if len(chunks) > 0 && len(chunks[0].Embedding) == 0 {
+		sampleText := fmt.Sprintf("%s: %s", chunks[0].Title, chunks[0].Content)
+		sampleEmbeddings, err := db.embedSvc.Embed(ctx, []string{sampleText})
 		if err != nil {
-			return fmt.Errorf("failed to generate embeddings: %w", err)
+			return fmt.Errorf("failed to generate sample embedding: %w", err)
 		}
+		chunks[0].Embedding = sampleEmbeddings[0]
 
-		for i, idx := range indicesToEmbed {
-			chunks[idx].Embedding = embeddings[i]
-		}
-	}
-
-	// Check for embedding dimension mismatch (happens when switching embedding providers)
-	if len(chunks) > 0 && len(chunks[0].Embedding) > 0 {
 		existingDim := db.getTableEmbeddingDimension(ctx)
 		newDim := len(chunks[0].Embedding)
 
@@ -342,16 +334,57 @@ func (db *LanceVectorDB) Insert(ctx context.Context, chunks []DocumentChunk) err
 		}
 	}
 
-	// Build Arrow record
-	record, err := db.chunksToArrowRecord(chunks)
-	if err != nil {
-		return fmt.Errorf("failed to convert chunks to Arrow record: %w", err)
-	}
-	defer record.Release()
+	// Process chunks in batches
+	for batchStart := 0; batchStart < totalChunks; batchStart += batchSize {
+		batchEnd := batchStart + batchSize
+		if batchEnd > totalChunks {
+			batchEnd = totalChunks
+		}
 
-	// Add to table
-	if err := db.table.Add(ctx, record, nil); err != nil {
-		return fmt.Errorf("failed to add records to LanceDB: %w", err)
+		batch := chunks[batchStart:batchEnd]
+		batchNum := (batchStart / batchSize) + 1
+		totalBatches := (totalChunks + batchSize - 1) / batchSize
+
+		slog.Info("Processing batch",
+			"batch", batchNum,
+			"totalBatches", totalBatches,
+			"chunksInBatch", len(batch),
+			"progress", fmt.Sprintf("%d/%d", batchEnd, totalChunks))
+
+		// Generate embeddings for chunks that don't have them
+		var textsToEmbed []string
+		var indicesToEmbed []int
+
+		for i, chunk := range batch {
+			if len(chunk.Embedding) == 0 {
+				textsToEmbed = append(textsToEmbed, fmt.Sprintf("%s: %s", chunk.Title, chunk.Content))
+				indicesToEmbed = append(indicesToEmbed, i)
+			}
+		}
+
+		if len(textsToEmbed) > 0 {
+			embeddings, err := db.embedSvc.Embed(ctx, textsToEmbed)
+			if err != nil {
+				return fmt.Errorf("failed to generate embeddings for batch %d: %w", batchNum, err)
+			}
+
+			for i, idx := range indicesToEmbed {
+				batch[idx].Embedding = embeddings[i]
+			}
+		}
+
+		// Build Arrow record for this batch
+		record, err := db.chunksToArrowRecord(batch)
+		if err != nil {
+			return fmt.Errorf("failed to convert batch %d to Arrow record: %w", batchNum, err)
+		}
+
+		// Add batch to table
+		if err := db.table.Add(ctx, record, nil); err != nil {
+			record.Release()
+			return fmt.Errorf("failed to add batch %d to LanceDB: %w", batchNum, err)
+		}
+		record.Release()
 	}
 
 	// Create IVF-PQ vector index now that we have data
@@ -361,7 +394,7 @@ func (db *LanceVectorDB) Insert(ctx context.Context, chunks []DocumentChunk) err
 		// Non-fatal: search will still work, just slower without index
 	}
 
-	slog.Debug("Inserted chunks into LanceDB", "count", len(chunks))
+	slog.Info("Completed batched insert", "totalChunks", totalChunks)
 	return nil
 }
 

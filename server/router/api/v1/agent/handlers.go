@@ -99,6 +99,9 @@ func (h *Handler) HandleChatExternal(c echo.Context) error {
 		clientIP = c.Request().RemoteAddr
 	}
 
+	// Get user agent for transcript metadata
+	userAgent := c.Request().UserAgent()
+
 	// Bind request
 	var req ChatRequest
 	if err := c.Bind(&req); err != nil {
@@ -110,7 +113,7 @@ func (h *Handler) HandleChatExternal(c echo.Context) error {
 	}
 
 	// Process chat
-	response, err := h.service.ChatExternal(ctx, slug, clientIP, req)
+	response, err := h.service.ChatExternal(ctx, slug, clientIP, userAgent, req)
 	if err != nil {
 		if strings.Contains(err.Error(), "rate limit") {
 			return echo.NewHTTPError(http.StatusTooManyRequests, map[string]interface{}{
@@ -4698,5 +4701,188 @@ func (h *Handler) HandleRAGSearch(c echo.Context) error {
 		"latency_ms":    latencyMs,
 		"total_results": len(results),
 		"results":       results,
+	})
+}
+
+// ============================================================================
+// TRANSCRIPT HANDLERS
+// ============================================================================
+
+// HandleListTranscripts returns all transcripts for a tenant.
+// GET /api/v1/agent/:slug/transcripts
+func (h *Handler) HandleListTranscripts(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	// Get tenant
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	// List transcripts
+	transcripts, err := h.store.ListAgentTranscripts(ctx, &store.FindAgentTranscript{
+		TenantID: &tenant.ID,
+		Limit:    100,
+	})
+	if err != nil {
+		slog.Error("Failed to list transcripts", "tenantID", tenant.ID, "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list transcripts")
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"transcripts": transcripts,
+		"total":       len(transcripts),
+	})
+}
+
+// HandleGetTranscript returns a single transcript with full messages.
+// GET /api/v1/agent/:slug/transcripts/:id
+func (h *Handler) HandleGetTranscript(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+	transcriptID := c.Param("id")
+
+	// Get tenant
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	// Get transcript
+	transcript, err := h.store.GetAgentTranscript(ctx, &store.FindAgentTranscript{
+		ID:       &transcriptID,
+		TenantID: &tenant.ID,
+	})
+	if err != nil {
+		slog.Error("Failed to get transcript", "id", transcriptID, "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get transcript")
+	}
+	if transcript == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Transcript not found")
+	}
+
+	return c.JSON(http.StatusOK, transcript)
+}
+
+// HandleDeleteTranscript deletes a transcript.
+// DELETE /api/v1/agent/:slug/transcripts/:id
+func (h *Handler) HandleDeleteTranscript(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+	transcriptID := c.Param("id")
+
+	// Get tenant
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	// Verify transcript belongs to tenant
+	transcript, err := h.store.GetAgentTranscript(ctx, &store.FindAgentTranscript{
+		ID:       &transcriptID,
+		TenantID: &tenant.ID,
+	})
+	if err != nil || transcript == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Transcript not found")
+	}
+
+	// Delete transcript
+	if err := h.store.DeleteAgentTranscript(ctx, transcriptID); err != nil {
+		slog.Error("Failed to delete transcript", "id", transcriptID, "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete transcript")
+	}
+
+	return c.NoContent(http.StatusNoContent)
+}
+
+// ============================================================================
+// TENANT SETTINGS ENDPOINTS
+// ============================================================================
+
+// HandleGetTenantSettings returns the tenant settings.
+// GET /api/v1/agent/:slug/settings
+func (h *Handler) HandleGetTenantSettings(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	// Get tenant
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	// Get tenant config
+	config, err := h.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &tenant.ID})
+	if err != nil {
+		slog.Error("Failed to get tenant config", "tenantID", tenant.ID, "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get settings")
+	}
+
+	// Default to true if no config exists
+	recordTranscripts := true
+	if config != nil {
+		recordTranscripts = config.RecordTranscripts
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"record_transcripts": recordTranscripts,
+	})
+}
+
+// HandleUpdateTenantSettings updates the tenant settings.
+// PUT /api/v1/agent/:slug/settings
+func (h *Handler) HandleUpdateTenantSettings(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	// Parse request
+	var req struct {
+		RecordTranscripts *bool `json:"record_transcripts"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
+	}
+
+	// Get tenant
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	// Get or create tenant config
+	config, err := h.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &tenant.ID})
+	if err != nil {
+		slog.Error("Failed to get tenant config", "tenantID", tenant.ID, "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get settings")
+	}
+
+	if config == nil {
+		config = &store.TenantConfig{
+			TenantID:          tenant.ID,
+			RecordTranscripts: true, // Default
+		}
+	}
+
+	// Update settings
+	if req.RecordTranscripts != nil {
+		config.RecordTranscripts = *req.RecordTranscripts
+	}
+
+	// Get user ID for audit
+	userID := h.getUserID(c)
+	if userID > 0 {
+		config.UpdatedBy = &userID
+	}
+
+	// Save config
+	_, err = h.store.UpsertTenantConfig(ctx, config)
+	if err != nil {
+		slog.Error("Failed to update tenant config", "tenantID", tenant.ID, "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update settings")
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"record_transcripts": config.RecordTranscripts,
 	})
 }

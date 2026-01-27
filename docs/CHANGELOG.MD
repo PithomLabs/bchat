@@ -7,6 +7,24 @@ All notable changes to the bchat AI Agent System are documented in this file.
 ## 2026-01-27
 
 ### Added
+- **Chat Transcript Recording** - Persist chat conversations to database
+  - New `agent_transcripts` table stores chat history with metadata
+  - `record_transcripts` tenant setting (default: true) to enable/disable
+  - Works for BOTH external (anonymous) AND internal (authenticated) chat
+  - GET/DELETE endpoints for transcript management
+  - Agent Admin UI section with:
+    - Toggle checkbox for recording
+    - Transcript list with customer info and intent
+    - Full transcript viewer modal
+    - Delete individual transcripts
+  - Captures: messages, customer name/phone/email, intent, timestamps
+  - Upsert logic: creates transcript on first message, updates on each subsequent message
+
+### Fixed
+- **Internal Chat Transcripts** - Added transcript saving to `ChatInternal`
+  - Previously only `ChatExternal` saved transcripts
+  - Now both chat endpoints save transcripts when recording is enabled
+
 - **Fallback Markdown Chunking** - Automatic chunking for unannotated KB content
   - When KB.MD has no `<!-- @section -->` annotations, uses `ChunkMarkdownContent()`
   - Splits by H2 → H3 → paragraphs → sentences (hierarchical fallback)
@@ -80,6 +98,36 @@ All notable changes to the bchat AI Agent System are documented in this file.
   - Q&A Pair Debugger design (side-by-side comparison)
   - Embedding Visualizer concept (2D t-SNE/UMAP plots)
   - Implementation phases and API designs
+
+- **Batched Reindex for Large Files** - Handles any size KB/POLICY files
+  - Previous: All chunks processed at once (memory spikes, API timeouts)
+  - Now: Processes chunks in batches of 100 with progress logging
+  - Memory efficient: Only one batch in memory at a time
+  - API friendly: Smaller embedding requests, less likely to timeout
+  - Progress visibility: Server logs show batch progress (e.g., "batch 5/15, 500/1487 chunks")
+  - Modified: `vectordb_lance.go` `Insert()` function
+
+- **MiniLM-L12-v2 Taskfile Command** - Higher quality embedding option
+  - Added `task run:rag:l12` command for L12 model via OpenRouter
+  - Same 384 dimensions as L6 - no reindexing when switching
+  - Better semantic quality (12 layers vs 6 layers)
+  - Requires `OPENROUTER_API_KEY` environment variable
+
+- **DOCS_RAG_PROCESS.MD** - Deep analysis of chat-to-RAG integration
+  - Complete data flow from user question to LLM response
+  - Confirms user questions ARE embedded for vector search
+  - Documents two modes: RAG (retrieved chunks) vs Long Context (full KB)
+  - Intent-driven retrieval mapping table
+  - Key code locations with file:line references
+  - Verification and debugging guide
+
+- **DOCS_SAVE_TRANSCRIPT.MD** - Chat transcript recording feature plan
+  - Persist external chat sessions to database (currently only in-memory)
+  - Tenant-level toggle: "Record transcript of chat conversations" (default: enabled)
+  - New `agent_transcripts` table with messages, metadata, customer info
+  - API endpoints: list, view, delete transcripts
+  - Agent Admin UI: checkbox setting + transcripts viewer section
+  - Privacy considerations and future enhancements
 
 ### Fixed
 - **Q&A Test Audience Mismatch** - Fixed "Not Found" on all Q&A tests

@@ -217,6 +217,38 @@ export interface RAGSearchResponse {
   results: RAGSearchResult[];
 }
 
+// Chat Transcript types
+export interface TranscriptMessage {
+  role: string;
+  content: string;
+  timestamp: string;
+}
+
+export interface AgentTranscript {
+  id: string;
+  tenantId: number;
+  sessionId: string;
+  audienceType: string;
+  messages: TranscriptMessage[];
+  messageCount: number;
+  clientIp?: string;
+  userAgent?: string;
+  customerName?: string;
+  customerPhone?: string;
+  customerEmail?: string;
+  customerLocation?: string;
+  detectedIntent?: string;
+  startedAt: string;
+  endedAt?: string;
+  lastMessageAt: string;
+  isCompleted: boolean;
+  completionReason?: string;
+}
+
+export interface TenantSettings {
+  recordTranscripts: boolean;
+}
+
 // Available LLM models (free tier)
 export const LLM_MODEL_OPTIONS = [
   { value: "openai/gpt-oss-120b:free", label: "GPT-OSS 120B (Default)" },
@@ -393,6 +425,11 @@ class LocalState {
   // RAG Search Explorer
   ragSearchResults: RAGSearchResponse | null = null;
   isSearchingRAG: boolean = false;
+
+  // Transcripts
+  transcripts: AgentTranscript[] = [];
+  isLoadingTranscripts: boolean = false;
+  tenantSettings: TenantSettings | null = null;
 
   constructor() {
     makeAutoObservable(this);
@@ -941,6 +978,86 @@ const agentAdminStore = (() => {
     state.setPartial({ ragSearchResults: null });
   };
 
+  // ============================================================================
+  // TRANSCRIPTS MANAGEMENT
+  // ============================================================================
+
+  const fetchTranscripts = async (slug: string): Promise<void> => {
+    state.setPartial({ isLoadingTranscripts: true });
+    try {
+      const response = await axios.get<{ transcripts: AgentTranscript[] }>(
+        `/api/v1/agent/${slug}/transcripts`
+      );
+      runInAction(() => {
+        state.transcripts = response.data.transcripts || [];
+        state.isLoadingTranscripts = false;
+      });
+    } catch (error) {
+      runInAction(() => {
+        state.isLoadingTranscripts = false;
+        state.transcripts = [];
+      });
+    }
+  };
+
+  const deleteTranscript = async (slug: string, transcriptId: string): Promise<boolean> => {
+    try {
+      await axios.delete(`/api/v1/agent/${slug}/transcripts/${transcriptId}`);
+      runInAction(() => {
+        state.transcripts = state.transcripts.filter(t => t.id !== transcriptId);
+      });
+      return true;
+    } catch (error) {
+      return false;
+    }
+  };
+
+  const clearTranscripts = () => {
+    state.setPartial({ transcripts: [], isLoadingTranscripts: false });
+  };
+
+  const fetchTenantSettings = async (slug: string): Promise<void> => {
+    try {
+      const response = await axios.get<{ record_transcripts: boolean }>(
+        `/api/v1/agent/${slug}/settings`
+      );
+      runInAction(() => {
+        state.tenantSettings = {
+          recordTranscripts: response.data.record_transcripts ?? true,
+        };
+      });
+    } catch (error) {
+      runInAction(() => {
+        state.tenantSettings = { recordTranscripts: true }; // Default
+      });
+    }
+  };
+
+  const updateTenantSettings = async (
+    slug: string,
+    settings: Partial<TenantSettings>
+  ): Promise<boolean> => {
+    state.setPartial({ isSaving: true, error: null });
+    try {
+      await axios.put(`/api/v1/agent/${slug}/settings`, {
+        record_transcripts: settings.recordTranscripts,
+      });
+      runInAction(() => {
+        if (state.tenantSettings) {
+          state.tenantSettings = { ...state.tenantSettings, ...settings };
+        }
+        state.isSaving = false;
+      });
+      return true;
+    } catch (error: any) {
+      runInAction(() => {
+        state.isSaving = false;
+        state.error = error.response?.data?.message || "Failed to update settings";
+      });
+      return false;
+    }
+  };
+
   const toggleTenantActive = async (slug: string, isActive: boolean): Promise<boolean> => {
     state.setPartial({ isSaving: true, error: null });
 
@@ -1225,6 +1342,12 @@ const agentAdminStore = (() => {
     // RAG Search Explorer
     searchRAG,
     clearRAGSearchResults,
+    // Transcripts
+    fetchTranscripts,
+    deleteTranscript,
+    clearTranscripts,
+    fetchTenantSettings,
+    updateTenantSettings,
   };
 })();
 

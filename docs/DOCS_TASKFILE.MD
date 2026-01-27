@@ -38,8 +38,9 @@ go install github.com/go-task/task/v3/cmd/task@latest
 | `task dev:backend` | Run dev server |
 | `task dev:backend:rag` | Run dev server with RAG (go run) |
 | `task run:rag` | Run compiled binary with RAG + OpenRouter |
-| `task run:rag:cybertron` | Run with Cybertron embeddings (native Go, recommended) |
-| `task run:rag:cybertron:quality` | Run with high-quality Cybertron embeddings |
+| `task run:rag:cybertron` | Run with Cybertron L6 embeddings (native Go, fast, free) |
+| `task run:rag:l12` | Run with L12 embeddings via OpenRouter (better quality, same 384 dim) |
+| `task run:rag:cybertron:quality` | Run with Cybertron mpnet embeddings (best quality, 768 dim) |
 | `task run:rag:mock` | Run compiled binary with RAG + mock embeddings |
 
 ---
@@ -315,6 +316,35 @@ EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
 - Semantically accurate embeddings (unlike mock)
 - Pure Go implementation, single binary
 - Fast (384 dimensions)
+
+---
+
+### task run:rag:l12
+
+Run with L12 embeddings for better quality while maintaining same 384 dimensions.
+
+```bash
+task run:rag:l12
+```
+
+**What it does:**
+1. Builds the backend with RAG support (if needed)
+2. Sets RAG environment variables with L12 model via OpenRouter
+3. Runs the compiled binary
+
+**Environment set automatically:**
+```bash
+RAG_PIPELINE_ENABLED=true
+LANCEDB_STORAGE_PROVIDER=local
+EMBEDDING_PROVIDER=openrouter
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L12-v2
+```
+
+**Trade-offs:**
+- Better semantic quality than L6 (12 layers vs 6)
+- Same 384 dimensions - no reindexing when switching from L6
+- Slightly slower than L6
+- Requires OpenRouter API key
 
 ---
 
@@ -599,16 +629,20 @@ EMBEDDING_PROVIDER=mock ./build/memos --mode dev
 
 ## Run Matrix
 
-| Command | Builds First | RAG Enabled | Embedding Provider | API Key Required | Semantic Accuracy |
-|---------|--------------|-------------|-------------------|------------------|-------------------|
-| `task dev:backend` | No | No | - | No | - |
-| `task dev:backend:rag` | No | Yes | local | No (needs server) | Yes |
-| `task run:rag` | Yes | Yes | openrouter | Yes | Yes |
-| `task run:rag:cybertron` | Yes | Yes | cybertron | No | Yes |
-| `task run:rag:cybertron:quality` | Yes | Yes | cybertron | No | Best |
-| `task run:rag:mock` | Yes | Yes | mock | No | No |
+| Command | Builds First | RAG Enabled | Embedding Provider | Dimensions | API Key | Quality |
+|---------|--------------|-------------|-------------------|------------|---------|---------|
+| `task dev:backend` | No | No | - | - | No | - |
+| `task dev:backend:rag` | No | Yes | local | 384 | No (needs server) | Good |
+| `task run:rag` | Yes | Yes | openrouter | 384 | Yes | Good |
+| `task run:rag:cybertron` | Yes | Yes | cybertron (L6) | 384 | No | Good |
+| `task run:rag:l12` | Yes | Yes | openrouter (L12) | 384 | Yes | Better |
+| `task run:rag:cybertron:quality` | Yes | Yes | cybertron (mpnet) | 768 | No | Best |
+| `task run:rag:mock` | Yes | Yes | mock | 384 | No | None |
 
-**Recommendation:** Use `task run:rag:cybertron` for development - it's free, fast, and semantically accurate.
+**Recommendations:**
+- **Free development:** `task run:rag:cybertron` (L6, fast, no API key)
+- **Better quality:** `task run:rag:l12` (L12, same 384 dim, requires API key)
+- **Best quality:** `task run:rag:cybertron:quality` (mpnet, 768 dim, requires reindex)
 
 ---
 

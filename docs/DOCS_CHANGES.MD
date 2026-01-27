@@ -496,4 +496,300 @@ Aggressive: 100 chunks × 1 pair = 100 Q&A pairs
 
 ---
 
+## 2026-01-27 ~08:30 - Add MiniLM-L12-v2 Embedding Model Option
+
+**Status:** Planned
+**Priority:** Medium
+**Reason:** Provide higher quality embeddings option while maintaining same 384 dimensions for compatibility.
+
+### Background
+
+Currently supported embedding models:
+
+| Model | Dimensions | Layers | Quality | Speed |
+|-------|------------|--------|---------|-------|
+| `all-MiniLM-L6-v2` | 384 | 6 | Good | Fast |
+| `all-MiniLM-L12-v2` | 384 | 12 | Better | Slower |
+| `all-mpnet-base-v2` | 768 | 12 | Best | Slowest |
+
+**L12 vs L6:** L12 has 12 transformer layers (vs 6), providing better semantic understanding at ~2x compute cost. Same 384 dimensions = no reindexing needed when switching.
+
+### Current State
+
+The model is **already supported** in dimension detection:
+
+```go
+// embedding.go:87-90
+case "sentence-transformers/all-MiniLM-L6-v2",
+    "sentence-transformers/all-MiniLM-L12-v2",  // ← Already here
+    "sentence-transformers/paraphrase-MiniLM-L6-v2":
+    return 384
+```
+
+**Current usage via environment:**
+```bash
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L12-v2 task run:rag
+```
+
+### What's Missing
+
+1. **No UI selector** - Users can't choose embedding model in Agent Admin
+2. **No Taskfile shortcut** - No `task run:rag:l12` command
+3. **No documentation** - Model options not documented
+
+### Implementation Plan
+
+#### Option A: Taskfile Shortcut (Quick Win)
+
+Add new Taskfile command for L12 model:
+
+```yaml
+# Taskfile.yml
+run:rag:cybertron:l12:
+  desc: "Run with Cybertron L12 embeddings (higher quality)"
+  cmds:
+    - |
+      RAG_PIPELINE_ENABLED=true \
+      EMBEDDING_PROVIDER=cybertron \
+      EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L12-v2 \
+      DATA_DIR={{.ROOT_DIR}}/build/data \
+      ./build/memos --mode dev
+```
+
+#### Option B: Per-Tenant Embedding Config (Full Solution)
+
+Add embedding model selection to Agent Admin UI:
+
+**1. Database Schema**
+```sql
+-- Add to tenant_config table
+ALTER TABLE tenant_config ADD COLUMN embedding_model TEXT;
+```
+
+**2. Backend Changes**
+```go
+// store/agent.go - TenantConfig struct
+type TenantConfig struct {
+    // ... existing fields
+    EmbeddingModel string `json:"embedding_model"` // NEW
+}
+
+// service.go - Use tenant's embedding model
+func (s *Service) getEmbeddingModel(tenantID int32) string {
+    config, _ := s.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &tenantID})
+    if config != nil && config.EmbeddingModel != "" {
+        return config.EmbeddingModel
+    }
+    return s.defaultEmbeddingModel // From env
+}
+```
+
+**3. Frontend Changes**
+```tsx
+// AgentAdmin.tsx - Add embedding model selector
+<Select
+  value={embeddingModel}
+  onChange={(_, v) => setEmbeddingModel(v)}
+>
+  <Option value="sentence-transformers/all-MiniLM-L6-v2">
+    MiniLM-L6 (Fast, Good Quality)
+  </Option>
+  <Option value="sentence-transformers/all-MiniLM-L12-v2">
+    MiniLM-L12 (Slower, Better Quality)
+  </Option>
+  <Option value="sentence-transformers/all-mpnet-base-v2">
+    MPNet (Slowest, Best Quality) - 768 dim
+  </Option>
+</Select>
+```
+
+**Note:** Changing embedding model requires "Rebuild Index" to re-embed all content.
+
+### Recommended Approach
+
+**Phase 1 (Immediate):** Add Taskfile shortcut - zero code changes
+**Phase 2 (Later):** Add UI selector if per-tenant embedding needed
+
+### Files to Modify
+
+| File | Change |
+|------|--------|
+| `Taskfile.yml` | Add `run:rag:cybertron:l12` command |
+| `docs/DOCS_ENV_VAR.MD` | Document `EMBEDDING_MODEL` options |
+| `docs/DOCS_TASKFILE.MD` | Document new task command |
+
+### Verification
+
+```bash
+# Test L12 model
+task run:rag:cybertron:l12
+
+# Check logs show correct model
+# "Loading Cybertron embedding model" model=sentence-transformers/all-MiniLM-L12-v2
+
+# Rebuild index for a tenant
+# Compare retrieval quality vs L6
+```
+
+### Model Comparison Reference
+
+| Metric | L6 | L12 | MPNet |
+|--------|----|----|-------|
+| Dimensions | 384 | 384 | 768 |
+| Parameters | 22M | 33M | 109M |
+| Speed (relative) | 1x | 0.5x | 0.3x |
+| STS Benchmark | 0.78 | 0.79 | 0.83 |
+| Memory | ~90MB | ~130MB | ~420MB |
+
+---
+
+## 2026-01-27 ~09:00 - Batched Reindex for Large Files
+
+**Status:** Implemented
+**Priority:** High
+**Reason:** Rebuild Index fails for large KB/POLICY files due to memory issues and API timeouts when processing all chunks at once.
+
+### Problem
+
+The `Insert()` function in `vectordb_lance.go` processed all chunks in a single batch:
+
+```go
+// OLD: All chunks processed at once
+func (db *LanceVectorDB) Insert(ctx context.Context, chunks []DocumentChunk) error {
+    // Generate embeddings for ALL chunks at once
+    embeddings, err := db.embedSvc.Embed(ctx, allTexts)  // ← Memory spike + API timeout
+
+    // Build one giant Arrow record
+    record, err := db.chunksToArrowRecord(chunks)  // ← Memory spike
+
+    // Single insert
+    db.table.Add(ctx, record, nil)
+}
+```
+
+**Issues with large files:**
+1. **Memory spikes** - Building Arrow record for 1000+ chunks at once
+2. **API timeouts** - OpenRouter embedding API times out on large batches
+3. **No progress visibility** - User sees no feedback during long operations
+4. **All-or-nothing** - Single failure loses all progress
+
+### Solution: Batched Processing
+
+Process chunks in batches of 100 with progress logging:
+
+```go
+// NEW: Process in batches
+func (db *LanceVectorDB) Insert(ctx context.Context, chunks []DocumentChunk) error {
+    const batchSize = 100
+
+    for batchStart := 0; batchStart < len(chunks); batchStart += batchSize {
+        batch := chunks[batchStart:min(batchStart+batchSize, len(chunks))]
+
+        // 1. Generate embeddings for this batch only
+        embeddings, err := db.embedSvc.Embed(ctx, batchTexts)
+
+        // 2. Build Arrow record for this batch
+        record, err := db.chunksToArrowRecord(batch)
+
+        // 3. Insert batch
+        db.table.Add(ctx, record, nil)
+        record.Release()
+
+        // 4. Log progress
+        slog.Info("Processing batch",
+            "batch", batchNum,
+            "totalBatches", totalBatches,
+            "progress", fmt.Sprintf("%d/%d", processed, total))
+    }
+}
+```
+
+### Implementation Details
+
+**Batch size:** 100 chunks per batch
+- Small enough to avoid memory issues
+- Large enough for efficient embedding API calls
+- Matches OpenRouter's recommended batch size
+
+**Progress logging:**
+```
+INFO Processing batch batch=1 totalBatches=15 chunksInBatch=100 progress=100/1487
+INFO Processing batch batch=2 totalBatches=15 chunksInBatch=100 progress=200/1487
+...
+INFO Completed batched insert totalChunks=1487
+```
+
+**Dimension mismatch check:** Moved to start of function using first chunk as sample, before processing all batches. This prevents wasted work if table needs recreation.
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `server/router/api/v1/agent/vectordb_lance.go` | Rewrite `Insert()` to use batched processing |
+
+### Key Code Changes
+
+```go
+// vectordb_lance.go - Insert function
+
+// Batch size for embedding and insertion (handles large files)
+const batchSize = 100
+
+totalChunks := len(chunks)
+slog.Info("Starting batched insert", "totalChunks", totalChunks, "batchSize", batchSize)
+
+// Check dimension mismatch BEFORE processing (using first chunk as sample)
+// This avoids wasting API calls if table needs recreation
+
+// Process chunks in batches
+for batchStart := 0; batchStart < totalChunks; batchStart += batchSize {
+    batchEnd := batchStart + batchSize
+    if batchEnd > totalChunks {
+        batchEnd = totalChunks
+    }
+
+    batch := chunks[batchStart:batchEnd]
+    batchNum := (batchStart / batchSize) + 1
+    totalBatches := (totalChunks + batchSize - 1) / batchSize
+
+    slog.Info("Processing batch",
+        "batch", batchNum,
+        "totalBatches", totalBatches,
+        "chunksInBatch", len(batch),
+        "progress", fmt.Sprintf("%d/%d", batchEnd, totalChunks))
+
+    // Generate embeddings for this batch
+    // Build Arrow record for this batch
+    // Add batch to table
+    // Release record memory
+}
+```
+
+### Benefits
+
+1. **Memory efficient** - Only one batch in memory at a time
+2. **API friendly** - Smaller embedding requests, less likely to timeout
+3. **Progress visibility** - Server logs show batch progress
+4. **Partial success** - Early batches committed even if later fails
+5. **Scalable** - Can handle any size KB/POLICY file
+
+### Verification
+
+1. Upload a large KB file (1MB+)
+2. Click "Rebuild Index"
+3. Check server logs for batch progress messages
+4. Index should complete successfully
+5. Search should return results from all chunks
+
+### Configuration
+
+Batch size is hardcoded to 100. Future enhancement could make this configurable via environment variable:
+
+```bash
+# Future: Configure batch size
+LANCEDB_INSERT_BATCH_SIZE=100  # Default
+```
+
+---
+
 *Add new changes below with timestamp*

@@ -810,7 +810,7 @@ type ChatMetadata struct {
 }
 
 // ChatExternal handles chat for external (anonymous) users.
-func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP string, req ChatRequest) (*ChatResponse, error) {
+func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAgent string, req ChatRequest) (*ChatResponse, error) {
 	// Load config
 	config, err := s.LoadConfig(ctx, tenantSlug, "external")
 	if err != nil {
@@ -837,6 +837,14 @@ func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP string,
 
 	// Update memory session
 	s.memorySessions.Update(session)
+
+	// Save transcript if recording is enabled
+	if s.shouldRecordTranscript(ctx, config.TenantID) {
+		if err := s.saveTranscript(ctx, session, clientIP, userAgent); err != nil {
+			slog.Warn("Failed to save transcript", "sessionID", session.ID, "error", err)
+			// Don't fail the request, just log the error
+		}
+	}
 
 	return response, nil
 }
@@ -895,6 +903,13 @@ func (s *Service) ChatInternal(ctx context.Context, tenantSlug string, userID in
 	})
 	if err != nil {
 		slog.Error("failed to persist session", "error", err)
+	}
+
+	// Save transcript if recording is enabled
+	if s.shouldRecordTranscript(ctx, config.TenantID) {
+		if err := s.saveTranscript(ctx, session, "", "internal"); err != nil {
+			slog.Warn("Failed to save transcript", "sessionID", session.ID, "error", err)
+		}
 	}
 
 	response.SessionPersisted = true
@@ -2510,4 +2525,50 @@ Return ONLY the formatted POLICY.MD content, starting with:
 # %s Policy
 
 Do not include any explanations or commentary before or after the content.`, companyName, rawContent, companyName)
+}
+
+// shouldRecordTranscript checks if transcript recording is enabled for the tenant.
+func (s *Service) shouldRecordTranscript(ctx context.Context, tenantID int32) bool {
+	config, err := s.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &tenantID})
+	if err != nil || config == nil {
+		return true // Default to recording if config not found
+	}
+	return config.RecordTranscripts
+}
+
+// saveTranscript persists the chat session to the transcripts table.
+func (s *Service) saveTranscript(ctx context.Context, session *store.AgentSession, clientIP, userAgent string) error {
+	transcript := &store.AgentTranscript{
+		ID:               session.ID,
+		TenantID:         session.TenantID,
+		SessionID:        session.ID,
+		AudienceType:     session.AudienceType,
+		Messages:         session.Messages,
+		MessageCount:     session.MessageCount,
+		ClientIP:         clientIP,
+		UserAgent:        userAgent,
+		CustomerName:     session.CustomerName,
+		CustomerPhone:    session.CustomerPhone,
+		CustomerLocation: session.CustomerLocation,
+		DetectedIntent:   session.CurrentIntent,
+		StartedAt:        session.CreatedAt,
+		LastMessageAt:    time.Now(),
+		IsCompleted:      session.IsCompleted,
+		CompletionReason: session.CompletionReason,
+	}
+
+	// Check if transcript already exists (upsert logic)
+	existing, err := s.store.GetAgentTranscript(ctx, &store.FindAgentTranscript{SessionID: &session.ID})
+	if err != nil {
+		slog.Warn("Failed to check existing transcript", "sessionID", session.ID, "error", err)
+	}
+
+	if existing != nil {
+		// Update existing transcript
+		return s.store.UpdateAgentTranscript(ctx, transcript)
+	}
+
+	// Create new transcript
+	_, err = s.store.CreateAgentTranscript(ctx, transcript)
+	return err
 }

@@ -1907,3 +1907,227 @@ func (d *DB) DeleteAgentQAPairsByTenant(ctx context.Context, tenantID int32) err
 	_, err := d.db.ExecContext(ctx, "DELETE FROM agent_qa_pairs WHERE tenant_id = ?", tenantID)
 	return err
 }
+
+// Transcript operations
+
+func (d *DB) CreateAgentTranscript(ctx context.Context, transcript *store.AgentTranscript) (*store.AgentTranscript, error) {
+	messagesJSON, err := json.Marshal(transcript.Messages)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal messages: %w", err)
+	}
+
+	now := time.Now()
+	if transcript.StartedAt.IsZero() {
+		transcript.StartedAt = now
+	}
+	transcript.LastMessageAt = now
+
+	stmt := `
+		INSERT INTO agent_transcripts (
+			id, tenant_id, session_id, audience_type, messages, message_count,
+			client_ip, user_agent, customer_name, customer_phone, customer_email,
+			customer_location, detected_intent, started_at, last_message_at,
+			is_completed, completion_reason
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	_, err = d.db.ExecContext(ctx, stmt,
+		transcript.ID, transcript.TenantID, transcript.SessionID, transcript.AudienceType,
+		string(messagesJSON), transcript.MessageCount,
+		transcript.ClientIP, transcript.UserAgent,
+		transcript.CustomerName, transcript.CustomerPhone, transcript.CustomerEmail,
+		transcript.CustomerLocation, transcript.DetectedIntent,
+		transcript.StartedAt, transcript.LastMessageAt,
+		transcript.IsCompleted, transcript.CompletionReason,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create transcript: %w", err)
+	}
+
+	return transcript, nil
+}
+
+func (d *DB) GetAgentTranscript(ctx context.Context, find *store.FindAgentTranscript) (*store.AgentTranscript, error) {
+	where := []string{"1 = 1"}
+	args := []interface{}{}
+
+	if find.ID != nil {
+		where = append(where, "id = ?")
+		args = append(args, *find.ID)
+	}
+	if find.TenantID != nil {
+		where = append(where, "tenant_id = ?")
+		args = append(args, *find.TenantID)
+	}
+	if find.SessionID != nil {
+		where = append(where, "session_id = ?")
+		args = append(args, *find.SessionID)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, tenant_id, session_id, audience_type, messages, message_count,
+			client_ip, user_agent, customer_name, customer_phone, customer_email,
+			customer_location, detected_intent, started_at, ended_at, last_message_at,
+			is_completed, completion_reason
+		FROM agent_transcripts
+		WHERE %s
+		LIMIT 1
+	`, strings.Join(where, " AND "))
+
+	row := d.db.QueryRowContext(ctx, query, args...)
+
+	var t store.AgentTranscript
+	var messagesJSON string
+	var clientIP, userAgent, customerName, customerPhone, customerEmail sql.NullString
+	var customerLocation, detectedIntent, completionReason sql.NullString
+	var endedAt sql.NullTime
+
+	err := row.Scan(
+		&t.ID, &t.TenantID, &t.SessionID, &t.AudienceType, &messagesJSON, &t.MessageCount,
+		&clientIP, &userAgent, &customerName, &customerPhone, &customerEmail,
+		&customerLocation, &detectedIntent, &t.StartedAt, &endedAt, &t.LastMessageAt,
+		&t.IsCompleted, &completionReason,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan transcript: %w", err)
+	}
+
+	if err := json.Unmarshal([]byte(messagesJSON), &t.Messages); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal messages: %w", err)
+	}
+
+	t.ClientIP = clientIP.String
+	t.UserAgent = userAgent.String
+	t.CustomerName = customerName.String
+	t.CustomerPhone = customerPhone.String
+	t.CustomerEmail = customerEmail.String
+	t.CustomerLocation = customerLocation.String
+	t.DetectedIntent = detectedIntent.String
+	t.CompletionReason = completionReason.String
+	if endedAt.Valid {
+		t.EndedAt = &endedAt.Time
+	}
+
+	return &t, nil
+}
+
+func (d *DB) ListAgentTranscripts(ctx context.Context, find *store.FindAgentTranscript) ([]*store.AgentTranscript, error) {
+	where := []string{"1 = 1"}
+	args := []interface{}{}
+
+	if find.TenantID != nil {
+		where = append(where, "tenant_id = ?")
+		args = append(args, *find.TenantID)
+	}
+	if find.AudienceType != nil {
+		where = append(where, "audience_type = ?")
+		args = append(args, *find.AudienceType)
+	}
+
+	limit := 100
+	if find.Limit > 0 {
+		limit = find.Limit
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, tenant_id, session_id, audience_type, messages, message_count,
+			client_ip, user_agent, customer_name, customer_phone, customer_email,
+			customer_location, detected_intent, started_at, ended_at, last_message_at,
+			is_completed, completion_reason
+		FROM agent_transcripts
+		WHERE %s
+		ORDER BY started_at DESC
+		LIMIT ? OFFSET ?
+	`, strings.Join(where, " AND "))
+
+	args = append(args, limit, find.Offset)
+	rows, err := d.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list transcripts: %w", err)
+	}
+	defer rows.Close()
+
+	var transcripts []*store.AgentTranscript
+	for rows.Next() {
+		var t store.AgentTranscript
+		var messagesJSON string
+		var clientIP, userAgent, customerName, customerPhone, customerEmail sql.NullString
+		var customerLocation, detectedIntent, completionReason sql.NullString
+		var endedAt sql.NullTime
+
+		err := rows.Scan(
+			&t.ID, &t.TenantID, &t.SessionID, &t.AudienceType, &messagesJSON, &t.MessageCount,
+			&clientIP, &userAgent, &customerName, &customerPhone, &customerEmail,
+			&customerLocation, &detectedIntent, &t.StartedAt, &endedAt, &t.LastMessageAt,
+			&t.IsCompleted, &completionReason,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan transcript: %w", err)
+		}
+
+		if err := json.Unmarshal([]byte(messagesJSON), &t.Messages); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal messages: %w", err)
+		}
+
+		t.ClientIP = clientIP.String
+		t.UserAgent = userAgent.String
+		t.CustomerName = customerName.String
+		t.CustomerPhone = customerPhone.String
+		t.CustomerEmail = customerEmail.String
+		t.CustomerLocation = customerLocation.String
+		t.DetectedIntent = detectedIntent.String
+		t.CompletionReason = completionReason.String
+		if endedAt.Valid {
+			t.EndedAt = &endedAt.Time
+		}
+
+		transcripts = append(transcripts, &t)
+	}
+
+	return transcripts, nil
+}
+
+func (d *DB) UpdateAgentTranscript(ctx context.Context, transcript *store.AgentTranscript) error {
+	messagesJSON, err := json.Marshal(transcript.Messages)
+	if err != nil {
+		return fmt.Errorf("failed to marshal messages: %w", err)
+	}
+
+	transcript.LastMessageAt = time.Now()
+
+	stmt := `
+		UPDATE agent_transcripts SET
+			messages = ?,
+			message_count = ?,
+			customer_name = ?,
+			customer_phone = ?,
+			customer_email = ?,
+			customer_location = ?,
+			detected_intent = ?,
+			last_message_at = ?,
+			ended_at = ?,
+			is_completed = ?,
+			completion_reason = ?
+		WHERE id = ?
+	`
+	_, err = d.db.ExecContext(ctx, stmt,
+		string(messagesJSON), transcript.MessageCount,
+		transcript.CustomerName, transcript.CustomerPhone, transcript.CustomerEmail,
+		transcript.CustomerLocation, transcript.DetectedIntent,
+		transcript.LastMessageAt, transcript.EndedAt,
+		transcript.IsCompleted, transcript.CompletionReason,
+		transcript.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update transcript: %w", err)
+	}
+
+	return nil
+}
+
+func (d *DB) DeleteAgentTranscript(ctx context.Context, id string) error {
+	_, err := d.db.ExecContext(ctx, "DELETE FROM agent_transcripts WHERE id = ?", id)
+	return err
+}
