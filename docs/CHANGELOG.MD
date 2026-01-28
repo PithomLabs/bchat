@@ -32,6 +32,12 @@ All notable changes to the bchat AI Agent System are documented in this file.
   - Auto-fills tenant slug and company name
 
 ### Fixed
+- **Widget Dark Mode Text Color** - Message text invisible in dark mode
+  - Bug: `.acw-msg-user .acw-msg-bubble` and `.acw-msg-assistant .acw-msg-bubble` set `color: #1c1e21`
+  - Issue: Higher specificity overrode dark mode `.acw-msg-bubble { color: #ffffff }`
+  - Fix: Removed redundant color declarations (lines 265-271 in styles.ts)
+  - Result: Base `.acw-msg-bubble` color now properly overridden by dark mode media query
+
 - **Duplicate RAG Indexing on File Upload** - KB files were indexed twice
   - Bug: `indexContentForRAG()` ran during import, then `ReindexTenantContent()` ran in background goroutine
   - Impact: 2x processing time, 2x embedding API costs

@@ -234,7 +234,7 @@ export function getStyles(config: WidgetConfig): string {
     /* Message Row */
     .acw-msg {
       display: flex;
-      margin-bottom: 16px;
+      margin-bottom: 24px;
       animation: acw-fade-in 0.3s ease;
     }
 
@@ -251,34 +251,21 @@ export function getStyles(config: WidgetConfig): string {
       justify-content: flex-start;
     }
 
-    /* Message Bubbles */
+    /* Message Text - Plain, no bubble */
     .acw-msg-bubble {
-      max-width: 80%;
-      padding: 12px 16px;
-      font-size: 14px;
-      line-height: 1.45;
+      max-width: 90%;
+      padding: 8px 0;
+      font-size: 15px;
+      line-height: 1.7;
       word-wrap: break-word;
       white-space: pre-wrap;
-    }
-
-    .acw-msg-user .acw-msg-bubble {
-      background: linear-gradient(135deg, ${color} 0%, ${shadeColor(color, -10)} 100%);
-      color: white;
-      border-radius: 18px 18px 4px 18px;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-    }
-
-    .acw-msg-assistant .acw-msg-bubble {
-      background: #ffffff;
       color: #1c1e21;
-      border-radius: 18px 18px 18px 4px;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
     }
 
     /* Timestamp */
     .acw-msg-time {
       font-size: 11px;
-      margin-top: 6px;
+      margin-top: 8px;
       display: block;
       opacity: 0.7;
     }
@@ -459,12 +446,15 @@ export function getStyles(config: WidgetConfig): string {
         color: #b0b3b8;
       }
 
-      .acw-msg-assistant .acw-msg-bubble {
-        background: #3a3b3c;
-        color: #e4e6eb;
+      .acw-msg-bubble {
+        color: #ffffff;
       }
 
       .acw-msg-assistant .acw-msg-time {
+        color: #b0b3b8;
+      }
+
+      .acw-msg-user .acw-msg-time {
         color: #b0b3b8;
       }
 

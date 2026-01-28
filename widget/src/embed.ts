@@ -1,22 +1,22 @@
 /**
  * Embeddable Chat Widget
  *
- * Usage:
- * <script
- *   src="https://your-server.com/widget/tenant-slug/embed.js"
- *   data-position="bottom-right"
- *   data-color="#0d9488"
- *   data-welcome="How can we help?"
- * ></script>
- *
- * Or configure via global:
+ * Usage (recommended - matches Agent Admin output):
+ * <script src="https://your-server.com/widget/tenant-slug/embed.js"></script>
  * <script>
- *   window.AgentChatConfig = {
- *     baseUrl: 'https://your-server.com',
+ *   AgentChatWidget.init({
  *     tenant: 'tenant-slug',
+ *     baseUrl: 'https://your-server.com',
  *     color: '#0d9488',
- *     position: 'bottom-right'
- *   };
+ *     position: 'bottom-right',
+ *     welcomeMessage: 'How can we help?',
+ *     companyName: 'Your Company'
+ *   });
+ * </script>
+ *
+ * Alternative (legacy - auto-init):
+ * <script>
+ *   window.AgentChatConfig = { ... };
  * </script>
  * <script src="https://your-server.com/widget/embed.min.js"></script>
  */
@@ -25,11 +25,11 @@ import type { WidgetConfig } from './core/types';
 import { DEFAULT_CONFIG } from './core/types';
 import { Widget } from './ui/Widget';
 
-// Declare global config type
+// Declare global types
 declare global {
   interface Window {
     AgentChatConfig?: Partial<WidgetConfig>;
-    AgentChatWidget?: Widget;
+    AgentChatWidget: typeof AgentChatWidgetAPI;
   }
 }
 
@@ -106,42 +106,99 @@ function mergeConfig(scriptConfig: Partial<WidgetConfig>): WidgetConfig {
   return merged;
 }
 
+// Store widget instance
+let widgetInstance: Widget | null = null;
+
 /**
- * Initialize the widget
+ * Initialize the widget with explicit config (recommended)
  */
-function init(): void {
-  // Don't initialize twice
-  if (window.AgentChatWidget) {
+function initWithConfig(userConfig: Partial<WidgetConfig>): void {
+  if (widgetInstance) {
     console.warn('[AgentChatWidget] Widget already initialized');
     return;
   }
 
-  // Get configuration
   const scriptConfig = getConfigFromScript();
-  const config = mergeConfig(scriptConfig);
 
-  // Validate required config
+  // User config takes precedence over script config
+  const config: WidgetConfig = {
+    baseUrl: userConfig.baseUrl || scriptConfig.baseUrl || '',
+    tenant: userConfig.tenant || scriptConfig.tenant || '',
+    companyName: userConfig.companyName || scriptConfig.companyName,
+    color: userConfig.color || scriptConfig.color || DEFAULT_CONFIG.color,
+    position: userConfig.position || scriptConfig.position || DEFAULT_CONFIG.position,
+    welcomeMessage: userConfig.welcomeMessage || scriptConfig.welcomeMessage || DEFAULT_CONFIG.welcomeMessage,
+    buttonSize: userConfig.buttonSize || scriptConfig.buttonSize || DEFAULT_CONFIG.buttonSize,
+    panelWidth: userConfig.panelWidth || scriptConfig.panelWidth || DEFAULT_CONFIG.panelWidth,
+    panelHeight: userConfig.panelHeight || scriptConfig.panelHeight || DEFAULT_CONFIG.panelHeight,
+  };
+
   if (!config.baseUrl || !config.tenant) {
     console.error(
       '[AgentChatWidget] Missing required configuration. ' +
-      'Ensure baseUrl and tenant are provided via data attributes or window.AgentChatConfig'
+      'Ensure baseUrl and tenant are provided.'
     );
     return;
   }
 
-  // Create and mount widget
-  const widget = new Widget(config);
-  widget.mount();
-
-  // Store reference globally for debugging/testing
-  window.AgentChatWidget = widget;
+  widgetInstance = new Widget(config);
+  widgetInstance.mount();
 
   console.log('[AgentChatWidget] Initialized for tenant:', config.tenant);
 }
 
-// Initialize when DOM is ready
+/**
+ * Auto-initialize from window.AgentChatConfig (legacy support)
+ */
+function autoInit(): void {
+  if (widgetInstance) {
+    return; // Already initialized via init()
+  }
+
+  // Only auto-init if AgentChatConfig is set
+  if (!window.AgentChatConfig) {
+    return; // Wait for explicit init() call
+  }
+
+  const scriptConfig = getConfigFromScript();
+  const config = mergeConfig(scriptConfig);
+
+  if (!config.baseUrl || !config.tenant) {
+    // Don't log error - user might call init() later
+    return;
+  }
+
+  widgetInstance = new Widget(config);
+  widgetInstance.mount();
+
+  console.log('[AgentChatWidget] Auto-initialized for tenant:', config.tenant);
+}
+
+/**
+ * Public API object
+ */
+const AgentChatWidgetAPI = {
+  init: (config: Partial<WidgetConfig>) => {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => initWithConfig(config));
+    } else {
+      initWithConfig(config);
+    }
+  },
+
+  getInstance: () => widgetInstance,
+
+  open: () => widgetInstance?.open(),
+
+  close: () => widgetInstance?.close(),
+};
+
+// Export API globally
+window.AgentChatWidget = AgentChatWidgetAPI;
+
+// Auto-initialize when DOM is ready (legacy support for window.AgentChatConfig)
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
+  document.addEventListener('DOMContentLoaded', autoInit);
 } else {
-  init();
+  autoInit();
 }

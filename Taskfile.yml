@@ -54,6 +54,7 @@ tasks:
     cmds:
       - npm install
       - npm run build
+      - cp dist/embed.min.js site/
 
   build:
     desc: Build everything (frontend + backend)

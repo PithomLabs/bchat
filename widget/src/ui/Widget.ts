@@ -84,6 +84,21 @@ export class Widget {
   }
 
   /**
+   * Open the chat panel
+   */
+  open(): void {
+    this.state.setOpen(true);
+    setTimeout(() => focusInput(this.inputArea), 100);
+  }
+
+  /**
+   * Close the chat panel
+   */
+  close(): void {
+    this.state.setOpen(false);
+  }
+
+  /**
    * Render widget based on current state
    */
   private render(state: WidgetState): void {

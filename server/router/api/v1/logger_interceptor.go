@@ -24,6 +24,12 @@ func (in *LoggerInterceptor) LoggerInterceptor(ctx context.Context, request any,
 
 func (*LoggerInterceptor) loggerInterceptorDo(ctx context.Context, fullMethod string, err error) {
 	st := status.Convert(err)
+
+	// Skip logging for expected unauthenticated cases (e.g., anonymous users checking auth status)
+	if st.Code() == codes.Unauthenticated && fullMethod == "/memos.api.v1.AuthService/GetAuthStatus" {
+		return
+	}
+
 	var logLevel slog.Level
 	var logMsg string
 	switch st.Code() {
