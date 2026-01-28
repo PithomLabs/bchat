@@ -5,16 +5,20 @@ interface InputCallbacks {
 }
 
 /**
- * Create the input area
+ * Create the input area with pill-style wrapper
  */
 export function createInputArea(callbacks: InputCallbacks): HTMLDivElement {
   const container = document.createElement('div');
   container.id = 'acw-input-area';
 
+  // Pill-style wrapper for input and button
+  const wrapper = document.createElement('div');
+  wrapper.id = 'acw-input-wrapper';
+
   const input = document.createElement('input');
   input.id = 'acw-input';
   input.type = 'text';
-  input.placeholder = 'Type your message...';
+  input.placeholder = 'Type a message...';
   input.autocomplete = 'off';
 
   const sendBtn = document.createElement('button');
@@ -43,8 +47,9 @@ export function createInputArea(callbacks: InputCallbacks): HTMLDivElement {
     }
   });
 
-  container.appendChild(input);
-  container.appendChild(sendBtn);
+  wrapper.appendChild(input);
+  wrapper.appendChild(sendBtn);
+  container.appendChild(wrapper);
 
   return container;
 }

@@ -300,7 +300,19 @@
     "transcript-delete": "Delete Transcript",
     "transcript-delete-confirm": "Are you sure you want to delete this transcript?",
     "transcript-deleted": "Transcript deleted",
-    "settings-saved": "Settings saved"
+    "settings-saved": "Settings saved",
+    "widget-embed-title": "Widget Embed Code",
+    "widget-embed-desc": "Generate embed code to add the chat widget to your website",
+    "widget-color": "Widget Color",
+    "widget-position": "Position",
+    "widget-position-right": "Bottom Right",
+    "widget-position-left": "Bottom Left",
+    "widget-welcome": "Welcome Message",
+    "widget-welcome-placeholder": "Hi! How can I help you today?",
+    "widget-preview": "Preview",
+    "widget-code": "Embed Code",
+    "widget-copy": "Copy Code",
+    "widget-copied": "Embed code copied to clipboard"
   },
   "agent-simulation": {
     "title": "Agent Simulation",

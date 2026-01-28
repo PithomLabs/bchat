@@ -149,7 +149,6 @@ func (s *APIV1Service) RegisterGateway(ctx context.Context, echoServer *echo.Ech
 	ticketGroup.Use(s.AuthMiddleware)
 	s.RegisterTicketRoutes(ticketGroup)
 	s.RegisterNotificationRoutes(ticketGroup)
-	s.RegisterChatRoutes(ticketGroup)
 
 	// Register agent routes
 	s.RegisterAgentRoutes(echoServer)

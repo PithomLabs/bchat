@@ -64,17 +64,32 @@ export function updateMessages(
 }
 
 /**
- * Create a message element
+ * Create a message element (simple bubble with timestamp inside)
+ * Matches InternalAgent.tsx styling
  */
 function createMessageElement(message: Message): HTMLDivElement {
   const wrapper = document.createElement('div');
   wrapper.className = `acw-msg acw-msg-${message.role}`;
 
+  // Message bubble with content and timestamp inside
   const bubble = document.createElement('div');
   bubble.className = 'acw-msg-bubble';
-  bubble.textContent = message.content;
 
+  // Content
+  const content = document.createElement('p');
+  content.style.whiteSpace = 'pre-wrap';
+  content.style.margin = '0';
+  content.textContent = message.content;
+
+  // Timestamp inside bubble
+  const timestamp = document.createElement('span');
+  timestamp.className = 'acw-msg-time';
+  timestamp.textContent = formatTime(message.timestamp);
+
+  bubble.appendChild(content);
+  bubble.appendChild(timestamp);
   wrapper.appendChild(bubble);
+
   return wrapper;
 }
 
@@ -105,6 +120,17 @@ function createErrorElement(error: string): HTMLDivElement {
   el.className = 'acw-error';
   el.textContent = error;
   return el;
+}
+
+/**
+ * Format timestamp for display
+ */
+function formatTime(date: Date): string {
+  return date.toLocaleTimeString([], {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  });
 }
 
 /**

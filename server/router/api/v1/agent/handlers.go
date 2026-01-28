@@ -620,16 +620,6 @@ func (h *Handler) HandleImportSingleFile(c echo.Context) error {
 		"retrievalMode", retrievalMode,
 	)
 
-	// Trigger RAG indexing only for internal audience in RAG mode
-	// External audience is never indexed (uses long_context retrieval)
-	if retrievalMode == "rag" && audienceType == "internal" {
-		go func() {
-			if _, err := h.service.ReindexTenantContent(context.Background(), tenant.ID, "internal"); err != nil {
-				slog.Error("background RAG indexing failed", "tenant", slug, "error", err)
-			}
-		}()
-	}
-
 	// Invalidate cache
 	h.service.configCache.Invalidate(tenant.Slug)
 

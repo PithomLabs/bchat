@@ -810,14 +810,15 @@ type ChatMetadata struct {
 }
 
 // ChatExternal handles chat for external (anonymous) users.
+// Uses internal audience config (cleaned/production-ready content).
 func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAgent string, req ChatRequest) (*ChatResponse, error) {
-	// Load config
-	config, err := s.LoadConfig(ctx, tenantSlug, "external")
+	// Load config - use internal audience (cleaned content) for external users
+	config, err := s.LoadConfig(ctx, tenantSlug, "internal")
 	if err != nil {
 		return nil, err
 	}
 
-	// Check rate limit
+	// Check rate limit (still track as "external" for rate limiting purposes)
 	allowed, err := s.CheckRateLimit(ctx, config.TenantID, "external", clientIP, config.Audience.RateLimitRPM)
 	if err != nil {
 		slog.Error("rate limit check failed", "error", err)

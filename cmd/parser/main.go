@@ -8,9 +8,29 @@ import (
 	"unicode"
 )
 
+// LineType represents the type of content on a line
+type LineType int
+
+const (
+	LineTypeOther LineType = iota
+	LineTypeQuestion
+	LineTypeAnswer
+	LineTypeAnswerContinuation
+)
+
+// ProcessedLine holds a line with its cleaned version and type
+type ProcessedLine struct {
+	Cleaned string
+	Type    LineType
+}
+
 func main() {
-	inputPath := "/home/chaschel/Documents/ibm/ai/bchat/docs/templates/examples/inc/funda_beliefs.txt"
-	qaOutputPath := "/home/chaschel/Documents/ibm/ai/bchat/docs/templates/examples/inc/QA.txt"
+	basePath := "/home/chaschel/Documents/ibm/ai/bchat/docs/templates/examples/inc"
+	inputPath := basePath + "/funda_beliefs.txt"
+	qaOutputPath := basePath + "/QA.txt"
+	cleanOutputPath := basePath + "/funda_beliefs_clean.txt"
+	nonQAOutputPath := basePath + "/NON_QA.txt"
+	contextOutputPath := basePath + "/QA_IN_CONTEXT.txt"
 
 	// Read input file
 	content, err := os.ReadFile(inputPath)
@@ -21,17 +41,18 @@ func main() {
 
 	lines := strings.Split(string(content), "\n")
 
+	var processedLines []ProcessedLine
 	var qaPairs []string
 
 	var currentQ, currentA string
 	inAnswer := false
 
+	// First pass: clean lines and classify them
 	for _, line := range lines {
-		// Clean the line (remove corrupted tokens)
 		cleanedLine := cleanLine(line)
-
-		// Extract Q&A pairs
 		trimmed := strings.TrimSpace(cleanedLine)
+
+		pl := ProcessedLine{Cleaned: cleanedLine, Type: LineTypeOther}
 
 		if strings.HasPrefix(trimmed, "Q.") {
 			// Save previous Q&A pair if exists
@@ -41,15 +62,25 @@ func main() {
 			currentQ = trimmed
 			currentA = ""
 			inAnswer = false
+			pl.Type = LineTypeQuestion
 		} else if strings.HasPrefix(trimmed, "A.") {
 			currentA = trimmed
 			inAnswer = true
+			pl.Type = LineTypeAnswer
 		} else if inAnswer && trimmed != "" && !strings.HasPrefix(trimmed, "Q.") {
-			// Continue capturing multi-line answer until next Q or blank
 			if !isNewSection(trimmed) {
 				currentA += " " + trimmed
+				pl.Type = LineTypeAnswerContinuation
+			} else {
+				// New section breaks the answer
+				inAnswer = false
 			}
+		} else if inAnswer && trimmed == "" {
+			// Empty line ends answer continuation
+			inAnswer = false
 		}
+
+		processedLines = append(processedLines, pl)
 	}
 
 	// Don't forget last Q&A pair
@@ -58,18 +89,104 @@ func main() {
 	}
 
 	// Write QA.txt
-	qaFile, err := os.Create(qaOutputPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating QA file: %v\n", err)
+	if err := writeQAFile(qaOutputPath, qaPairs); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing QA file: %v\n", err)
 		os.Exit(1)
 	}
-	defer qaFile.Close()
+	fmt.Printf("Extracted %d Q&A pairs to %s\n", len(qaPairs), qaOutputPath)
+
+	// Write funda_beliefs_clean.txt (all cleaned lines)
+	if err := writeCleanFile(cleanOutputPath, processedLines); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing clean file: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Wrote cleaned document to %s\n", cleanOutputPath)
+
+	// Write NON_QA.txt (only non-Q&A lines)
+	if err := writeNonQAFile(nonQAOutputPath, processedLines); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing non-QA file: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Wrote non-Q&A content to %s\n", nonQAOutputPath)
+
+	// Write QA_IN_CONTEXT.txt (full doc with Q&A marked)
+	if err := writeContextFile(contextOutputPath, processedLines); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing context file: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Wrote Q&A in context to %s\n", contextOutputPath)
+}
+
+func writeQAFile(path string, qaPairs []string) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
 
 	for _, qa := range qaPairs {
-		qaFile.WriteString(qa + "\n")
+		f.WriteString(qa + "\n")
+	}
+	return nil
+}
+
+func writeCleanFile(path string, lines []ProcessedLine) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	for _, pl := range lines {
+		f.WriteString(pl.Cleaned + "\n")
+	}
+	return nil
+}
+
+func writeNonQAFile(path string, lines []ProcessedLine) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	for _, pl := range lines {
+		if pl.Type == LineTypeOther {
+			f.WriteString(pl.Cleaned + "\n")
+		}
+	}
+	return nil
+}
+
+func writeContextFile(path string, lines []ProcessedLine) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	inQABlock := false
+
+	for _, pl := range lines {
+		isQALine := pl.Type == LineTypeQuestion || pl.Type == LineTypeAnswer || pl.Type == LineTypeAnswerContinuation
+
+		if isQALine && !inQABlock {
+			f.WriteString("--- Q&A START ---\n")
+			inQABlock = true
+		} else if !isQALine && inQABlock {
+			f.WriteString("--- Q&A END ---\n")
+			inQABlock = false
+		}
+
+		f.WriteString(pl.Cleaned + "\n")
 	}
 
-	fmt.Printf("Extracted %d Q&A pairs to %s\n", len(qaPairs), qaOutputPath)
+	// Close any open Q&A block at end of file
+	if inQABlock {
+		f.WriteString("--- Q&A END ---\n")
+	}
+
+	return nil
 }
 
 // cleanLine removes corrupted OCR tokens from a line

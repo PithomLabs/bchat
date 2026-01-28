@@ -1,5 +1,5 @@
 import { Button, Checkbox, Chip, DialogActions, DialogContent, DialogTitle, Divider, FormControl, FormHelperText, FormLabel, Input, Modal, ModalClose, ModalDialog, Option, Select, Slider, Switch, Textarea } from "@mui/joy";
-import { ArrowLeftIcon, BuildingIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, EditIcon, EyeIcon, FileTextIcon, HistoryIcon, MessageCircleIcon, PlusIcon, RefreshCwIcon, SearchIcon, SettingsIcon, SparklesIcon, Trash2Icon, UploadIcon, XIcon, ZapIcon } from "lucide-react";
+import { ArrowLeftIcon, BuildingIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CodeIcon, CopyIcon, EditIcon, EyeIcon, FileTextIcon, HistoryIcon, MessageCircleIcon, PlusIcon, RefreshCwIcon, SearchIcon, SettingsIcon, SparklesIcon, Trash2Icon, UploadIcon, XIcon, ZapIcon } from "lucide-react";
 import { observer } from "mobx-react-lite";
 import { ChangeEvent, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
@@ -40,6 +40,12 @@ const AgentAdmin = observer(() => {
   const [showTranscripts, setShowTranscripts] = useState(false);
   const [selectedTranscript, setSelectedTranscript] = useState<AgentTranscript | null>(null);
   const [showTranscriptModal, setShowTranscriptModal] = useState(false);
+
+  // Widget embed state
+  const [widgetColor, setWidgetColor] = useState("#0d9488");
+  const [widgetPosition, setWidgetPosition] = useState<"bottom-right" | "bottom-left">("bottom-right");
+  const [widgetWelcome, setWidgetWelcome] = useState("Hi! How can I help you today?");
+  const [showWidgetPreview, setShowWidgetPreview] = useState(true);
 
   const { tenants, selectedTenant, isLoading, isSaving, error, fileVersions, llmConfig, tenantPermissions, myPermissions, script, isLoadingScript, qaPairs, qaTestResults, isGeneratingQA, isTestingQA, ragSearchResults, isSearchingRAG, transcripts, isLoadingTranscripts, tenantSettings } = agentAdminStore.state;
 
@@ -790,6 +796,202 @@ const AgentAdmin = observer(() => {
                     <RefreshCwIcon className="w-4 h-4 mr-2" />
                     {t("agent-admin.rebuild-index")}
                   </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Widget Embed Code - Admin or api:config permission */}
+            {(isAdmin || canConfigApi) && (
+              <div className="bg-gray-50 dark:bg-zinc-800 rounded-xl border border-gray-200 dark:border-zinc-700 p-4">
+                <div className="flex items-center gap-2 mb-4">
+                  <CodeIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                  <div>
+                    <h3 className="font-medium text-gray-800 dark:text-gray-200">{t("agent-admin.widget-embed-title")}</h3>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">{t("agent-admin.widget-embed-desc")}</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Customization Panel */}
+                  <div className="space-y-4">
+                    {/* Color Picker */}
+                    <FormControl>
+                      <FormLabel>{t("agent-admin.widget-color")}</FormLabel>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="color"
+                          value={widgetColor}
+                          onChange={(e) => setWidgetColor(e.target.value)}
+                          className="w-10 h-10 rounded-lg border border-gray-300 dark:border-zinc-600 cursor-pointer"
+                        />
+                        <Input
+                          value={widgetColor}
+                          onChange={(e) => setWidgetColor(e.target.value)}
+                          placeholder="#0d9488"
+                          sx={{ fontFamily: "monospace", width: 120 }}
+                        />
+                      </div>
+                    </FormControl>
+
+                    {/* Position */}
+                    <FormControl>
+                      <FormLabel>{t("agent-admin.widget-position")}</FormLabel>
+                      <div className="flex gap-2">
+                        <Button
+                          variant={widgetPosition === "bottom-right" ? "solid" : "outlined"}
+                          color="neutral"
+                          size="sm"
+                          onClick={() => setWidgetPosition("bottom-right")}
+                        >
+                          {t("agent-admin.widget-position-right")}
+                        </Button>
+                        <Button
+                          variant={widgetPosition === "bottom-left" ? "solid" : "outlined"}
+                          color="neutral"
+                          size="sm"
+                          onClick={() => setWidgetPosition("bottom-left")}
+                        >
+                          {t("agent-admin.widget-position-left")}
+                        </Button>
+                      </div>
+                    </FormControl>
+
+                    {/* Welcome Message */}
+                    <FormControl>
+                      <FormLabel>{t("agent-admin.widget-welcome")}</FormLabel>
+                      <Input
+                        value={widgetWelcome}
+                        onChange={(e) => setWidgetWelcome(e.target.value)}
+                        placeholder={t("agent-admin.widget-welcome-placeholder")}
+                      />
+                    </FormControl>
+                  </div>
+
+                  {/* Live Preview */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <FormLabel>{t("agent-admin.widget-preview")}</FormLabel>
+                      <Switch
+                        checked={showWidgetPreview}
+                        onChange={(e) => setShowWidgetPreview(e.target.checked)}
+                        size="sm"
+                      />
+                    </div>
+                    {showWidgetPreview && (
+                      <div className="relative bg-white dark:bg-zinc-900 rounded-xl border border-gray-200 dark:border-zinc-700 h-80 overflow-hidden">
+                        {/* Mini Preview Panel */}
+                        <div
+                          className="absolute w-64 bg-white rounded-2xl shadow-lg border overflow-hidden"
+                          style={{
+                            bottom: 16,
+                            [widgetPosition === "bottom-right" ? "right" : "left"]: 16,
+                            borderColor: "#e5e5e5"
+                          }}
+                        >
+                          {/* Header */}
+                          <div
+                            className="px-4 py-3 flex items-center justify-between"
+                            style={{ background: "#fff", borderBottom: "1px solid #f0f0f0" }}
+                          >
+                            <div className="flex items-center gap-2">
+                              <svg viewBox="0 0 24 24" className="w-5 h-5" style={{ fill: widgetColor }}>
+                                <path d="M12 2C6.48 2 2 6.48 2 12c0 1.85.5 3.58 1.36 5.07L2 22l4.93-1.36C8.42 21.5 10.15 22 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2zm0 18c-1.58 0-3.08-.38-4.4-1.06l-.31-.17-3.23.89.89-3.23-.17-.31C4.38 15.08 4 13.58 4 12c0-4.41 3.59-8 8-8s8 3.59 8 8-3.59 8-8 8z"/>
+                              </svg>
+                              <span className="font-semibold text-sm text-gray-800">{selectedTenant?.tenant.companyName || "Company"}</span>
+                            </div>
+                            <div className="flex gap-1">
+                              <div className="w-6 h-6 rounded-md hover:bg-gray-100 flex items-center justify-center cursor-pointer">
+                                <span className="text-gray-400 text-xs">─</span>
+                              </div>
+                              <div className="w-6 h-6 rounded-md hover:bg-gray-100 flex items-center justify-center cursor-pointer">
+                                <span className="text-gray-400 text-xs">✕</span>
+                              </div>
+                            </div>
+                          </div>
+                          {/* Messages Area */}
+                          <div className="p-4 bg-gray-50 h-32 flex items-center justify-center">
+                            <div className="text-center text-gray-400">
+                              <svg viewBox="0 0 24 24" className="w-8 h-8 mx-auto mb-2 fill-gray-300">
+                                <path d="M12 2C6.48 2 2 6.48 2 12c0 1.85.5 3.58 1.36 5.07L2 22l4.93-1.36C8.42 21.5 10.15 22 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2zm0 18c-1.58 0-3.08-.38-4.4-1.06l-.31-.17-3.23.89.89-3.23-.17-.31C4.38 15.08 4 13.58 4 12c0-4.41 3.59-8 8-8s8 3.59 8 8-3.59 8-8 8z"/>
+                              </svg>
+                              <p className="text-xs">{widgetWelcome}</p>
+                            </div>
+                          </div>
+                          {/* Input Area */}
+                          <div className="p-3 border-t border-gray-100 flex gap-2">
+                            <div className="flex-1 bg-gray-100 rounded-full px-4 py-2 text-xs text-gray-400">
+                              Message...
+                            </div>
+                            <div
+                              className="w-8 h-8 rounded-full flex items-center justify-center"
+                              style={{ background: widgetColor }}
+                            >
+                              <svg viewBox="0 0 24 24" className="w-4 h-4 fill-white">
+                                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                              </svg>
+                            </div>
+                          </div>
+                        </div>
+                        {/* Toggle Button */}
+                        <div
+                          className="absolute w-12 h-12 rounded-full shadow-lg flex items-center justify-center cursor-pointer"
+                          style={{
+                            background: widgetColor,
+                            bottom: 16,
+                            [widgetPosition === "bottom-right" ? "right" : "left"]: 16,
+                            display: "none"
+                          }}
+                        >
+                          <svg viewBox="0 0 24 24" className="w-6 h-6 fill-white">
+                            <path d="M12 2C6.48 2 2 6.48 2 12c0 1.85.5 3.58 1.36 5.07L2 22l4.93-1.36C8.42 21.5 10.15 22 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2zm0 18c-1.58 0-3.08-.38-4.4-1.06l-.31-.17-3.23.89.89-3.23-.17-.31C4.38 15.08 4 13.58 4 12c0-4.41 3.59-8 8-8s8 3.59 8 8-3.59 8-8 8z"/>
+                          </svg>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Generated Code */}
+                <div className="mt-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <FormLabel>{t("agent-admin.widget-code")}</FormLabel>
+                    <Button
+                      size="sm"
+                      variant="plain"
+                      color="neutral"
+                      startDecorator={<CopyIcon className="w-4 h-4" />}
+                      onClick={() => {
+                        const code = `<script src="${window.location.origin}/widget/${selectedTenant?.tenant.slug}/embed.js"></script>
+<script>
+  AgentChatWidget.init({
+    tenant: "${selectedTenant?.tenant.slug}",
+    baseUrl: "${window.location.origin}",
+    color: "${widgetColor}",
+    position: "${widgetPosition}",
+    welcomeMessage: "${widgetWelcome}",
+    companyName: "${selectedTenant?.tenant.companyName || ""}"
+  });
+</script>`;
+                        navigator.clipboard.writeText(code);
+                        toast.success(t("agent-admin.widget-copied"));
+                      }}
+                    >
+                      {t("agent-admin.widget-copy")}
+                    </Button>
+                  </div>
+                  <pre className="bg-gray-900 text-gray-100 rounded-lg p-4 text-xs overflow-x-auto font-mono">
+{`<script src="${window.location.origin}/widget/${selectedTenant?.tenant.slug}/embed.js"></script>
+<script>
+  AgentChatWidget.init({
+    tenant: "${selectedTenant?.tenant.slug}",
+    baseUrl: "${window.location.origin}",
+    color: "${widgetColor}",
+    position: "${widgetPosition}",
+    welcomeMessage: "${widgetWelcome}",
+    companyName: "${selectedTenant?.tenant.companyName || ""}"
+  });
+</script>`}
+                  </pre>
                 </div>
               </div>
             )}

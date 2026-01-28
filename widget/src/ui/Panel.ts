@@ -21,8 +21,12 @@ export function createPanel(
 
   const headerTitle = document.createElement('div');
   headerTitle.id = 'acw-header-title';
-  headerTitle.innerHTML = `${Icons.chat}<span>${escapeHtml(title)}</span>`;
 
+  // Title content wrapper (for flex layout)
+  const titleContent = document.createElement('div');
+  titleContent.innerHTML = `${Icons.bot}<span>${escapeHtml(title)}</span>`;
+
+  // Controls
   const headerControls = document.createElement('div');
   headerControls.id = 'acw-header-controls';
 
@@ -40,8 +44,10 @@ export function createPanel(
 
   headerControls.appendChild(minimizeBtn);
   headerControls.appendChild(closeBtn);
+
+  headerTitle.appendChild(titleContent);
+  headerTitle.appendChild(headerControls);
   header.appendChild(headerTitle);
-  header.appendChild(headerControls);
 
   // Content container
   const content = document.createElement('div');

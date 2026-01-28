@@ -4,6 +4,67 @@ All notable changes to the bchat AI Agent System are documented in this file.
 
 ---
 
+## 2026-01-28
+
+### Changed
+- **Chat Widget Premium Redesign** - Complete visual overhaul with Intercom-style design
+  - Gradient header with curved bottom wave effect
+  - Pill-style input with rounded wrapper and circular send button
+  - Asymmetric chat bubbles (user: bottom-right tail, assistant: bottom-left tail)
+  - Smooth animations (slide-up panel, fade-in messages, bouncing typing dots)
+  - Focus states with brand color ring on input
+  - Premium shadows throughout
+  - Full dark mode support (Facebook Messenger-inspired)
+  - Updated files:
+    - `widget/src/styles/styles.ts` - Complete CSS redesign
+    - `widget/src/ui/Input.ts` - Added wrapper div for pill-style input
+    - `widget/src/ui/Panel.ts` - Updated header structure
+    - `widget/src/ui/Messages.ts` - Simplified message structure
+
+### Added
+
+- **Widget Embed Code Generator** - New section in Agent Admin
+  - Color picker for widget branding
+  - Position toggle (bottom-right/bottom-left)
+  - Welcome message customization
+  - Live preview panel showing widget appearance
+  - Generated embed code with copy button
+  - Auto-fills tenant slug and company name
+
+### Fixed
+- **Duplicate RAG Indexing on File Upload** - KB files were indexed twice
+  - Bug: `indexContentForRAG()` ran during import, then `ReindexTenantContent()` ran in background goroutine
+  - Impact: 2x processing time, 2x embedding API costs
+  - Fix: Removed redundant background reindex call from `HandleImportFiles()`
+  - Added `DOCS_LOGS.MD` with detailed log analysis
+
+### Changed
+- **External Chat Widget Now Uses Internal Audience** - Cleaner content for customers
+  - `ChatExternal()` now loads `internal` audience config instead of `external`
+  - Rationale: "internal" = cleaned/production-ready, "external" = draft/staging
+  - Both customers (via widget) and admins (via testing) now use same cleaned content
+  - Rate limiting still tracked as "external" to protect public API
+
+### Removed
+- **Legacy `/api/v1/chat` Endpoint** - Dead code cleanup
+  - Deleted `server/router/api/v1/chat_service.go` (117 lines)
+  - Removed `RegisterChatRoutes()` call from `v1.go`
+  - This generic Memos chat endpoint was unused (all chat uses tenant-aware agent endpoints)
+
+- **Chat Sidebar Icon** - Consolidated navigation
+  - Removed "Chat" link from sidebar navigation
+  - Users should use "Internal Agent" page instead (same functionality)
+  - `/chat` route still exists but is hidden from navigation
+
+### Added
+- **DOCS_LOGS.MD** - Log analysis documentation for duplicate indexing bug
+- **DOCS_ENDPOINTS.MD** - Chat endpoint analysis and design documentation
+  - Documents `/chat/ext` and `/chat/int` endpoints
+  - Explains audience design (draft vs published content)
+  - Records changes made and rationale
+
+---
+
 ## 2026-01-27
 
 ### Added

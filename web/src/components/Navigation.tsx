@@ -1,5 +1,5 @@
 import { Tooltip } from "@mui/joy";
-import { BellIcon, BotIcon, DatabaseIcon, EarthIcon, FlaskConicalIcon, LibraryIcon, MessageSquareIcon, PaperclipIcon, SettingsIcon, TicketIcon, UserCircleIcon } from "lucide-react";
+import { BellIcon, BotIcon, DatabaseIcon, EarthIcon, FlaskConicalIcon, LibraryIcon, PaperclipIcon, SettingsIcon, TicketIcon, UserCircleIcon } from "lucide-react";
 import { observer } from "mobx-react-lite";
 import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
@@ -93,12 +93,6 @@ const Navigation = observer((props: Props) => {
       </div>
     ),
   };
-  const chatNavLink: NavLinkItem = {
-    id: "header-chat",
-    path: Routes.CHAT,
-    title: t("common.chat"),
-    icon: <MessageSquareIcon className="w-6 h-auto opacity-70 shrink-0" />,
-  };
   const internalAgentNavLink: NavLinkItem = {
     id: "header-internal-agent",
     path: Routes.INTERNAL_AGENT,
@@ -140,7 +134,6 @@ const Navigation = observer((props: Props) => {
     resourcesNavLink,
     ticketsNavLink,
     notificationsNavLink,
-    chatNavLink,
     ...(canAccessInternalAgent ? [internalAgentNavLink, agentSimulationNavLink] : []),
   ];
   const adminNavLinks: NavLinkItem[] = isAdmin ? [agentAdminNavLink, ragStatsNavLink] : [];

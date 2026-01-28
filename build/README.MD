@@ -71,3 +71,25 @@ go build -tags rag -o build/memos ./bin/memos
 RAG_PIPELINE_ENABLED=true REINDEX_RAG=true task run:rag
 
 RAG_PIPELINE_ENABLED=true EMBEDDING_PROVIDER=openrouter LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data /home/chaschel/Documents/ibm/ai/bchat/build/data
+
+To test the server:
+
+```
+task build:rag
+task build:rag:all
+
+task run:rag:l12
+```
+
+
+To test the widget:              
+-----                                           
+```                                                                              
+  # Terminal 1: Run the backend                                               
+  task run:rag                                                                
+                                                                              
+  # Terminal 2: Serve widget test files                                       
+  cd widget/site && python3 -m http.server 8080                                
+                                                                              
+  Then open http://localhost:8080 in your browser.
+```

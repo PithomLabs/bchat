@@ -20,6 +20,8 @@ export interface WidgetConfig {
   panelWidth: number;
   /** Chat panel height in pixels */
   panelHeight: number;
+  /** Show timestamps on messages (default: true) */
+  showTimestamp?: boolean;
 }
 
 /**
