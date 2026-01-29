@@ -28,6 +28,7 @@ type TenantConfig struct {
 	TenantID                  int32
 	LLMModel                  string
 	SimulationHumanModel      string // Model for human role in agent simulation
+	ReasoningModel            string // Model for Generate KB/Policy (reasoning tasks)
 	OpenRouterAPIKeyEncrypted []byte
 	OpenRouterAPIKeyNonce     []byte
 	Features                  map[string]interface{}

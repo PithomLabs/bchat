@@ -72,80 +72,48 @@ tasks:
     desc: Build everything with RAG support including widget
     deps: [build:frontend, build:backend:rag, build:widget]
 
-  dev:frontend:
-    desc: Run frontend dev server
-    cmds:
-      - npm --prefix web run dev
 
-  dev:backend:
-    desc: Run backend dev server
+  run:
+    desc: Run development server (sources .env file if present)
+    deps: [build:backend]
     cmds:
-      - go run ./bin/memos/main.go --mode dev
-
-  dev:backend:rag:
-    desc: Run backend dev server with RAG support (go run)
-    deps: [setup:lancedb]
-    env:
-      CGO_ENABLED: "1"
-      CGO_CFLAGS: "-I{{.ROOT_DIR}}/include"
-      CGO_LDFLAGS: "{{if eq .PLATFORM \"linux\"}}-L{{.LANCEDB_LIB_DIR}} -llancedb_go -Wl,-rpath,{{.LANCEDB_LIB_DIR}}{{else}}{{.LANCEDB_LIB_DIR}}/liblancedb_go.a{{end}} {{if eq .PLATFORM \"darwin\"}}-framework Security -framework CoreFoundation{{end}}"
-      LD_LIBRARY_PATH: "{{.LANCEDB_LIB_DIR}}:${LD_LIBRARY_PATH}"
-      RAG_PIPELINE_ENABLED: "true"
-      EMBEDDING_PROVIDER: "local"
-    cmds:
-      - go run -tags rag ./bin/memos/main.go --mode dev --data {{.ROOT_DIR}}/build/data
+      - |
+        if [ -f .env ]; then
+          echo "Loading environment from .env file..."
+          set -a && source .env && set +a
+        fi
+        ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
 
   run:rag:
-    desc: Run compiled binary with RAG enabled (local storage, OpenRouter embeddings)
+    desc: Run with RAG enabled (sources .env file, local storage)
     deps: [build:backend:rag]
     cmds:
-      - RAG_PIPELINE_ENABLED=true EMBEDDING_PROVIDER=openrouter EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
-
-  run:rag:mock:
-    desc: Run compiled binary with RAG enabled (local storage, mock embeddings)
-    deps: [build:backend:rag]
-    cmds:
-      - RAG_PIPELINE_ENABLED=true EMBEDDING_PROVIDER=mock LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
+      - |
+        if [ -f .env ]; then
+          echo "Loading environment from .env file..."
+          set -a && source .env && set +a
+        fi
+        RAG_PIPELINE_ENABLED=true \
+        LANCEDB_STORAGE_PROVIDER=local \
+        ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
 
   run:rag:l12:
-    desc: Run with L12 embeddings via OpenRouter (better quality than L6, same 384 dim)
+    desc: Run with RAG + L12 embeddings (sources .env file)
     deps: [build:backend:rag]
     cmds:
-      - RAG_PIPELINE_ENABLED=true EMBEDDING_PROVIDER=openrouter EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L12-v2 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
+      - |
+        if [ -f .env ]; then
+          echo "Loading environment from .env file..."
+          set -a && source .env && set +a
+        fi
+        RAG_PIPELINE_ENABLED=true \
+        EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L12-v2 \
+        LANCEDB_STORAGE_PROVIDER=local \
+        ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
 
   generate:
     desc: Run go generate
     cmds:
       - go generate ./...
 
-  embedding:server:
-    desc: Run local embedding server (requires Python with sentence-transformers)
-    dir: scripts
-    cmds:
-      - |
-        if [ ! -f embedding_server.py ]; then
-          echo "Creating embedding server script..."
-          mkdir -p scripts
-          cat > embedding_server.py << 'EOF'
-        from fastapi import FastAPI
-        from sentence_transformers import SentenceTransformer
-        from pydantic import BaseModel
-        import uvicorn
-
-        app = FastAPI()
-        model = SentenceTransformer('all-MiniLM-L6-v2')
-
-        class EmbedRequest(BaseModel):
-            texts: list[str]
-            model: str = None
-
-        @app.post("/embed")
-        def embed(req: EmbedRequest):
-            embeddings = model.encode(req.texts).tolist()
-            return {"embeddings": embeddings, "model": "all-MiniLM-L6-v2"}
-
-        if __name__ == "__main__":
-            uvicorn.run(app, host="0.0.0.0", port=8001)
-        EOF
-        fi
-        python embedding_server.py
+  

@@ -67,6 +67,7 @@ export interface LLMConfig {
   tenantSlug: string;
   llmModel: string;
   simulationHumanModel: string;
+  reasoningModel: string;
   hasApiKey: boolean;
   updatedAt?: string;
 }
@@ -74,6 +75,7 @@ export interface LLMConfig {
 export interface SetLLMConfigRequest {
   llmModel: string;
   simulationHumanModel: string;
+  reasoningModel?: string;
   openrouterApiKey?: string;
 }
 
@@ -1103,6 +1105,7 @@ const agentAdminStore = (() => {
     tenantSlug: data.tenant_slug,
     llmModel: data.llm_model,
     simulationHumanModel: data.simulation_human_model || "",
+    reasoningModel: data.reasoning_model || "",
     hasApiKey: data.has_api_key,
     updatedAt: data.updated_at,
   });
@@ -1124,6 +1127,7 @@ const agentAdminStore = (() => {
       const response = await axios.put(`/api/v1/agent/${slug}/llm-config`, {
         llm_model: config.llmModel,
         simulation_human_model: config.simulationHumanModel,
+        reasoning_model: config.reasoningModel,
         openrouter_api_key: config.openrouterApiKey,
       });
       runInAction(() => {

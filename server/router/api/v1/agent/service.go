@@ -2307,13 +2307,22 @@ func SetEscalationTicket(session *store.AgentSession, ticketNumber string) {
 // ============================================================================
 
 // getReasoningModel returns the LLM model for reasoning tasks.
-// Uses LLM_MODEL_REASONING env var with fallback to default.
-func getReasoningModel() string {
-	model := os.Getenv("LLM_MODEL_REASONING")
-	if model == "" {
-		model = "google/gemini-2.5-pro"
+// Priority: tenant config > LLM_MODEL_REASONING env var > hardcoded default.
+func (s *Service) getReasoningModel(ctx context.Context, tenantID int32) string {
+	// 1. Try tenant-specific config
+	config, _ := s.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &tenantID})
+	if config != nil && config.ReasoningModel != "" {
+		return config.ReasoningModel
 	}
-	return model
+
+	// 2. Fallback to env var
+	model := os.Getenv("LLM_MODEL_REASONING")
+	if model != "" {
+		return model
+	}
+
+	// 3. Hardcoded default
+	return "google/gemini-2.5-pro"
 }
 
 // GenerateAnnotatedKB uses an LLM to convert raw KB content into properly annotated KB.MD format.
@@ -2323,7 +2332,7 @@ func (s *Service) GenerateAnnotatedKB(ctx context.Context, tenantID int32, compa
 		return "", fmt.Errorf("OpenRouter API key not configured")
 	}
 
-	model := getReasoningModel()
+	model := s.getReasoningModel(ctx, tenantID)
 
 	prompt := buildKBGenerationPrompt(companyName, rawContent)
 
@@ -2353,7 +2362,7 @@ func (s *Service) GenerateAnnotatedPolicy(ctx context.Context, tenantID int32, c
 		return "", fmt.Errorf("OpenRouter API key not configured")
 	}
 
-	model := getReasoningModel()
+	model := s.getReasoningModel(ctx, tenantID)
 
 	prompt := buildPolicyGenerationPrompt(companyName, rawContent)
 

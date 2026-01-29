@@ -43,6 +43,7 @@ git tag -a v0.5.13 -m "cybertron"
 git tag -a v0.5.14 -m "fixed rebuild index/rag"
 git tag -a v0.5.15 -m "QA pairs, RAG Search Explorer"
 git tag -a v0.5.16 -m "save chat transcript"
+git tag -a v0.5.17 -m "CHANGELOG.MD 2026-01-28 2218"
 git push origin --tags
 ```
 
@@ -52,6 +53,8 @@ export LLM_MODEL=xiaomi/mimo-v2-flash:free
 export OPENROUTER_API_KEY=
 export LLM_MODEL=xiaomi/mimo-v2-flash:free
 export LLM_MODEL=openai/gpt-oss-120b:free
+
+uuidgen to encrypt OPENROUTER_API_KEY
 export ENCRYPTION_MASTER_KEY=ced26e6e-91ce-4120-b4c0-68ec9ea25701
 
 xiaomi/mimo-v2-flash:free

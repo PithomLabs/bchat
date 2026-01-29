@@ -1,5 +1,5 @@
 import { Button, Checkbox, Chip, DialogActions, DialogContent, DialogTitle, Divider, FormControl, FormHelperText, FormLabel, Input, Modal, ModalClose, ModalDialog, Option, Select, Slider, Switch, Textarea } from "@mui/joy";
-import { ArrowLeftIcon, BuildingIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CodeIcon, CopyIcon, EditIcon, EyeIcon, FileTextIcon, HistoryIcon, MessageCircleIcon, PlusIcon, RefreshCwIcon, SearchIcon, SettingsIcon, SparklesIcon, Trash2Icon, UploadIcon, XIcon, ZapIcon } from "lucide-react";
+import { ArrowLeftIcon, BuildingIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CodeIcon, CopyIcon, EditIcon, EyeIcon, EyeOffIcon, FileTextIcon, HistoryIcon, MessageCircleIcon, PlusIcon, RefreshCwIcon, SearchIcon, SettingsIcon, SparklesIcon, Trash2Icon, UploadIcon, XIcon, ZapIcon } from "lucide-react";
 import { observer } from "mobx-react-lite";
 import { ChangeEvent, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
@@ -401,16 +401,6 @@ const AgentAdmin = observer(() => {
               </div>
             </div>
 
-            {/* Endpoints */}
-            <div className="bg-white dark:bg-zinc-800 rounded-xl border border-gray-200 dark:border-zinc-700 p-4">
-              <h3 className="font-medium text-gray-800 dark:text-gray-200 mb-3">{t("agent-admin.endpoints")}</h3>
-              <div className="space-y-2 text-sm">
-                <EndpointRow label={t("agent-admin.external-chat-endpoint")} value={selectedTenant.endpoints.externalChat} onCopy={copyToClipboard} />
-                <EndpointRow label={t("agent-admin.internal-chat-endpoint")} value={selectedTenant.endpoints.internalChat} onCopy={copyToClipboard} />
-                <EndpointRow label={t("agent-admin.widget-endpoint")} value={selectedTenant.endpoints.widget} onCopy={copyToClipboard} />
-              </div>
-            </div>
-
             {/* LLM Configuration - visible to users with tenant:read or api:config */}
             {(canRead || canConfigApi) && (
               <LLMConfigSection
@@ -466,6 +456,14 @@ const AgentAdmin = observer(() => {
                     </h3>
                     <p className="text-sm text-purple-600 dark:text-purple-400">{t("agent-admin.auto-generate-desc")}</p>
                   </div>
+
+                  {/* Reasoning Model for Generate KB/Policy */}
+                  <ReasoningModelInput
+                    tenantSlug={selectedTenant.tenant.slug}
+                    config={llmConfig}
+                    isSaving={isSaving}
+                    t={t}
+                  />
 
                   {/* Processing Options Toggle */}
                   <button
@@ -2218,6 +2216,8 @@ const LLMConfigSection = ({ tenantSlug, config, isSaving, canEdit = false, t }: 
   const [customModel, setCustomModel] = useState("");
   const [simHumanModel, setSimHumanModel] = useState(config?.simulationHumanModel || "");
   const [customSimHumanModel, setCustomSimHumanModel] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
 
   useEffect(() => {
     // Handle main model
@@ -2244,9 +2244,11 @@ const LLMConfigSection = ({ tenantSlug, config, isSaving, canEdit = false, t }: 
     const success = await agentAdminStore.updateLLMConfig(tenantSlug, {
       llmModel: selectedModel,
       simulationHumanModel: selectedSimModel,
+      openrouterApiKey: apiKey || undefined,
     });
     if (success) {
       toast.success("LLM configuration saved");
+      setApiKey(""); // Clear input after save
     }
   };
 
@@ -2314,12 +2316,98 @@ const LLMConfigSection = ({ tenantSlug, config, isSaving, canEdit = false, t }: 
           </FormControl>
         )}
 
+        <FormControl>
+          <FormLabel>
+            OpenRouter API Key
+            {config?.hasApiKey && (
+              <Chip size="sm" color="success" variant="soft" sx={{ ml: 1 }}>
+                Set
+              </Chip>
+            )}
+          </FormLabel>
+          <Input
+            type={showApiKey ? "text" : "password"}
+            placeholder={config?.hasApiKey ? "Enter new key to replace" : "sk-or-v1-..."}
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            disabled={!canEdit}
+            endDecorator={
+              <Button
+                variant="plain"
+                color="neutral"
+                size="sm"
+                onClick={() => setShowApiKey(!showApiKey)}
+                tabIndex={-1}
+              >
+                {showApiKey ? <EyeOffIcon className="w-4 h-4" /> : <EyeIcon className="w-4 h-4" />}
+              </Button>
+            }
+          />
+          <FormHelperText>{t("agent-admin.api-key-hint")}</FormHelperText>
+        </FormControl>
+
         {canEdit && (
           <Button color="primary" onClick={handleSave} loading={isSaving}>
             Save Configuration
           </Button>
         )}
       </div>
+    </div>
+  );
+};
+
+// ============================================================================
+// REASONING MODEL INPUT (for Auto-Generate section)
+// ============================================================================
+
+interface ReasoningModelInputProps {
+  tenantSlug: string;
+  config: LLMConfig | null;
+  isSaving: boolean;
+  t: (key: string) => string;
+}
+
+const ReasoningModelInput = ({ tenantSlug, config, isSaving, t }: ReasoningModelInputProps) => {
+  const [reasoningModel, setReasoningModel] = useState(config?.reasoningModel || "");
+
+  useEffect(() => {
+    setReasoningModel(config?.reasoningModel || "");
+  }, [config?.reasoningModel]);
+
+  const handleSave = async () => {
+    const success = await agentAdminStore.updateLLMConfig(tenantSlug, {
+      llmModel: config?.llmModel || "",
+      simulationHumanModel: config?.simulationHumanModel || "",
+      reasoningModel: reasoningModel,
+    });
+    if (success) {
+      toast.success("Reasoning model saved");
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-3 bg-white dark:bg-zinc-900 rounded-lg border border-purple-200 dark:border-purple-700 p-3">
+      <FormControl sx={{ flex: 1 }}>
+        <FormLabel sx={{ fontSize: "0.875rem", color: "var(--joy-palette-purple-700)" }}>
+          {t("agent-admin.reasoning-model")}
+        </FormLabel>
+        <Input
+          size="sm"
+          placeholder="google/gemini-2.5-pro"
+          value={reasoningModel}
+          onChange={(e) => setReasoningModel(e.target.value)}
+        />
+        <FormHelperText sx={{ fontSize: "0.75rem" }}>{t("agent-admin.reasoning-model-hint")}</FormHelperText>
+      </FormControl>
+      <Button
+        size="sm"
+        color="primary"
+        onClick={handleSave}
+        loading={isSaving}
+        disabled={reasoningModel === (config?.reasoningModel || "")}
+      >
+        Save
+      </Button>
     </div>
   );
 };

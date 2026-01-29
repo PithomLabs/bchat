@@ -1764,6 +1764,7 @@ type LLMConfigResponse struct {
 	TenantSlug           string `json:"tenant_slug"`
 	LLMModel             string `json:"llm_model"`
 	SimulationHumanModel string `json:"simulation_human_model"`
+	ReasoningModel       string `json:"reasoning_model"`
 	HasAPIKey            bool   `json:"has_api_key"`
 	UpdatedAt            string `json:"updated_at,omitempty"`
 }
@@ -1772,6 +1773,7 @@ type LLMConfigResponse struct {
 type SetLLMConfigRequest struct {
 	LLMModel             string `json:"llm_model"`
 	SimulationHumanModel string `json:"simulation_human_model"`
+	ReasoningModel       string `json:"reasoning_model"`
 	OpenRouterAPIKey     string `json:"openrouter_api_key,omitempty"`
 }
 
@@ -1802,12 +1804,14 @@ func (h *Handler) HandleGetLLMConfig(c echo.Context) error {
 		TenantSlug:           slug,
 		LLMModel:             "",
 		SimulationHumanModel: "",
+		ReasoningModel:       "",
 		HasAPIKey:            false,
 	}
 
 	if config != nil {
 		response.LLMModel = config.LLMModel
 		response.SimulationHumanModel = config.SimulationHumanModel
+		response.ReasoningModel = config.ReasoningModel
 		response.HasAPIKey = len(config.OpenRouterAPIKeyEncrypted) > 0
 		response.UpdatedAt = config.UpdatedAt.Format(time.RFC3339)
 	}
@@ -1846,6 +1850,7 @@ func (h *Handler) HandleSetLLMConfig(c echo.Context) error {
 		TenantID:             tenant.ID,
 		LLMModel:             req.LLMModel,
 		SimulationHumanModel: req.SimulationHumanModel,
+		ReasoningModel:       req.ReasoningModel,
 		UpdatedBy:            &userID,
 	}
 
