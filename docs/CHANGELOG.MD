@@ -4,6 +4,47 @@ All notable changes to the bchat AI Agent System are documented in this file.
 
 ---
 
+## 2026-01-29
+
+### Added
+- **Tenant-Specific API Key** - OpenRouter API key textbox in Agent Admin
+  - Encrypted storage using AES-256 with `ENCRYPTION_MASTER_KEY`
+  - Show/hide toggle for security
+  - Overrides environment variable when set (tenant config > env var > default)
+
+- **Reasoning Model Configuration** - Per-tenant reasoning model setting
+  - New textbox in Auto-Generate section for Generate KB/Policy operations
+  - Default: `google/gemini-2.5-pro` (from `LLM_MODEL_REASONING` env var)
+  - Database migration: `19__reasoning_model.sql`
+
+- **Unified Environment Workflow** - Secure environment variable management
+  - `.env.example` template with all variables documented
+  - `.env` file support via Taskfile (auto-sourced on `task run*`)
+  - `_FILE` suffix support in Docker entrypoint for all secrets
+  - `docs/DOCS_UNIFIED_ENV_WORKFLOW.MD` comprehensive guide
+
+- **DOCS_ADMIN_PAGE.MD** - Agent Admin page documentation
+  - Feature descriptions for all sections
+  - File upload behavior (no auto-reindex)
+  - API endpoint reference
+
+### Changed
+- **Taskfile.yml** - All run tasks now source `.env` file if present
+  - `task run`, `task run:rag`, `task run:rag:l12` auto-load environment
+  - Pattern: `set -a && source .env && set +a`
+
+- **scripts/entrypoint.sh** - Extended `_FILE` suffix support
+  - Now supports: `MEMOS_DSN_FILE`, `OPENROUTER_API_KEY_FILE`, `ENCRYPTION_MASTER_KEY_FILE`, `AWS_ACCESS_KEY_ID_FILE`, `AWS_SECRET_ACCESS_KEY_FILE`
+
+- **.gitignore** - Added comprehensive .env patterns
+  - `.env`, `.env.local`, `.env.*.local`, `.env.development`, `.env.test`, `.env.production`
+
+### Removed
+- **Endpoints Section** - Removed from Agent Admin page
+  - Displayed 3 static endpoint URLs (unused, cluttered UI)
+
+---
+
 ## 2026-01-28
 
 ### Changed
