@@ -4,6 +4,81 @@ All notable changes to the bchat AI Agent System are documented in this file.
 
 ---
 
+## 2026-01-30
+
+### Added
+- **fly.io Deployment Documentation** - Comprehensive deployment guide
+  - `docs/DOCS_DEPLOYMENT.MD` - Step-by-step fly.io deployment procedures
+  - Architecture diagrams (local vs fly.io)
+  - Configuration mapping table (local `task run:rag:l12` → fly.io)
+  - First-time setup instructions (flyctl, Tigrisdata, secrets, volumes)
+  - Verification checklist and troubleshooting guide
+  - Redeployment commands reference
+  - Addendum explaining Docker build + migration flow
+
+- **Database Migration Documentation** - Deep dive into migration system
+  - `docs/DOCS_DATABASE_MIGRATION.MD` - How `go:embed` works with migrations
+  - Flow diagrams for new vs existing databases
+  - LATEST.sql vs individual migrations explanation
+  - Root cause analysis of fly.io schema issues
+  - Best practices for adding migrations
+
+- **Migration Validation Script** - Build-time sync check
+  - `scripts/validate-migrations.sh` - Validates LATEST.sql against migrations
+  - Checks all `CREATE TABLE` statements exist in LATEST.sql
+  - Checks all `ALTER TABLE ADD COLUMN` statements exist in LATEST.sql
+  - Ignores temporary tables (`_new`, `_old`, `_temp`)
+  - Integrated into Taskfile as dependency for `build:backend` and `build:backend:rag`
+
+- **Ubuntu-based Dockerfiles for fly.io**
+  - `Dockerfile.local.fly` - Ubuntu 24.04 with local volume storage for LanceDB
+  - `Dockerfile.s3.fly` - Ubuntu 24.04 with Tigrisdata S3 storage for LanceDB
+  - Both use `sentence-transformers/all-minilm-l12-v2` embedding model
+
+- **fly.toml Templates**
+  - `fly.local.toml` - Configuration for local volume storage
+  - `fly.s3.toml` - Configuration for Tigrisdata S3 storage
+  - Updated `fly.toml` to use local storage by default
+
+- **Deployment Setup Script**
+  - `~/Desktop/b.sh` - Interactive setup script for fly.io prerequisites
+  - Checks flyctl installation and authentication
+  - Prompts for storage type (local vs S3)
+  - Creates Tigrisdata bucket (S3 mode)
+  - Sets required secrets (OPENROUTER_API_KEY, ENCRYPTION_MASTER_KEY)
+  - Creates fly volume for SQLite
+
+### Fixed
+- **LATEST.sql Out of Sync** - Updated with all missing tables and columns
+  - Added `processing_options` column to `agent_tenants` table
+  - Fixed `notification` → `notifications` table name
+  - Added missing columns to `tickets` table (beads_id, parent_id, labels, etc.)
+  - Added `agent_workflows` table
+  - Added `agent_simulation_transcripts` table
+  - Added `agent_analysis_results` table
+  - Added `agent_learning_memory` table
+  - Added `agent_compliance_audits` table
+  - Added `agent_scoring_config` table
+  - Added `user_tenant_permission` table
+  - Added `tenant_config` table with all columns
+  - Added `system_secret` table
+  - Added `agent_simulations` table
+  - Added `agent_qa_pairs` table
+  - Added `agent_transcripts` table
+  - Updated `agent_tenant_scripts` with summary and version columns
+
+- **Missing axios Dependency** - Added axios to `web/package.json`
+  - Frontend build was failing with "failed to resolve import axios"
+  - Added `"axios": "^1.7.7"` to dependencies
+
+### Changed
+- **Taskfile.yml** - Added migration validation
+  - New task: `validate:migrations`
+  - Added as dependency to `build:backend` and `build:backend:rag`
+  - Builds now fail if LATEST.sql is out of sync with migrations
+
+---
+
 ## 2026-01-29
 
 ### Added
