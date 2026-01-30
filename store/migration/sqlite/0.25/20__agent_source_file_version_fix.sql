@@ -1,8 +1,9 @@
--- Fix: Add version column that was missing from migration 12
--- Migration 12 created an index on 'version' column but never added the column itself
--- This caused "no such column: version" error when saving KB/Policy files
+-- Migration 20: No-op (version column now added in migration 06)
+-- Original purpose: Add version column that was missing from migration 12
 --
--- Required for file versioning in agent_source_files table
--- Version tracks multiple revisions of KB.MD and POLICY.MD per tenant+audience
-
-ALTER TABLE agent_source_files ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+-- This migration is now a no-op because the version column is properly
+-- included in migration 06__agent_file_versioning.sql when the table
+-- is recreated. Keeping this file to maintain migration sequence.
+--
+-- For existing databases that already applied migration 20, this no-op
+-- ensures no errors occur on re-migration.

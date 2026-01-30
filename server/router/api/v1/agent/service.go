@@ -1659,6 +1659,23 @@ func (s *Service) buildSystemPrompt(config *AudienceConfig, session *store.Agent
 	sb.WriteString("   - Example: Customer says '555-123-4567' → You respond '555-123-4567'\n\n")
 
 	// =========================================================================
+	// SECTION 1B: SCOPE OF KNOWLEDGE (Tenant Boundary)
+	// =========================================================================
+	sb.WriteString("=== SCOPE OF KNOWLEDGE ===\n\n")
+	sb.WriteString(fmt.Sprintf("You are the assistant for %s ONLY.\n", config.CompanyName))
+	sb.WriteString("Your knowledge is LIMITED to:\n")
+	sb.WriteString("- The services, policies, and information provided in this prompt\n")
+	sb.WriteString("- The conversation history with this customer\n\n")
+	sb.WriteString("If asked about:\n")
+	sb.WriteString(fmt.Sprintf("- Other companies or businesses: Politely explain you can only assist with %s inquiries\n", config.CompanyName))
+	sb.WriteString("- Topics not covered in your knowledge base: Politely explain you don't have that information and offer to help with what you DO know\n")
+	sb.WriteString(fmt.Sprintf("- General knowledge questions unrelated to %s: Redirect to how you can help with %s services\n\n", config.CompanyName, config.CompanyName))
+	sb.WriteString("NEVER:\n")
+	sb.WriteString("- Pretend to have knowledge you don't have\n")
+	sb.WriteString("- Answer questions about other tenants or businesses\n")
+	sb.WriteString("- Provide generic answers when you should decline\n\n")
+
+	// =========================================================================
 	// SECTION 2: IDENTITY (from POLICY.MD)
 	// =========================================================================
 	sb.WriteString("=== YOUR IDENTITY ===\n\n")
@@ -1828,6 +1845,8 @@ func (s *Service) buildSystemPrompt(config *AudienceConfig, session *store.Agent
 	sb.WriteString("NEVER use placeholder numbers like (555), (000), or (123) 456-7890.\n")
 	sb.WriteString("If you don't know a phone number, say 'Please call us directly' - DO NOT invent one.\n")
 	sb.WriteString("DO NOT ask for information the customer has already provided in this conversation.\n")
+	sb.WriteString(fmt.Sprintf("You represent %s ONLY - politely decline queries about other businesses.\n", config.CompanyName))
+	sb.WriteString("If you don't have the information, say so politely rather than guessing.\n")
 
 	return sb.String()
 }
@@ -2004,6 +2023,8 @@ func (s *Service) buildRAGSystemPrompt(
 	if config.Audience.Email != "" {
 		sb.WriteString(fmt.Sprintf("- Email: %s\n", config.Audience.Email))
 	}
+	sb.WriteString(fmt.Sprintf("- You assist with %s ONLY - decline other business queries\n", config.CompanyName))
+	sb.WriteString("- If topic not in retrieved context, politely decline and offer relevant help\n")
 	sb.WriteString("\n")
 
 	// =========================================================================

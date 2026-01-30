@@ -50,7 +50,8 @@ LATEST_CONTENT=$(cat "$LATEST_SQL" | tr '[:upper:]' '[:lower:]')
 
 # Tables to ignore (temporary tables, renamed tables, etc.)
 # These are created during migrations but don't persist
-IGNORE_TABLES="agent_source_files_new|agent_source_files_old|_backup|_temp|_tmp"
+# Patterns: *_new, *_old, *_backup, *_temp, *_tmp
+IGNORE_TABLES="_new$|_old$|_backup$|_temp$|_tmp$"
 
 # Process each migration file
 for migration in "$MIGRATIONS_DIR"/*.sql; do

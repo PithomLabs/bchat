@@ -28,9 +28,12 @@ primary_region = "sjc"
   LANCEDB_STORAGE_PROVIDER = "local"
   LANCEDB_LOCAL_PATH = "/var/opt/memos/lancedb"
   EMBEDDING_PROVIDER = "openrouter"
-  EMBEDDING_MODEL = "sentence-transformers/all-minilm-l12-v2"
+  EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L12-v2"
   LLM_VERIFIER_ENABLED = "false"
 
+  LLM_MODEL_REASONING = "openai/gpt-oss-120b:free"
+  EMBEDDING_TIMEOUT = "10m"
+  LLM_MODEL = "openai/gpt-oss-120b:free"
 [http_service]
   internal_port = 5230
   force_https = true

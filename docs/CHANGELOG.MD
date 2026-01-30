@@ -6,7 +6,44 @@ All notable changes to the bchat AI Agent System are documented in this file.
 
 ## 2026-01-31
 
+### Changed
+- **Enhanced `fly:check` Pre-Deployment Validation** - Now validates full environment chain
+  - Validates: `.env` -> `Dockerfile` -> `fly.toml` -> `fly secrets`
+  - Reads Dockerfile specified in `fly.toml [build].dockerfile` (supports local vs s3)
+  - Checks both variable names AND default values match across chain
+  - Context-aware: skips `LANCEDB_LOCAL_PATH` for s3 builds, skips S3 vars for local builds
+  - Security check: ensures `OPENROUTER_API_KEY` and `ENCRYPTION_MASTER_KEY` are NOT in Dockerfile or fly.toml
+  - New script: `scripts/validate-env-chain.sh`
+  - Updated documentation in `DOCS_TASKFILE.MD`
+
+### Added
+- **Pre-Deployment Database Migration Check** - `task fly:db-check` command
+  - Comprehensive validation that migrations will work correctly on fly.io
+  - Step 1: Runs existing `validate:migrations` (LATEST.sql sync check)
+  - Step 2: Validates migration file numbering (no gaps, proper sequence)
+  - Step 3: Tests LATEST.sql can create a fresh database
+  - Step 4: Tests all migrations can apply to an empty database in sequence
+  - Step 5: Compares final schema after migrations vs LATEST.sql
+  - New script: `scripts/validate-db-migrations.sh`
+
+- **Combined Pre-Deployment Check** - `task fly:pre-deploy` command
+  - Runs both `fly:check` (env sync) and `fly:db-check` (database validation)
+  - Single command to validate before `fly deploy`
+  - Reports overall pass/fail status
+
 ### Fixed
+- **Migration 03 SQLite UNIQUE Constraint Error** - Fixed "Cannot add a UNIQUE column" error
+  - SQLite doesn't support `ALTER TABLE ADD COLUMN ... UNIQUE`
+  - Fixed by recreating tickets table with all columns including `beads_id TEXT UNIQUE`
+  - Migration now uses proper SQLite table recreation pattern (create new → copy → drop → rename)
+  - File: `store/migration/sqlite/0.25/03__beads_integration.sql`
+
+- **Migration 06/12/20 Version Column Ordering** - Fixed "no such column: version" error
+  - Migration 12 tried to create index on `version` column before it existed
+  - Fixed by adding `version` column in migration 06 when table is recreated
+  - Migration 20 converted to no-op (column now added in 06)
+  - Files: `store/migration/sqlite/0.25/06__agent_file_versioning.sql`, `20__agent_source_file_version_fix.sql`
+
 - **Q&A Pairs Cross-Tenant Data Leak** - Fixed brief display of previous tenant's Q&A pairs when switching tenants
   - Bug: `qaPairs` and `qaTestResults` state not cleared in `fetchTenantConfig()`
   - Symptom: Q&A pairs from Tenant A briefly visible when switching to Tenant B

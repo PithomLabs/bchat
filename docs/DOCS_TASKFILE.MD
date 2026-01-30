@@ -39,7 +39,9 @@ go install github.com/go-task/task/v3/cmd/task@latest
 | `task run:rag` | Run compiled binary with RAG + OpenRouter embeddings |
 | `task run:rag:l12` | Run with L12 embeddings via OpenRouter (better quality, same 384 dim) |
 | `task run:rag:mock` | Run compiled binary with RAG + mock embeddings |
-| `task fly:check` | Check .env vars are synced to fly.toml/secrets before deploy |
+| `task fly:check` | Validate env chain (.env -> Dockerfile -> fly.toml -> fly secrets) |
+| `task fly:db-check` | Validate database migrations before fly.io deployment |
+| `task fly:pre-deploy` | Run all pre-deployment checks (env + database) |
 
 ---
 
@@ -332,40 +334,169 @@ task generate
 
 ### task fly:check
 
-Check that `.env` variables are synced to fly.io configuration before deployment.
+Validate environment variable consistency across the entire deployment chain before deploying to fly.io.
 
 ```bash
 task fly:check
 ```
 
 **What it does:**
-- Lists all variables in your local `.env`
-- Lists variables in `fly.toml [env]` section
-- Lists `fly secrets`
-- Reports any `.env` variables missing from fly.io config
+Validates the full environment chain: `.env` -> `Dockerfile` -> `fly.toml` -> `fly secrets`
+
+1. **Reads `.env`** (source of truth for local development)
+2. **Determines Dockerfile** from `fly.toml [build].dockerfile` setting
+3. **Reads Dockerfile ENV declarations** with their default values
+4. **Reads fly.toml [env] section** runtime overrides
+5. **Reads fly secrets** (if flyctl installed)
+6. **Validates:**
+   - Non-sensitive `.env` vars exist in Dockerfile (warning if missing)
+   - Dockerfile ENV values match fly.toml [env] values (error if mismatch)
+   - Sensitive vars (`OPENROUTER_API_KEY`, `ENCRYPTION_MASTER_KEY`) are in fly secrets (error if missing)
+   - Sensitive vars are NOT exposed in Dockerfile or fly.toml (security error)
+
+**Context-aware storage checks:**
+- When using `Dockerfile.local.fly`: checks `LANCEDB_LOCAL_PATH`, skips S3 vars
+- When using `Dockerfile.s3.fly`: checks S3 vars (`LANCEDB_S3_ENDPOINT`, etc.), skips local vars
+
+**Example output:**
+```
+=== Pre-Deployment Environment Chain Check ===
+
+Step 1: Reading .env (source of truth)...
+   Found 8 variables
+
+Step 2: Determining Dockerfile from fly.toml...
+   Using: Dockerfile.local.fly
+   Storage type: local
+
+Step 3: Reading Dockerfile.local.fly ENV declarations...
+   Found 9 ENV declarations
+
+Step 4: Reading fly.toml [env] section...
+   Found 9 variables
+
+Step 5: Reading fly secrets...
+   Found 2 secrets
+
+=== Validation Results ===
+
+Check: .env -> Dockerfile (non-sensitive vars)
+  All non-sensitive .env vars accounted for
+
+Check: Dockerfile -> fly.toml (value consistency)
+  All Dockerfile ENV vars match fly.toml
+
+Check: Sensitive vars in fly secrets
+  OK: OPENROUTER_API_KEY in fly secrets
+  OK: ENCRYPTION_MASTER_KEY in fly secrets
+
+Check: Sensitive vars NOT exposed (security)
+  No sensitive vars exposed
+
+=== Summary ===
+All checks passed!
+```
+
+**Error conditions:**
+| Check | Failure Type | Description |
+|-------|--------------|-------------|
+| .env -> Dockerfile | Warning | Non-sensitive var in .env but not in Dockerfile |
+| Dockerfile -> fly.toml | Error | ENV var missing from fly.toml or value mismatch |
+| Sensitive -> secrets | Error | `OPENROUTER_API_KEY` or `ENCRYPTION_MASTER_KEY` not in fly secrets |
+| Security check | Error | Sensitive var exposed in Dockerfile or fly.toml |
+
+**Note:** Run this before `fly deploy` to catch configuration drift and security issues.
+
+---
+
+### task fly:db-check
+
+Comprehensive database migration validation before fly.io deployment.
+
+```bash
+task fly:db-check
+```
+
+**What it does:**
+1. Runs `validate:migrations` (LATEST.sql sync check)
+2. Validates migration file numbering (no gaps, proper sequence)
+3. Tests LATEST.sql can create a fresh database (simulates new fly.io deployment)
+4. Tests all migrations can apply to an empty database in sequence
+5. Compares final schema after migrations vs LATEST.sql schema
+
+**Example output:**
+```
+=== Pre-Deployment Database Migration Check ===
+
+Step 1: Checking LATEST.sql sync...
+PASSED
+
+Step 2: Checking migration file numbering...
+PASSED: Found 22 migrations in sequence (00-21)
+
+Step 3: Testing LATEST.sql creates valid database...
+PASSED: Created database with 25 tables
+
+Step 4: Testing migrations apply in sequence...
+PASSED: All migrations applied, 25 tables
+
+Step 5: Comparing schemas (LATEST.sql vs migrations)...
+PASSED: Table lists match
+
+=== All Checks Passed ===
+Database migrations are ready for fly.io deployment
+```
+
+**Validation checks:**
+
+| Check | Description | Failure Condition |
+|-------|-------------|-------------------|
+| 1. LATEST.sql sync | Existing validate-migrations.sh | Tables/columns missing from LATEST.sql |
+| 2. Migration numbering | Sequential 00, 01, 02... | Gaps or duplicates in numbering |
+| 3. LATEST.sql validity | Apply to fresh SQLite DB | SQL syntax errors |
+| 4. Migrations apply | Apply all migrations in order | Any migration fails |
+| 5. Schema comparison | Compare resulting tables | Table list mismatch (warning only) |
+
+**Note:** Run this before `fly deploy` to catch SQL syntax errors and migration issues.
+
+---
+
+### task fly:pre-deploy
+
+Run all pre-deployment checks (environment variables + database migrations).
+
+```bash
+task fly:pre-deploy
+```
+
+**What it does:**
+1. Runs `fly:check` (environment variable sync)
+2. Runs `fly:db-check` (database migration validation)
+3. Reports overall status
 
 **Example output:**
 ```
 === Pre-Deployment Environment Sync Check ===
+...
+✅ All .env variables are synced to fly.io config
 
-📁 Local .env variables:
-   LLM_MODEL
-   OPENROUTER_API_KEY
+=== Pre-Deployment Database Migration Check ===
+...
+=== All Checks Passed ===
+Database migrations are ready for fly.io deployment
 
-📄 fly.toml [env] variables:
-   EMBEDDING_MODEL
-   RAG_PIPELINE_ENABLED
-
-🔐 fly secrets:
-   OPENROUTER_API_KEY
-
-=== Sync Status ===
-❌ MISSING: LLM_MODEL (not in fly.toml or fly secrets)
-
-⚠️  1 variable(s) missing from fly.io config
+=== All pre-deployment checks passed ===
+Safe to run: fly deploy
 ```
 
-**Note:** Run this before `fly deploy` to catch missing environment variables.
+**Recommended workflow:**
+```bash
+# Before every deployment
+task fly:pre-deploy
+
+# If all checks pass
+fly deploy
+```
 
 ---
 
@@ -594,5 +725,5 @@ EMBEDDING_PROVIDER=mock ./build/memos --mode dev
 
 ---
 
-*Document Version: 1.4*
-*Updated: 2026-01-31* - Added fly:check task for pre-deployment env sync
+*Document Version: 1.5*
+*Updated: 2026-01-31* - Added fly:db-check and fly:pre-deploy tasks for comprehensive pre-deployment validation

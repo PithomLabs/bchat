@@ -77,11 +77,14 @@ ENV RAG_PIPELINE_ENABLED="true"
 ENV LANCEDB_STORAGE_PROVIDER="local"
 ENV LANCEDB_LOCAL_PATH="/var/opt/memos/lancedb"
 ENV EMBEDDING_PROVIDER="openrouter"
-ENV EMBEDDING_MODEL="sentence-transformers/all-minilm-l12-v2"
+ENV EMBEDDING_MODEL="sentence-transformers/all-MiniLM-L12-v2"
 
 # Optional LLM verifier (disabled by default)
 ENV LLM_VERIFIER_ENABLED="false"
 
+ENV LLM_MODEL_REASONING="openai/gpt-oss-120b:free"
+ENV EMBEDDING_TIMEOUT="10m"
+ENV LLM_MODEL="openai/gpt-oss-120b:free"
 EXPOSE 5230
 
 ENTRYPOINT ["./entrypoint.sh", "./memos"]

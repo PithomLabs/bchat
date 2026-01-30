@@ -1,7 +1,8 @@
 -- Drop unique constraint to allow file versioning
 -- SQLite doesn't support ALTER TABLE DROP CONSTRAINT, so we need to recreate the table
+-- Also adds version column for tracking file revisions
 
--- Create new table without unique constraint
+-- Create new table without unique constraint, with version column
 CREATE TABLE agent_source_files_new (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
@@ -9,12 +10,13 @@ CREATE TABLE agent_source_files_new (
     file_type TEXT NOT NULL,
     content TEXT NOT NULL,
     content_hash TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
     imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Copy data from old table
-INSERT INTO agent_source_files_new (id, tenant_id, audience_type, file_type, content, content_hash, imported_at)
-SELECT id, tenant_id, audience_type, file_type, content, content_hash, imported_at FROM agent_source_files;
+INSERT INTO agent_source_files_new (id, tenant_id, audience_type, file_type, content, content_hash, version, imported_at)
+SELECT id, tenant_id, audience_type, file_type, content, content_hash, 1, imported_at FROM agent_source_files;
 
 -- Drop old table
 DROP TABLE agent_source_files;
