@@ -71,6 +71,79 @@ This document provides step-by-step procedures for deploying bchat to fly.io wit
 | **Data directory** | `./build/data` | `/var/opt/memos` (volume) |
 | **Secrets** | `.env` file | `fly secrets` |
 
+### IMPORTANT: Sync .env to fly.io Before Deployment
+
+Your local `.env` file is **NOT** automatically copied to fly.io. Run the sync check before deploying:
+
+```bash
+task fly:check
+```
+
+This compares your `.env` variables against `fly.toml [env]` and `fly secrets`, reporting any missing variables.
+
+**Example output:**
+```
+=== Pre-Deployment Environment Sync Check ===
+
+📁 Local .env variables:
+   EMBEDDING_TIMEOUT
+   LLM_MODEL
+   OPENROUTER_API_KEY
+
+📄 fly.toml [env] variables:
+   EMBEDDING_MODEL
+   RAG_PIPELINE_ENABLED
+
+🔐 fly secrets:
+   OPENROUTER_API_KEY
+
+=== Sync Status ===
+❌ MISSING: EMBEDDING_TIMEOUT (not in fly.toml or fly secrets)
+❌ MISSING: LLM_MODEL (not in fly.toml or fly secrets)
+
+⚠️  2 variable(s) missing from fly.io config
+```
+
+**Quick Sync Commands:**
+
+```bash
+# Add missing non-sensitive var to fly.toml [env] section
+# Edit fly.toml manually
+
+# Add missing sensitive var to fly secrets
+fly secrets set MY_VAR="$(grep MY_VAR .env | cut -d'=' -f2)"
+```
+
+**Variable Placement Guide:**
+
+| Variable Type | Where to Set | Example |
+|---------------|--------------|---------|
+| API keys, secrets | `fly secrets set` | `OPENROUTER_API_KEY`, `ENCRYPTION_MASTER_KEY` |
+| Feature flags | `fly.toml [env]` | `RAG_PIPELINE_ENABLED`, `LLM_VERIFIER_ENABLED` |
+| Model names | `fly.toml [env]` | `LLM_MODEL`, `EMBEDDING_MODEL` |
+| Timeouts, limits | `fly.toml [env]` | `EMBEDDING_TIMEOUT` |
+| Storage config | `fly.toml [env]` | `LANCEDB_STORAGE_PROVIDER`, `LANCEDB_S3_ENDPOINT` |
+| S3 credentials | `fly secrets set` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` |
+
+**Example: Adding a New Environment Variable**
+
+```bash
+# 1. Add to .env and test locally
+echo "EMBEDDING_TIMEOUT=180s" >> .env
+task run:rag  # Test locally
+
+# 2. Add to fly.toml [env] section (non-sensitive)
+# Edit fly.toml:
+#   [env]
+#     EMBEDDING_TIMEOUT = "180s"
+
+# 3. Deploy
+fly deploy
+
+# 4. Verify on fly.io
+fly ssh console -C "env | grep EMBEDDING_TIMEOUT"
+```
+
 ---
 
 ## Prerequisites
@@ -862,5 +935,5 @@ After running `fly deploy`:
 
 ---
 
-*Document Version: 1.1*
-*Updated: 2026-01-30* - Added deployment flow and redeployment commands
+*Document Version: 1.2*
+*Updated: 2026-01-30* - Added .env vs fly.io deployment warning

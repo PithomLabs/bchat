@@ -4,6 +4,58 @@ All notable changes to the bchat AI Agent System are documented in this file.
 
 ---
 
+## 2026-01-31
+
+### Fixed
+- **Q&A Pairs Cross-Tenant Data Leak** - Fixed brief display of previous tenant's Q&A pairs when switching tenants
+  - Bug: `qaPairs` and `qaTestResults` state not cleared in `fetchTenantConfig()`
+  - Symptom: Q&A pairs from Tenant A briefly visible when switching to Tenant B
+  - Fix: Added `qaPairs: []` and `qaTestResults: null` to initial state reset
+  - File: `web/src/store/v2/agentAdmin.ts:465-471`
+  - Note: Backend SQL queries were already correctly filtered by `tenant_id`
+
+### Added
+- **Pre-Deployment Env Sync Check** - `task fly:check` command
+  - Compares `.env` variables against `fly.toml [env]` and `fly secrets`
+  - Reports missing variables with clear status indicators
+  - Run before `fly deploy` to catch configuration drift
+  - Updated `Taskfile.yml` with new task
+
+- **EMBEDDING_TIMEOUT Environment Variable** - Configurable embedding API timeout
+  - Default: `180s` (3 minutes)
+  - Accepts Go duration strings (e.g., `60s`, `3m`, `5m`)
+  - Fixes timeout issues with large KB content during "Rebuild Index"
+  - Documented in `DOCS_ENV_VAR.MD`
+
+- **RAG Reindex Resume Feature** - Resume reindexing from where errors occurred
+  - New `agent_reindex_checkpoints` database table tracks progress
+  - Checkpoint-based progress tracking (batch number, processed chunks, status)
+  - Exponential backoff retry logic (3 retries, 5s initial delay)
+  - Resume API: `POST /api/v1/agent/:slug/reindex?resume=true`
+  - Status API: `GET /api/v1/agent/:slug/reindex/status`
+  - Handles transient OpenRouter API failures gracefully
+  - Design document: `docs/DOCS_REINDEX_RESUME.MD`
+
+### Changed
+- **DOCS_ENV_VAR.MD** - Added deployment sync documentation
+  - New "Local vs Production Environment Variables" section
+  - Pre-deployment sync checklist referencing `task fly:check`
+  - Variable placement guide (fly.toml vs fly secrets)
+  - Updated to version 1.4
+
+- **DOCS_DEPLOYMENT.MD** - Added `.env` sync workflow
+  - "Sync .env to fly.io Before Deployment" section
+  - Example output from `task fly:check`
+  - Quick sync commands reference
+  - Updated to version 1.2
+
+- **DOCS_TASKFILE.MD** - Added `fly:check` task documentation
+  - Added to Quick Reference table
+  - Full documentation in Utility Commands section
+  - Updated to version 1.4
+
+---
+
 ## 2026-01-30
 
 ### Added

@@ -39,6 +39,7 @@ go install github.com/go-task/task/v3/cmd/task@latest
 | `task run:rag` | Run compiled binary with RAG + OpenRouter embeddings |
 | `task run:rag:l12` | Run with L12 embeddings via OpenRouter (better quality, same 384 dim) |
 | `task run:rag:mock` | Run compiled binary with RAG + mock embeddings |
+| `task fly:check` | Check .env vars are synced to fly.toml/secrets before deploy |
 
 ---
 
@@ -329,6 +330,45 @@ task generate
 
 ---
 
+### task fly:check
+
+Check that `.env` variables are synced to fly.io configuration before deployment.
+
+```bash
+task fly:check
+```
+
+**What it does:**
+- Lists all variables in your local `.env`
+- Lists variables in `fly.toml [env]` section
+- Lists `fly secrets`
+- Reports any `.env` variables missing from fly.io config
+
+**Example output:**
+```
+=== Pre-Deployment Environment Sync Check ===
+
+📁 Local .env variables:
+   LLM_MODEL
+   OPENROUTER_API_KEY
+
+📄 fly.toml [env] variables:
+   EMBEDDING_MODEL
+   RAG_PIPELINE_ENABLED
+
+🔐 fly secrets:
+   OPENROUTER_API_KEY
+
+=== Sync Status ===
+❌ MISSING: LLM_MODEL (not in fly.toml or fly secrets)
+
+⚠️  1 variable(s) missing from fly.io config
+```
+
+**Note:** Run this before `fly deploy` to catch missing environment variables.
+
+---
+
 ### task embedding:server
 
 Run the local embedding server (Python/FastAPI).
@@ -554,5 +594,5 @@ EMBEDDING_PROVIDER=mock ./build/memos --mode dev
 
 ---
 
-*Document Version: 1.3*
-*Updated: 2026-01-27* - Removed Cybertron, OpenRouter is now default
+*Document Version: 1.4*
+*Updated: 2026-01-31* - Added fly:check task for pre-deployment env sync

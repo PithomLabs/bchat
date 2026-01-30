@@ -665,11 +665,14 @@ func (h *Handler) HandleReindexTenant(c echo.Context) error {
 	// Always index internal-only (external audience is never indexed)
 	audienceType := "internal"
 
-	// Perform reindex
-	chunks, err := h.service.ReindexTenantContent(ctx, tenant.ID, audienceType)
-	if err != nil {
-		slog.Error("reindex failed", "tenantID", tenant.ID, "audience", audienceType, "error", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Reindex failed: "+err.Error())
+	// Check for resume parameter
+	resume := c.QueryParam("resume") == "true"
+
+	// Perform reindex (with or without resume)
+	chunks, reindexErr := h.service.ReindexTenantContentWithResume(ctx, tenant.ID, audienceType, resume)
+	if reindexErr != nil {
+		slog.Error("reindex failed", "tenantID", tenant.ID, "audience", audienceType, "resume", resume, "error", reindexErr)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Reindex failed: "+reindexErr.Error())
 	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
@@ -677,7 +680,35 @@ func (h *Handler) HandleReindexTenant(c echo.Context) error {
 		"chunks":   chunks,
 		"message":  fmt.Sprintf("Successfully reindexed %d chunks", chunks),
 		"audience": audienceType,
+		"resumed":  resume,
 	})
+}
+
+// HandleReindexStatus returns the current reindex status for a tenant.
+// GET /api/v1/agent/:slug/reindex/status
+// Requires: ADMIN role OR api:config permission
+func (h *Handler) HandleReindexStatus(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	// Get tenant
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	// Check admin role OR api:config permission
+	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermAPIConfig) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or api:config permission")
+	}
+
+	// Get reindex status
+	status, err := h.service.GetReindexStatus(ctx, tenant.ID, "internal")
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get reindex status: "+err.Error())
+	}
+
+	return c.JSON(http.StatusOK, status)
 }
 
 func stringPtr(s string) *string {
@@ -4366,8 +4397,9 @@ func (h *Handler) HandleUpdateQAPair(c echo.Context) error {
 	pair.ID = int32(id)
 	pair.TenantID = tenant.ID
 
-	updated, err := h.store.UpdateAgentQAPair(ctx, &pair)
+	updated, err := h.store.UpdateAgentQAPair(ctx, &pair, tenant.ID)
 	if err != nil {
+		slog.Error("failed to update Q&A pair", "error", err, "pairID", id, "tenantID", tenant.ID)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update Q&A pair")
 	}
 
@@ -4395,7 +4427,8 @@ func (h *Handler) HandleDeleteQAPair(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid ID")
 	}
 
-	if err := h.store.DeleteAgentQAPair(ctx, int32(id)); err != nil {
+	if err := h.store.DeleteAgentQAPair(ctx, int32(id), tenant.ID); err != nil {
+		slog.Error("failed to delete Q&A pair", "error", err, "pairID", id, "tenantID", tenant.ID)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete Q&A pair")
 	}
 

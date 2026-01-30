@@ -1873,7 +1873,7 @@ func (d *DB) ListAgentQAPairs(ctx context.Context, find *store.FindAgentQAPair) 
 	return pairs, nil
 }
 
-func (d *DB) UpdateAgentQAPair(ctx context.Context, pair *store.AgentQAPair) (*store.AgentQAPair, error) {
+func (d *DB) UpdateAgentQAPair(ctx context.Context, pair *store.AgentQAPair, tenantID int32) (*store.AgentQAPair, error) {
 	now := time.Now()
 	stmt := `
 		UPDATE agent_qa_pairs SET
@@ -1885,22 +1885,33 @@ func (d *DB) UpdateAgentQAPair(ctx context.Context, pair *store.AgentQAPair) (*s
 			category = ?,
 			is_active = ?,
 			updated_at = ?
-		WHERE id = ?
+		WHERE id = ? AND tenant_id = ?
 	`
-	_, err := d.db.ExecContext(ctx, stmt,
+	result, err := d.db.ExecContext(ctx, stmt,
 		pair.Question, pair.ExpectedAnswer, pair.SourceSection, pair.SourceChunkID,
-		pair.Difficulty, pair.Category, pair.IsActive, now, pair.ID,
+		pair.Difficulty, pair.Category, pair.IsActive, now, pair.ID, tenantID,
 	)
 	if err != nil {
 		return nil, err
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return nil, fmt.Errorf("QA pair not found or not owned by tenant")
 	}
 	pair.UpdatedAt = now
 	return pair, nil
 }
 
-func (d *DB) DeleteAgentQAPair(ctx context.Context, id int32) error {
-	_, err := d.db.ExecContext(ctx, "DELETE FROM agent_qa_pairs WHERE id = ?", id)
-	return err
+func (d *DB) DeleteAgentQAPair(ctx context.Context, id int32, tenantID int32) error {
+	result, err := d.db.ExecContext(ctx, "DELETE FROM agent_qa_pairs WHERE id = ? AND tenant_id = ?", id, tenantID)
+	if err != nil {
+		return err
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("QA pair not found or not owned by tenant")
+	}
+	return nil
 }
 
 func (d *DB) DeleteAgentQAPairsByTenant(ctx context.Context, tenantID int32) error {
@@ -2129,5 +2140,120 @@ func (d *DB) UpdateAgentTranscript(ctx context.Context, transcript *store.AgentT
 
 func (d *DB) DeleteAgentTranscript(ctx context.Context, id string) error {
 	_, err := d.db.ExecContext(ctx, "DELETE FROM agent_transcripts WHERE id = ?", id)
+	return err
+}
+
+// UpsertReindexCheckpoint creates or updates a reindex checkpoint.
+func (d *DB) UpsertReindexCheckpoint(ctx context.Context, checkpoint *store.ReindexCheckpoint) (*store.ReindexCheckpoint, error) {
+	now := time.Now()
+	checkpoint.UpdatedAt = now
+
+	if checkpoint.Status == "completed" && checkpoint.CompletedAt == nil {
+		checkpoint.CompletedAt = &now
+	}
+
+	stmt := `
+		INSERT INTO agent_reindex_checkpoints (
+			tenant_id, audience, total_chunks, processed_chunks, current_batch,
+			total_batches, batch_size, status, error_message, error_batch,
+			started_at, updated_at, completed_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(tenant_id, audience) DO UPDATE SET
+			total_chunks = excluded.total_chunks,
+			processed_chunks = excluded.processed_chunks,
+			current_batch = excluded.current_batch,
+			total_batches = excluded.total_batches,
+			batch_size = excluded.batch_size,
+			status = excluded.status,
+			error_message = excluded.error_message,
+			error_batch = excluded.error_batch,
+			updated_at = excluded.updated_at,
+			completed_at = excluded.completed_at
+	`
+
+	result, err := d.db.ExecContext(ctx, stmt,
+		checkpoint.TenantID, checkpoint.Audience, checkpoint.TotalChunks,
+		checkpoint.ProcessedChunks, checkpoint.CurrentBatch, checkpoint.TotalBatches,
+		checkpoint.BatchSize, checkpoint.Status, checkpoint.ErrorMessage,
+		checkpoint.ErrorBatch, checkpoint.StartedAt, checkpoint.UpdatedAt,
+		checkpoint.CompletedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to upsert reindex checkpoint: %w", err)
+	}
+
+	if checkpoint.ID == 0 {
+		id, err := result.LastInsertId()
+		if err == nil {
+			checkpoint.ID = int32(id)
+		}
+	}
+
+	return checkpoint, nil
+}
+
+// GetReindexCheckpoint retrieves a reindex checkpoint by tenant and audience.
+func (d *DB) GetReindexCheckpoint(ctx context.Context, find *store.FindReindexCheckpoint) (*store.ReindexCheckpoint, error) {
+	where := []string{"1 = 1"}
+	args := []interface{}{}
+
+	if find.TenantID != nil {
+		where = append(where, "tenant_id = ?")
+		args = append(args, *find.TenantID)
+	}
+	if find.Audience != nil {
+		where = append(where, "audience = ?")
+		args = append(args, *find.Audience)
+	}
+	if find.Status != nil {
+		where = append(where, "status = ?")
+		args = append(args, *find.Status)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, tenant_id, audience, total_chunks, processed_chunks, current_batch,
+			total_batches, batch_size, status, error_message, error_batch,
+			started_at, updated_at, completed_at
+		FROM agent_reindex_checkpoints
+		WHERE %s
+		ORDER BY updated_at DESC
+		LIMIT 1
+	`, strings.Join(where, " AND "))
+
+	var c store.ReindexCheckpoint
+	var errorMessage, errorBatch sql.NullString
+	var completedAt sql.NullTime
+
+	err := d.db.QueryRowContext(ctx, query, args...).Scan(
+		&c.ID, &c.TenantID, &c.Audience, &c.TotalChunks, &c.ProcessedChunks,
+		&c.CurrentBatch, &c.TotalBatches, &c.BatchSize, &c.Status,
+		&errorMessage, &errorBatch, &c.StartedAt, &c.UpdatedAt, &completedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get reindex checkpoint: %w", err)
+	}
+
+	c.ErrorMessage = errorMessage.String
+	if errorBatch.Valid {
+		batch := int32(0)
+		fmt.Sscanf(errorBatch.String, "%d", &batch)
+		c.ErrorBatch = &batch
+	}
+	if completedAt.Valid {
+		c.CompletedAt = &completedAt.Time
+	}
+
+	return &c, nil
+}
+
+// DeleteReindexCheckpoint removes a reindex checkpoint.
+func (d *DB) DeleteReindexCheckpoint(ctx context.Context, tenantID int32, audience string) error {
+	_, err := d.db.ExecContext(ctx,
+		"DELETE FROM agent_reindex_checkpoints WHERE tenant_id = ? AND audience = ?",
+		tenantID, audience,
+	)
 	return err
 }

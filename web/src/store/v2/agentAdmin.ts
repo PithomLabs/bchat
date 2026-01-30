@@ -463,7 +463,12 @@ const agentAdminStore = (() => {
   };
 
   const fetchTenantConfig = async (slug: string) => {
-    state.setPartial({ isLoading: true, error: null });
+    state.setPartial({
+      isLoading: true,
+      error: null,
+      qaPairs: [],           // Clear Q&A pairs when switching tenants
+      qaTestResults: null,   // Clear test results when switching tenants
+    });
 
     try {
       const response = await axios.get<TenantConfig>(`/api/v1/agent/${slug}/config`);

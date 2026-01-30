@@ -121,7 +121,7 @@ func ValidateTicketReferences(ctx context.Context, db *sql.DB) error {
 	var orphanedAssignees int
 	err = db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM tickets
-		WHERE assignee_id IS NOT NULL 
+		WHERE assignee_id IS NOT NULL
 		AND assignee_id NOT IN (SELECT id FROM user)
 	`).Scan(&orphanedAssignees)
 	if err != nil {
@@ -129,6 +129,63 @@ func ValidateTicketReferences(ctx context.Context, db *sql.DB) error {
 	}
 	if orphanedAssignees > 0 {
 		return fmt.Errorf("found %d tickets with invalid assignee_id - fix data before enabling foreign keys", orphanedAssignees)
+	}
+
+	return nil
+}
+
+// GetTableColumns returns all column names for a table (SQLite only)
+// This is used for schema validation to ensure migrations create expected columns.
+func GetTableColumns(ctx context.Context, db *sql.DB, tableName string) ([]string, error) {
+	query := fmt.Sprintf("PRAGMA table_info(%s)", tableName)
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query table info for %s: %w", tableName, err)
+	}
+	defer rows.Close()
+
+	var columns []string
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull, dfltValue, pk sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dfltValue, &pk); err != nil {
+			return nil, fmt.Errorf("failed to scan column info: %w", err)
+		}
+		columns = append(columns, name)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating columns: %w", err)
+	}
+
+	return columns, nil
+}
+
+// ValidateTableSchema checks if a table has all required columns (SQLite only)
+// Returns an error listing any missing columns. Used for pre-deployment schema validation.
+func ValidateTableSchema(ctx context.Context, db *sql.DB, tableName string, requiredColumns []string) error {
+	columns, err := GetTableColumns(ctx, db, tableName)
+	if err != nil {
+		return fmt.Errorf("failed to get columns for %s: %w", tableName, err)
+	}
+
+	// Build a set of existing columns for O(1) lookup
+	columnSet := make(map[string]bool)
+	for _, col := range columns {
+		columnSet[col] = true
+	}
+
+	// Check for missing columns
+	var missing []string
+	for _, required := range requiredColumns {
+		if !columnSet[required] {
+			missing = append(missing, required)
+		}
+	}
+
+	if len(missing) > 0 {
+		return fmt.Errorf("table %s missing required columns: %v", tableName, missing)
 	}
 
 	return nil

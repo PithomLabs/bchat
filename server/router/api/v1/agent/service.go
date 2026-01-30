@@ -335,6 +335,256 @@ func (s *Service) ReindexTenantContent(ctx context.Context, tenantID int32, audi
 	return totalChunks, nil
 }
 
+// ReindexStatus represents the current state of a reindex operation.
+type ReindexStatus struct {
+	Status          string `json:"status"` // "idle", "in_progress", "completed", "failed"
+	CurrentBatch    int    `json:"current_batch,omitempty"`
+	TotalBatches    int    `json:"total_batches,omitempty"`
+	ProcessedChunks int    `json:"processed_chunks,omitempty"`
+	TotalChunks     int    `json:"total_chunks,omitempty"`
+	ErrorMessage    string `json:"error,omitempty"`
+	ErrorBatch      *int   `json:"error_batch,omitempty"`
+	CanResume       bool   `json:"can_resume"`
+}
+
+// GetReindexStatus returns the current reindex status for a tenant.
+func (s *Service) GetReindexStatus(ctx context.Context, tenantID int32, audience string) (*ReindexStatus, error) {
+	checkpoint, err := s.store.GetReindexCheckpoint(ctx, &store.FindReindexCheckpoint{
+		TenantID: &tenantID,
+		Audience: &audience,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if checkpoint == nil {
+		return &ReindexStatus{Status: "idle", CanResume: false}, nil
+	}
+
+	status := &ReindexStatus{
+		Status:          checkpoint.Status,
+		CurrentBatch:    int(checkpoint.CurrentBatch),
+		TotalBatches:    int(checkpoint.TotalBatches),
+		ProcessedChunks: int(checkpoint.ProcessedChunks),
+		TotalChunks:     int(checkpoint.TotalChunks),
+		ErrorMessage:    checkpoint.ErrorMessage,
+		CanResume:       checkpoint.Status == "failed",
+	}
+
+	if checkpoint.ErrorBatch != nil {
+		batch := int(*checkpoint.ErrorBatch)
+		status.ErrorBatch = &batch
+	}
+
+	return status, nil
+}
+
+// ReindexTenantContentWithResume re-indexes with checkpoint support for resume-from-error.
+func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID int32, audienceType string, resume bool) (int, error) {
+	if s.vectorDB == nil || s.chunker == nil {
+		return 0, fmt.Errorf("RAG pipeline not initialized")
+	}
+
+	// Check if using NoOpVectorDB
+	if _, isNoOp := s.vectorDB.(*NoOpVectorDB); isNoOp {
+		return 0, fmt.Errorf("RAG pipeline disabled (using NoOpVectorDB)")
+	}
+
+	// Force internal-only indexing
+	if audienceType == "" || audienceType == "external" {
+		audienceType = "internal"
+	}
+
+	// Check for existing checkpoint
+	var existingCheckpoint *store.ReindexCheckpoint
+	if resume {
+		checkpoint, err := s.store.GetReindexCheckpoint(ctx, &store.FindReindexCheckpoint{
+			TenantID: &tenantID,
+			Audience: &audienceType,
+		})
+		if err != nil {
+			slog.Warn("Failed to get checkpoint", "error", err)
+		} else if checkpoint != nil && checkpoint.Status == "failed" {
+			existingCheckpoint = checkpoint
+			slog.Info("Resuming from checkpoint",
+				"tenantID", tenantID,
+				"audience", audienceType,
+				"startBatch", checkpoint.CurrentBatch,
+				"totalBatches", checkpoint.TotalBatches)
+		}
+	}
+
+	// Get tenant info
+	tenant, err := s.store.GetAgentTenant(ctx, &store.FindAgentTenant{ID: &tenantID})
+	if err != nil {
+		return 0, fmt.Errorf("failed to get tenant: %w", err)
+	}
+
+	// Get chunk size based on embedding provider
+	embeddingProvider := ""
+	if s.vectorDBConfig != nil && s.vectorDBConfig.EmbeddingConfig != nil {
+		embeddingProvider = s.vectorDBConfig.EmbeddingConfig.Provider
+	}
+	maxChunkTokens := GetMaxChunkTokens(embeddingProvider)
+
+	slog.Info("Starting RAG reindex with checkpoint support",
+		"tenantID", tenantID,
+		"tenant", tenant.Slug,
+		"audienceFilter", audienceType,
+		"resume", resume,
+		"hasCheckpoint", existingCheckpoint != nil)
+
+	// Get latest version of source files
+	findParams := &store.FindAgentSourceFile{
+		TenantID:     &tenantID,
+		AudienceType: &audienceType,
+		LatestOnly:   true,
+	}
+
+	files, err := s.store.ListAgentSourceFiles(ctx, findParams)
+	if err != nil {
+		return 0, fmt.Errorf("failed to list source files: %w", err)
+	}
+
+	// Build chunks
+	var kbContent, policyContent string
+	for _, f := range files {
+		if f.FileType == "kb" {
+			kbContent = f.Content
+		} else if f.FileType == "policy" {
+			policyContent = f.Content
+		}
+	}
+
+	if kbContent == "" && policyContent == "" {
+		return 0, nil
+	}
+
+	var allChunks []DocumentChunk
+	if kbContent != "" {
+		kbChunks := s.chunker.ChunkMarkdownContent(kbContent, tenantID, audienceType, "kb", 1, maxChunkTokens)
+		allChunks = append(allChunks, kbChunks...)
+	}
+	if policyContent != "" {
+		policyChunks := s.chunker.ChunkMarkdownContent(policyContent, tenantID, audienceType, "policy", 1, maxChunkTokens)
+		allChunks = append(allChunks, policyChunks...)
+	}
+
+	if len(allChunks) == 0 {
+		return 0, nil
+	}
+
+	totalChunks := len(allChunks)
+	const batchSize = 25
+	totalBatches := (totalChunks + batchSize - 1) / batchSize
+	startBatch := 0
+
+	// If not resuming, delete existing content and start fresh
+	if existingCheckpoint == nil {
+		if err := s.vectorDB.Delete(ctx, tenantID, audienceType); err != nil {
+			slog.Warn("Failed to delete existing chunks", "error", err)
+		}
+
+		// Create new checkpoint
+		checkpoint := &store.ReindexCheckpoint{
+			TenantID:     tenantID,
+			Audience:     audienceType,
+			TotalChunks:  int32(totalChunks),
+			TotalBatches: int32(totalBatches),
+			BatchSize:    batchSize,
+			Status:       "in_progress",
+			StartedAt:    time.Now(),
+		}
+		if _, err := s.store.UpsertReindexCheckpoint(ctx, checkpoint); err != nil {
+			slog.Warn("Failed to create checkpoint", "error", err)
+		}
+	} else {
+		// Resume from existing checkpoint
+		startBatch = int(existingCheckpoint.CurrentBatch)
+
+		// Update checkpoint status to in_progress
+		existingCheckpoint.Status = "in_progress"
+		existingCheckpoint.ErrorMessage = ""
+		existingCheckpoint.ErrorBatch = nil
+		if _, err := s.store.UpsertReindexCheckpoint(ctx, existingCheckpoint); err != nil {
+			slog.Warn("Failed to update checkpoint", "error", err)
+		}
+	}
+
+	// Create checkpoint callback
+	checkpointFunc := func(currentBatch, processedChunks, totalBatches, totalChunks int) error {
+		checkpoint := &store.ReindexCheckpoint{
+			TenantID:        tenantID,
+			Audience:        audienceType,
+			TotalChunks:     int32(totalChunks),
+			ProcessedChunks: int32(processedChunks),
+			CurrentBatch:    int32(currentBatch),
+			TotalBatches:    int32(totalBatches),
+			BatchSize:       batchSize,
+			Status:          "in_progress",
+		}
+		_, err := s.store.UpsertReindexCheckpoint(ctx, checkpoint)
+		return err
+	}
+
+	// Use InsertWithCheckpoint for progress tracking and retry logic
+	opts := InsertOptions{
+		StartBatch:     startBatch,
+		CheckpointFunc: checkpointFunc,
+		MaxRetries:     3,
+		RetryDelay:     5 * time.Second,
+	}
+
+	if err := s.vectorDB.InsertWithCheckpoint(ctx, allChunks, opts); err != nil {
+		// Mark checkpoint as failed
+		errBatch := extractBatchFromError(err)
+		failedCheckpoint := &store.ReindexCheckpoint{
+			TenantID:     tenantID,
+			Audience:     audienceType,
+			TotalChunks:  int32(totalChunks),
+			TotalBatches: int32(totalBatches),
+			BatchSize:    batchSize,
+			Status:       "failed",
+			ErrorMessage: err.Error(),
+			ErrorBatch:   errBatch,
+		}
+		s.store.UpsertReindexCheckpoint(ctx, failedCheckpoint)
+		return 0, err
+	}
+
+	// Mark checkpoint as completed
+	completedCheckpoint := &store.ReindexCheckpoint{
+		TenantID:        tenantID,
+		Audience:        audienceType,
+		TotalChunks:     int32(totalChunks),
+		ProcessedChunks: int32(totalChunks),
+		CurrentBatch:    int32(totalBatches),
+		TotalBatches:    int32(totalBatches),
+		BatchSize:       batchSize,
+		Status:          "completed",
+	}
+	s.store.UpsertReindexCheckpoint(ctx, completedCheckpoint)
+
+	slog.Info("RAG reindex completed with checkpoint",
+		"tenantID", tenantID,
+		"tenant", tenant.Slug,
+		"totalChunks", totalChunks)
+
+	return totalChunks, nil
+}
+
+// extractBatchFromError tries to extract batch number from error message.
+func extractBatchFromError(err error) *int32 {
+	// Error format: "failed at batch X: ..."
+	errStr := err.Error()
+	var batch int
+	if _, scanErr := fmt.Sscanf(errStr, "failed at batch %d", &batch); scanErr == nil {
+		b := int32(batch)
+		return &b
+	}
+	return nil
+}
+
 // ============================================================================
 // MEMORY SESSION STORE (for external anonymous sessions)
 // ============================================================================

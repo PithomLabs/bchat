@@ -199,8 +199,8 @@ type Driver interface {
 	// Q&A pair model related methods (for embedding/retrieval testing).
 	CreateAgentQAPair(ctx context.Context, pair *AgentQAPair) (*AgentQAPair, error)
 	ListAgentQAPairs(ctx context.Context, find *FindAgentQAPair) ([]*AgentQAPair, error)
-	UpdateAgentQAPair(ctx context.Context, pair *AgentQAPair) (*AgentQAPair, error)
-	DeleteAgentQAPair(ctx context.Context, id int32) error
+	UpdateAgentQAPair(ctx context.Context, pair *AgentQAPair, tenantID int32) (*AgentQAPair, error)
+	DeleteAgentQAPair(ctx context.Context, id int32, tenantID int32) error
 	DeleteAgentQAPairsByTenant(ctx context.Context, tenantID int32) error
 
 	// Transcript model related methods (chat conversation recording).
@@ -209,4 +209,9 @@ type Driver interface {
 	ListAgentTranscripts(ctx context.Context, find *FindAgentTranscript) ([]*AgentTranscript, error)
 	UpdateAgentTranscript(ctx context.Context, transcript *AgentTranscript) error
 	DeleteAgentTranscript(ctx context.Context, id string) error
+
+	// Reindex checkpoint model related methods (resume-from-error).
+	UpsertReindexCheckpoint(ctx context.Context, checkpoint *ReindexCheckpoint) (*ReindexCheckpoint, error)
+	GetReindexCheckpoint(ctx context.Context, find *FindReindexCheckpoint) (*ReindexCheckpoint, error)
+	DeleteReindexCheckpoint(ctx context.Context, tenantID int32, audience string) error
 }

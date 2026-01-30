@@ -13,11 +13,25 @@ import (
 	"time"
 )
 
+// CheckpointCallback is called after each successful batch to update progress.
+type CheckpointCallback func(currentBatch, processedChunks, totalBatches, totalChunks int) error
+
+// InsertOptions configures the InsertWithCheckpoint operation.
+type InsertOptions struct {
+	StartBatch     int                // Resume from this batch (0-indexed)
+	CheckpointFunc CheckpointCallback // Called after each batch
+	MaxRetries     int                // Max retries per batch (default: 3)
+	RetryDelay     time.Duration      // Initial delay between retries (default: 5s)
+}
+
 // VectorDB defines the interface for vector database operations.
 // This abstraction allows switching between implementations (in-memory, LanceDB, etc.)
 type VectorDB interface {
 	// Insert adds or updates chunks in the vector database.
 	Insert(ctx context.Context, chunks []DocumentChunk) error
+
+	// InsertWithCheckpoint adds chunks with progress tracking and resume capability.
+	InsertWithCheckpoint(ctx context.Context, chunks []DocumentChunk, opts InsertOptions) error
 
 	// Delete removes chunks matching the filter criteria.
 	Delete(ctx context.Context, tenantID int32, audienceType string) error
@@ -215,6 +229,20 @@ func (db *MemoryVectorDB) Insert(ctx context.Context, chunks []DocumentChunk) er
 	}
 
 	slog.Debug("Inserted chunks into memory vector DB", "count", len(chunks))
+	return nil
+}
+
+// InsertWithCheckpoint adds chunks with progress tracking (memory DB does simple insert).
+func (db *MemoryVectorDB) InsertWithCheckpoint(ctx context.Context, chunks []DocumentChunk, opts InsertOptions) error {
+	// Memory DB doesn't need batching, just call regular Insert
+	if err := db.Insert(ctx, chunks); err != nil {
+		return err
+	}
+
+	// Call checkpoint with final state if callback provided
+	if opts.CheckpointFunc != nil {
+		return opts.CheckpointFunc(1, len(chunks), 1, len(chunks))
+	}
 	return nil
 }
 
@@ -435,6 +463,11 @@ func NewNoOpVectorDB() *NoOpVectorDB {
 
 // Insert is a no-op.
 func (db *NoOpVectorDB) Insert(ctx context.Context, chunks []DocumentChunk) error {
+	return nil
+}
+
+// InsertWithCheckpoint is a no-op.
+func (db *NoOpVectorDB) InsertWithCheckpoint(ctx context.Context, chunks []DocumentChunk, opts InsertOptions) error {
 	return nil
 }
 

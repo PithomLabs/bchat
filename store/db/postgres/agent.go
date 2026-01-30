@@ -313,11 +313,11 @@ func (d *DB) ListAgentQAPairs(ctx context.Context, find *store.FindAgentQAPair) 
 	return nil, errNotImplemented
 }
 
-func (d *DB) UpdateAgentQAPair(ctx context.Context, pair *store.AgentQAPair) (*store.AgentQAPair, error) {
+func (d *DB) UpdateAgentQAPair(ctx context.Context, pair *store.AgentQAPair, tenantID int32) (*store.AgentQAPair, error) {
 	return nil, errNotImplemented
 }
 
-func (d *DB) DeleteAgentQAPair(ctx context.Context, id int32) error {
+func (d *DB) DeleteAgentQAPair(ctx context.Context, id int32, tenantID int32) error {
 	return errNotImplemented
 }
 
@@ -344,5 +344,19 @@ func (d *DB) UpdateAgentTranscript(ctx context.Context, transcript *store.AgentT
 }
 
 func (d *DB) DeleteAgentTranscript(ctx context.Context, id string) error {
+	return errNotImplemented
+}
+
+// Reindex Checkpoint methods
+
+func (d *DB) UpsertReindexCheckpoint(ctx context.Context, checkpoint *store.ReindexCheckpoint) (*store.ReindexCheckpoint, error) {
+	return nil, errNotImplemented
+}
+
+func (d *DB) GetReindexCheckpoint(ctx context.Context, find *store.FindReindexCheckpoint) (*store.ReindexCheckpoint, error) {
+	return nil, errNotImplemented
+}
+
+func (d *DB) DeleteReindexCheckpoint(ctx context.Context, tenantID int32, audience string) error {
 	return errNotImplemented
 }

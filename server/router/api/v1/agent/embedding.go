@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -112,11 +114,13 @@ func NewLocalEmbedding(config *EmbeddingConfig) (*LocalEmbedding, error) {
 		endpoint = "http://localhost:8001/embed"
 	}
 
+	timeout := getEnvDuration("EMBEDDING_TIMEOUT", 180*time.Second)
+
 	return &LocalEmbedding{
 		endpoint:  endpoint,
 		dimension: config.Dimension,
 		model:     config.Model,
-		client:    &http.Client{Timeout: 60 * time.Second},
+		client:    &http.Client{Timeout: timeout},
 	}, nil
 }
 
@@ -216,12 +220,14 @@ func NewOpenRouterEmbedding(config *EmbeddingConfig) (*OpenRouterEmbedding, erro
 		dimension = getOpenRouterDimension(model)
 	}
 
+	timeout := getEnvDuration("EMBEDDING_TIMEOUT", 180*time.Second)
+
 	return &OpenRouterEmbedding{
 		apiKey:    config.OpenRouterAPIKey,
 		model:     model,
 		endpoint:  "https://openrouter.ai/api/v1/embeddings",
 		dimension: dimension,
-		client:    &http.Client{Timeout: 60 * time.Second},
+		client:    &http.Client{Timeout: timeout},
 	}, nil
 }
 
@@ -246,12 +252,39 @@ type openRouterEmbedResponse struct {
 	} `json:"error,omitempty"`
 }
 
-// Embed generates embeddings using OpenRouter's API.
+// Embed generates embeddings using OpenRouter's API with retry logic.
 func (e *OpenRouterEmbedding) Embed(ctx context.Context, texts []string) ([][]float32, error) {
 	if len(texts) == 0 {
 		return [][]float32{}, nil
 	}
 
+	var lastErr error
+	maxRetries := 3
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(attempt*attempt) * time.Second
+			slog.Info("Retrying embedding request", "attempt", attempt+1, "backoff", backoff, "textsCount", len(texts))
+			time.Sleep(backoff)
+		}
+
+		embeddings, err := e.doEmbed(ctx, texts)
+		if err == nil {
+			return embeddings, nil
+		}
+		lastErr = err
+
+		// Only retry on timeout/network errors, not API errors
+		if !isRetryableError(err) {
+			return nil, err
+		}
+		slog.Warn("Embedding request failed, will retry", "attempt", attempt+1, "error", err.Error())
+	}
+	return nil, fmt.Errorf("failed after %d retries: %w", maxRetries, lastErr)
+}
+
+// doEmbed performs the actual HTTP request to OpenRouter.
+func (e *OpenRouterEmbedding) doEmbed(ctx context.Context, texts []string) ([][]float32, error) {
 	reqBody := openRouterEmbedRequest{
 		Model: e.model,
 		Input: texts,
@@ -301,6 +334,19 @@ func (e *OpenRouterEmbedding) Embed(ctx context.Context, texts []string) ([][]fl
 	}
 
 	return embeddings, nil
+}
+
+// isRetryableError returns true if the error is likely transient and worth retrying.
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "deadline exceeded") ||
+		strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "connection reset") ||
+		strings.Contains(errStr, "no such host")
 }
 
 // Dimension returns the embedding vector dimension.
@@ -392,4 +438,16 @@ func getEnvOrDefault(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// getEnvDuration returns a duration from an environment variable or default.
+// Accepts formats like "180s", "3m", "1h30m".
+func getEnvDuration(key string, defaultVal time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+		slog.Warn("Invalid duration format for env var, using default", "key", key, "value", v, "default", defaultVal)
+	}
+	return defaultVal
 }

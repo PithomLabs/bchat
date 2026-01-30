@@ -303,7 +303,8 @@ func (db *LanceVectorDB) Insert(ctx context.Context, chunks []DocumentChunk) err
 	defer db.mu.Unlock()
 
 	// Batch size for embedding and insertion (handles large files)
-	const batchSize = 100
+	// Smaller batches (25) reduce individual request time and timeout risk
+	const batchSize = 25
 
 	totalChunks := len(chunks)
 	slog.Info("Starting batched insert", "totalChunks", totalChunks, "batchSize", batchSize)
@@ -395,6 +396,170 @@ func (db *LanceVectorDB) Insert(ctx context.Context, chunks []DocumentChunk) err
 	}
 
 	slog.Info("Completed batched insert", "totalChunks", totalChunks)
+	return nil
+}
+
+// InsertWithCheckpoint adds chunks with resume support and progress tracking.
+// CheckpointCallback and InsertOptions types are defined in vectordb.go
+func (db *LanceVectorDB) InsertWithCheckpoint(ctx context.Context, chunks []DocumentChunk, opts InsertOptions) error {
+	if len(chunks) == 0 {
+		return nil
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	// Default options
+	if opts.MaxRetries == 0 {
+		opts.MaxRetries = 3
+	}
+	if opts.RetryDelay == 0 {
+		opts.RetryDelay = 5 * time.Second
+	}
+
+	const batchSize = 25
+	totalChunks := len(chunks)
+	totalBatches := (totalChunks + batchSize - 1) / batchSize
+	startBatch := opts.StartBatch
+
+	slog.Info("Starting batched insert with checkpoint support",
+		"totalChunks", totalChunks,
+		"batchSize", batchSize,
+		"startBatch", startBatch,
+		"totalBatches", totalBatches)
+
+	// Check for dimension mismatch before processing (only if starting fresh)
+	if startBatch == 0 && len(chunks) > 0 && len(chunks[0].Embedding) == 0 {
+		sampleText := fmt.Sprintf("%s: %s", chunks[0].Title, chunks[0].Content)
+		sampleEmbeddings, err := db.embedSvc.Embed(ctx, []string{sampleText})
+		if err != nil {
+			return fmt.Errorf("failed to generate sample embedding: %w", err)
+		}
+		chunks[0].Embedding = sampleEmbeddings[0]
+
+		existingDim := db.getTableEmbeddingDimension(ctx)
+		newDim := len(chunks[0].Embedding)
+
+		if existingDim > 0 && existingDim != newDim {
+			slog.Warn("Embedding dimension mismatch detected, recreating table",
+				"table", lanceTableName,
+				"existingDimension", existingDim,
+				"newDimension", newDim)
+
+			if err := db.dropAndRecreateTable(ctx); err != nil {
+				return fmt.Errorf("failed to recreate table for dimension change: %w", err)
+			}
+		}
+	}
+
+	// Process chunks in batches starting from startBatch
+	for batchNum := startBatch; batchNum < totalBatches; batchNum++ {
+		batchStart := batchNum * batchSize
+		batchEnd := batchStart + batchSize
+		if batchEnd > totalChunks {
+			batchEnd = totalChunks
+		}
+
+		batch := chunks[batchStart:batchEnd]
+
+		slog.Info("Processing batch",
+			"batch", batchNum+1,
+			"totalBatches", totalBatches,
+			"chunksInBatch", len(batch),
+			"progress", fmt.Sprintf("%d/%d", batchEnd, totalChunks))
+
+		// Process batch with retry logic
+		err := db.processBatchWithRetry(ctx, batch, batchNum+1, opts.MaxRetries, opts.RetryDelay)
+		if err != nil {
+			return fmt.Errorf("failed at batch %d: %w", batchNum+1, err)
+		}
+
+		// Call checkpoint callback after successful batch
+		if opts.CheckpointFunc != nil {
+			if err := opts.CheckpointFunc(batchNum+1, batchEnd, totalBatches, totalChunks); err != nil {
+				slog.Warn("Checkpoint callback failed", "batch", batchNum+1, "error", err)
+				// Non-fatal: continue processing
+			}
+		}
+	}
+
+	// Create IVF-PQ vector index now that we have data
+	if err := db.ensureVectorIndex(ctx); err != nil {
+		slog.Warn("Failed to create vector index after insert", "error", err)
+	}
+
+	slog.Info("Completed batched insert with checkpoint", "totalChunks", totalChunks)
+	return nil
+}
+
+// processBatchWithRetry processes a single batch with exponential backoff retry.
+func (db *LanceVectorDB) processBatchWithRetry(ctx context.Context, batch []DocumentChunk, batchNum, maxRetries int, initialDelay time.Duration) error {
+	var lastErr error
+	delay := initialDelay
+	maxDelay := 60 * time.Second
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		err := db.processSingleBatch(ctx, batch, batchNum)
+		if err == nil {
+			return nil
+		}
+
+		lastErr = err
+		if attempt < maxRetries-1 {
+			slog.Warn("Batch failed, retrying",
+				"batch", batchNum,
+				"attempt", attempt+1,
+				"maxRetries", maxRetries,
+				"delay", delay,
+				"error", err)
+			time.Sleep(delay)
+			delay = delay * 2
+			if delay > maxDelay {
+				delay = maxDelay
+			}
+		}
+	}
+
+	return fmt.Errorf("batch %d failed after %d retries: %w", batchNum, maxRetries, lastErr)
+}
+
+// processSingleBatch processes a single batch of chunks.
+func (db *LanceVectorDB) processSingleBatch(ctx context.Context, batch []DocumentChunk, batchNum int) error {
+	// Generate embeddings for chunks that don't have them
+	var textsToEmbed []string
+	var indicesToEmbed []int
+
+	for i, chunk := range batch {
+		if len(chunk.Embedding) == 0 {
+			textsToEmbed = append(textsToEmbed, fmt.Sprintf("%s: %s", chunk.Title, chunk.Content))
+			indicesToEmbed = append(indicesToEmbed, i)
+		}
+	}
+
+	if len(textsToEmbed) > 0 {
+		embeddings, err := db.embedSvc.Embed(ctx, textsToEmbed)
+		if err != nil {
+			return fmt.Errorf("failed to generate embeddings for batch %d: %w", batchNum, err)
+		}
+
+		for i, idx := range indicesToEmbed {
+			batch[idx].Embedding = embeddings[i]
+		}
+	}
+
+	// Build Arrow record for this batch
+	record, err := db.chunksToArrowRecord(batch)
+	if err != nil {
+		return fmt.Errorf("failed to convert batch %d to Arrow record: %w", batchNum, err)
+	}
+
+	// Add batch to table
+	if err := db.table.Add(ctx, record, nil); err != nil {
+		record.Release()
+		return fmt.Errorf("failed to add batch %d to LanceDB: %w", batchNum, err)
+	}
+	record.Release()
+
 	return nil
 }
 

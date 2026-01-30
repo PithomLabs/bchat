@@ -20,7 +20,7 @@ This document provides a comprehensive reference for all environment variables u
 | Category | Key Variables |
 |----------|--------------|
 | **Core** | `OPENROUTER_API_KEY`, `LLM_MODEL` |
-| **Embedding** | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL` |
+| **Embedding** | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_TIMEOUT` |
 | **RAG** | `RAG_PIPELINE_ENABLED`, `REINDEX_RAG`, `HYBRID_SEARCH_ENABLED` |
 | **Storage** | `LANCEDB_STORAGE_PROVIDER`, `LANCEDB_LOCAL_PATH` |
 
@@ -240,6 +240,30 @@ export EMBEDDING_LOCAL_ENDPOINT=http://localhost:8001/embed
 ```bash
 task embedding:server
 ```
+
+---
+
+### EMBEDDING_TIMEOUT
+
+HTTP timeout for embedding API requests.
+
+| Property | Value |
+|----------|-------|
+| Type | Duration string |
+| Default | `180s` |
+| Examples | `60s`, `180s`, `5m` |
+
+```bash
+export EMBEDDING_TIMEOUT=180s
+```
+
+**Format:** Accepts Go duration strings (e.g., `60s`, `3m`, `1h30m`).
+
+**Use cases:**
+- Increase for large batch operations with slow network
+- Decrease for faster failure detection in testing
+
+**Note:** Added in 2026-01-30 to fix timeout issues with large KB content during "Rebuild Index" operations. The previous hardcoded 60s timeout was insufficient for large batches.
 
 ---
 
@@ -611,6 +635,70 @@ task run:rag  # Recommended
 
 ---
 
+## Local vs Production Environment Variables
+
+### IMPORTANT: Sync .env to fly.io Before Deployment
+
+The `.env` file is for **LOCAL DEVELOPMENT ONLY**. Before deploying to fly.io, you must ensure all required variables are reflected in fly.io configuration.
+
+| Environment | How Variables Are Set |
+|-------------|----------------------|
+| **Local development** | `.env` file (not committed to git) |
+| **fly.io (non-sensitive)** | `fly.toml [env]` section |
+| **fly.io (sensitive)** | `fly secrets set VAR=value` |
+
+### Pre-Deployment Sync Checklist
+
+Run the sync check task before deploying:
+
+```bash
+task fly:check
+```
+
+This will:
+- List all variables in your local `.env`
+- List variables in `fly.toml [env]`
+- List `fly secrets`
+- Report any `.env` variables missing from fly.io config
+
+### Variable Placement Guide
+
+| Variable Type | Local (.env) | fly.io Location |
+|---------------|--------------|-----------------|
+| `OPENROUTER_API_KEY` | `.env` | `fly secrets set` |
+| `ENCRYPTION_MASTER_KEY` | `.env` | `fly secrets set` |
+| `LLM_MODEL` | `.env` | `fly.toml [env]` |
+| `EMBEDDING_MODEL` | `.env` | `fly.toml [env]` |
+| `EMBEDDING_TIMEOUT` | `.env` | `fly.toml [env]` |
+| `RAG_PIPELINE_ENABLED` | `.env` | `fly.toml [env]` |
+| `AWS_ACCESS_KEY_ID` | `.env` | `fly secrets set` (auto-set by `fly storage create`) |
+
+### Adding a New Variable Workflow
+
+```bash
+# Step 1: Add to .env and test locally
+echo "NEW_VAR=value" >> .env
+source .env
+task run:rag  # Verify locally
+
+# Step 2: Add to fly.io (choose based on sensitivity)
+
+# Option A: Non-sensitive → Edit fly.toml
+#   [env]
+#     NEW_VAR = "value"
+
+# Option B: Sensitive → Use fly secrets
+fly secrets set NEW_VAR=value
+
+# Step 3: Deploy and verify
+fly deploy
+fly ssh console -C "env | grep NEW_VAR"
+```
+
+See [DOCS_DEPLOYMENT.MD](./DOCS_DEPLOYMENT.MD) for complete deployment procedures.
+
+---
+
 ## Troubleshooting
 
 ### "OPENROUTER_API_KEY not configured"
@@ -653,5 +741,5 @@ task build:backend:rag
 
 ---
 
-*Document Version: 1.3*
-*Updated: 2026-01-27* - Removed Cybertron, OpenRouter is now default embedding provider
+*Document Version: 1.4*
+*Updated: 2026-01-30* - Added EMBEDDING_TIMEOUT, documented .env vs fly.io deployment

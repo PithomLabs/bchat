@@ -31,6 +31,13 @@ tasks:
     cmds:
       - ./scripts/validate-migrations.sh
 
+  validate:schema:
+    desc: Validate database schema and test CRUD operations
+    cmds:
+      - echo "Running schema validation tests..."
+      - go test -v ./store/test/... -run "TestSchemaValidation|TestAgentSourceFile|TestAgentTenantScript|TestMigrationHistoryVersion"
+      - echo "Schema validation passed!"
+
   build:frontend:
     desc: Build frontend assets
     cmds:
@@ -100,6 +107,7 @@ tasks:
           set -a && source .env && set +a
         fi
         RAG_PIPELINE_ENABLED=true \
+        EMBEDDING_MODEL=openai/text-embedding-3-small \
         LANCEDB_STORAGE_PROVIDER=local \
         ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
 
@@ -121,5 +129,60 @@ tasks:
     desc: Run go generate
     cmds:
       - go generate ./...
+
+  fly:check:
+    desc: Check .env vars are synced to fly.toml and fly secrets
+    cmds:
+      - |
+        echo "=== Pre-Deployment Environment Sync Check ==="
+        echo ""
+
+        # Get .env variables (excluding comments and empty lines)
+        if [ ! -f .env ]; then
+          echo "ERROR: .env file not found"
+          exit 1
+        fi
+
+        echo "📁 Local .env variables:"
+        ENV_VARS=$(grep -v '^#' .env | grep '=' | cut -d'=' -f1 | sort)
+        echo "$ENV_VARS" | sed 's/^/   /'
+        echo ""
+
+        # Get fly.toml [env] variables (stop at next section)
+        echo "📄 fly.toml [env] variables:"
+        TOML_VARS=$(sed -n '/^\[env\]/,/^\[/p' fly.toml | grep -E '^\s+[A-Z_]+\s*=' | awk '{print $1}' | sort)
+        echo "$TOML_VARS" | sed 's/^/   /'
+        echo ""
+
+        # Get fly secrets (requires flyctl)
+        echo "🔐 fly secrets:"
+        if command -v fly &> /dev/null; then
+          SECRET_VARS=$(fly secrets list 2>/dev/null | tail -n +2 | awk '{print $1}' | sort)
+          echo "$SECRET_VARS" | sed 's/^/   /'
+        else
+          echo "   (flyctl not installed - skipping)"
+          SECRET_VARS=""
+        fi
+        echo ""
+
+        # Check for missing variables
+        echo "=== Sync Status ==="
+        MISSING=0
+        for var in $ENV_VARS; do
+          IN_TOML=$(echo "$TOML_VARS" | grep -x "$var" || true)
+          IN_SECRETS=$(echo "$SECRET_VARS" | grep -x "$var" || true)
+          if [ -z "$IN_TOML" ] && [ -z "$IN_SECRETS" ]; then
+            echo "❌ MISSING: $var (not in fly.toml or fly secrets)"
+            MISSING=$((MISSING + 1))
+          fi
+        done
+
+        if [ $MISSING -eq 0 ]; then
+          echo "✅ All .env variables are synced to fly.io config"
+        else
+          echo ""
+          echo "⚠️  $MISSING variable(s) missing from fly.io config"
+          echo "   Add to fly.toml [env] (non-sensitive) or fly secrets (sensitive)"
+        fi
 
   

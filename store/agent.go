@@ -691,8 +691,8 @@ type AgentStore interface {
 	// Q&A pair operations (for embedding/retrieval testing)
 	CreateAgentQAPair(ctx context.Context, pair *AgentQAPair) (*AgentQAPair, error)
 	ListAgentQAPairs(ctx context.Context, find *FindAgentQAPair) ([]*AgentQAPair, error)
-	UpdateAgentQAPair(ctx context.Context, pair *AgentQAPair) (*AgentQAPair, error)
-	DeleteAgentQAPair(ctx context.Context, id int32) error
+	UpdateAgentQAPair(ctx context.Context, pair *AgentQAPair, tenantID int32) (*AgentQAPair, error)
+	DeleteAgentQAPair(ctx context.Context, id int32, tenantID int32) error
 	DeleteAgentQAPairsByTenant(ctx context.Context, tenantID int32) error
 
 	// Transcript operations (chat conversation recording)
@@ -969,12 +969,12 @@ func (s *Store) ListAgentQAPairs(ctx context.Context, find *FindAgentQAPair) ([]
 	return s.driver.ListAgentQAPairs(ctx, find)
 }
 
-func (s *Store) UpdateAgentQAPair(ctx context.Context, pair *AgentQAPair) (*AgentQAPair, error) {
-	return s.driver.UpdateAgentQAPair(ctx, pair)
+func (s *Store) UpdateAgentQAPair(ctx context.Context, pair *AgentQAPair, tenantID int32) (*AgentQAPair, error) {
+	return s.driver.UpdateAgentQAPair(ctx, pair, tenantID)
 }
 
-func (s *Store) DeleteAgentQAPair(ctx context.Context, id int32) error {
-	return s.driver.DeleteAgentQAPair(ctx, id)
+func (s *Store) DeleteAgentQAPair(ctx context.Context, id int32, tenantID int32) error {
+	return s.driver.DeleteAgentQAPair(ctx, id, tenantID)
 }
 
 func (s *Store) DeleteAgentQAPairsByTenant(ctx context.Context, tenantID int32) error {
@@ -999,4 +999,41 @@ func (s *Store) UpdateAgentTranscript(ctx context.Context, transcript *AgentTran
 
 func (s *Store) DeleteAgentTranscript(ctx context.Context, id string) error {
 	return s.driver.DeleteAgentTranscript(ctx, id)
+}
+
+// ReindexCheckpoint tracks reindex progress for resume-from-error support.
+type ReindexCheckpoint struct {
+	ID              int32
+	TenantID        int32
+	Audience        string
+	TotalChunks     int32
+	ProcessedChunks int32
+	CurrentBatch    int32
+	TotalBatches    int32
+	BatchSize       int32
+	Status          string // "in_progress", "completed", "failed"
+	ErrorMessage    string
+	ErrorBatch      *int32
+	StartedAt       time.Time
+	UpdatedAt       time.Time
+	CompletedAt     *time.Time
+}
+
+// FindReindexCheckpoint contains filters for finding reindex checkpoints.
+type FindReindexCheckpoint struct {
+	TenantID *int32
+	Audience *string
+	Status   *string
+}
+
+func (s *Store) UpsertReindexCheckpoint(ctx context.Context, checkpoint *ReindexCheckpoint) (*ReindexCheckpoint, error) {
+	return s.driver.UpsertReindexCheckpoint(ctx, checkpoint)
+}
+
+func (s *Store) GetReindexCheckpoint(ctx context.Context, find *FindReindexCheckpoint) (*ReindexCheckpoint, error) {
+	return s.driver.GetReindexCheckpoint(ctx, find)
+}
+
+func (s *Store) DeleteReindexCheckpoint(ctx context.Context, tenantID int32, audience string) error {
+	return s.driver.DeleteReindexCheckpoint(ctx, tenantID, audience)
 }
