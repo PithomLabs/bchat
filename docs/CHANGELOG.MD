@@ -7,6 +7,14 @@ All notable changes to the bchat AI Agent System are documented in this file.
 ## 2026-01-31
 
 ### Changed
+- **Tenant-Scoped Chat Agent Responses** - Agent now only answers queries relevant to current tenant
+  - Added SCOPE OF KNOWLEDGE section to system prompt defining tenant boundaries
+  - Agent politely declines queries about other businesses or out-of-scope topics
+  - Enhanced CRITICAL REMINDER section with tenant-only representation
+  - Updated RAG pipeline constraints with tenant scoping rules
+  - Prevents hallucination by encouraging honest "I don't have that information" responses
+  - File: `server/router/api/v1/agent/service.go` (buildSystemPrompt, buildRAGSystemPrompt)
+
 - **Enhanced `fly:check` Pre-Deployment Validation** - Now validates full environment chain
   - Validates: `.env` -> `Dockerfile` -> `fly.toml` -> `fly secrets`
   - Reads Dockerfile specified in `fly.toml [build].dockerfile` (supports local vs s3)

@@ -76,7 +76,7 @@ ENV MEMOS_PORT="5230"
 ENV RAG_PIPELINE_ENABLED="true"
 ENV LANCEDB_STORAGE_PROVIDER="local"
 ENV LANCEDB_LOCAL_PATH="/var/opt/memos/lancedb"
-ENV EMBEDDING_PROVIDER="openrouter"
+ENV EMBEDDING_PROVIDER="deepinfra"
 ENV EMBEDDING_MODEL="sentence-transformers/all-MiniLM-L12-v2"
 
 # Optional LLM verifier (disabled by default)

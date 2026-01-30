@@ -27,7 +27,7 @@ primary_region = "sjc"
   RAG_PIPELINE_ENABLED = "true"
   LANCEDB_STORAGE_PROVIDER = "local"
   LANCEDB_LOCAL_PATH = "/var/opt/memos/lancedb"
-  EMBEDDING_PROVIDER = "openrouter"
+  EMBEDDING_PROVIDER = "deepinfra"
   EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L12-v2"
   LLM_VERIFIER_ENABLED = "false"
 

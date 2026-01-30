@@ -46,6 +46,7 @@ git tag -a v0.5.16 -m "save chat transcript"
 git tag -a v0.5.17 -m "CHANGELOG.MD 2026-01-28 2218"
 git tag -a v0.5.18 -m "deploy to fly.io"
 git tag -a v0.5.19 -m "rebuild index fixes"
+git tag -a v0.5.20 -m "CHANGELOG.MD 2026-01-31 0320"
 git push origin --tags
 ```
 
