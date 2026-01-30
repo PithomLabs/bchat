@@ -592,14 +592,275 @@ fly deploy
 
 ---
 
+## Addendum: How fly.io Deployment Works
+
+### The Complete Deployment Flow
+
+When you run `fly deploy`, here's exactly what happens:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         fly deploy                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 1: Read fly.toml                                                      │
+│  ─────────────────────                                                      │
+│  fly.toml specifies:                                                        │
+│    [build]                                                                  │
+│      dockerfile = "Dockerfile.local.fly"  ← Which Dockerfile to use        │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 2: Docker Build (on fly.io's builders)                                │
+│  ───────────────────────────────────────────                                │
+│                                                                             │
+│  Stage 1: Frontend                                                          │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  FROM node:20-alpine                                                 │   │
+│  │  npm ci && npm run release  → Builds React app                       │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  Stage 2: Backend                                                           │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  FROM golang:1.24                                                    │   │
+│  │  go build -tags rag → Compiles Go binary                             │   │
+│  │                                                                      │   │
+│  │  CRITICAL: go:embed embeds these files INTO the binary:              │   │
+│  │    • store/migration/sqlite/LATEST.sql                               │   │
+│  │    • store/migration/sqlite/0.25/*.sql                               │   │
+│  │                                                                      │   │
+│  │  The binary now CONTAINS all migration files!                        │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  Stage 3: Runtime Image                                                     │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  FROM ubuntu:24.04                                                   │   │
+│  │  COPY binary + LanceDB library + entrypoint                          │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 3: Push Image to fly.io Registry                                      │
+│  ─────────────────────────────────────                                      │
+│  Image is pushed to: registry.fly.io/bchat:deployment-XXXXX                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 4: Deploy to Machine                                                  │
+│  ─────────────────────────                                                  │
+│  • Old machine is stopped                                                   │
+│  • New machine starts with new image                                        │
+│  • Volume (/var/opt/memos) is mounted                                       │
+│  • Entrypoint runs: ./memos --mode prod --data /var/opt/memos               │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 5: Application Startup (Database Migration)                           │
+│  ────────────────────────────────────────────────                           │
+│                                                                             │
+│  The Go binary runs and calls store.Migrate():                              │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  IF database doesn't exist (new volume):                             │   │
+│  │     → Apply LATEST.sql (embedded in binary)                          │   │
+│  │     → Creates ALL tables with current schema                         │   │
+│  │                                                                      │   │
+│  │  IF database exists (existing volume):                               │   │
+│  │     → Compare migration_history version with binary version          │   │
+│  │     → Apply any NEW migration files (NN__*.sql) embedded in binary   │   │
+│  │     → Update migration_history                                       │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 6: Application Ready                                                  │
+│  ─────────────────────────                                                  │
+│  • Health check passes                                                      │
+│  • Traffic is routed to new machine                                         │
+│  • App is live at https://bchat.fly.dev                                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Does `fly deploy` Pick Up Latest Database Migrations?
+
+**YES** - but only because the migrations are **embedded into the binary at compile time**.
+
+```go
+// store/migrator.go
+//go:embed migration
+var migrationFS embed.FS
+```
+
+When `go build` runs during the Docker build:
+1. Go compiler reads `store/migration/` directory
+2. All `.sql` files are embedded into the binary
+3. At runtime, the binary uses these embedded files
+
+**Key insight:** If you change `LATEST.sql` or add migration files locally, you MUST run `fly deploy` to rebuild the binary with the new files.
+
+### Redeployment Commands
+
+#### Standard Redeployment (Most Common)
+
+```bash
+# Rebuild and deploy with latest code + migrations
+fly deploy
+```
+
+This will:
+- Rebuild the Docker image (including new migrations)
+- Push to fly.io registry
+- Replace the running machine
+- Apply any pending migrations on startup
+
+#### Force Rebuild (Clear Cache)
+
+```bash
+# Force full rebuild without cache
+fly deploy --no-cache
+```
+
+Use when:
+- You suspect cached layers have stale files
+- After updating `go.mod` or `package.json`
+- Build seems to ignore your changes
+
+#### Quick Restart (No Rebuild)
+
+```bash
+# Restart without rebuilding
+fly apps restart
+```
+
+Use when:
+- You only changed secrets (`fly secrets set`)
+- You want to apply env var changes from `fly.toml`
+- No code changes, just need a restart
+
+**Note:** This does NOT rebuild the binary - migrations won't be updated!
+
+#### Rollback to Previous Version
+
+```bash
+# List all releases
+fly releases
+
+# Output:
+# VERSION  STATUS     DESCRIPTION          CREATED AT
+# v15      complete   Deploy image         2026-01-30T12:00:00Z
+# v14      complete   Deploy image         2026-01-29T12:00:00Z
+# ...
+
+# Rollback to specific version
+fly deploy --image registry.fly.io/bchat:deployment-XXXXX
+```
+
+#### Deploy Specific Dockerfile
+
+```bash
+# Deploy using a different Dockerfile (overrides fly.toml)
+fly deploy --dockerfile Dockerfile.s3.fly
+```
+
+### When Migrations Are Applied
+
+| Scenario | What Happens |
+|----------|--------------|
+| **First deploy (new volume)** | `LATEST.sql` creates entire schema |
+| **Redeploy (no new migrations)** | Nothing - versions match |
+| **Redeploy (with new migrations)** | New `NN__*.sql` files are applied |
+| **`fly apps restart`** | Nothing - same binary, no rebuild |
+| **Rollback to old version** | Old binary has old migrations embedded |
+
+### Common Redeployment Scenarios
+
+#### Scenario 1: Added New Feature with Migration
+
+```bash
+# 1. Create migration file locally
+echo "ALTER TABLE foo ADD COLUMN bar TEXT;" > store/migration/sqlite/0.25/20__add_bar.sql
+
+# 2. Update LATEST.sql (required for new databases!)
+# Edit store/migration/sqlite/LATEST.sql
+
+# 3. Validate migrations are in sync
+./scripts/validate-migrations.sh
+
+# 4. Deploy - this rebuilds binary with new migration
+fly deploy
+```
+
+#### Scenario 2: Changed Only Environment Variables
+
+```bash
+# Option A: Change in fly.toml and redeploy
+# Edit fly.toml [env] section
+fly deploy  # Rebuilds unnecessarily but works
+
+# Option B: Use secrets (no rebuild needed)
+fly secrets set MY_VAR=new_value
+# App automatically restarts with new secret
+```
+
+#### Scenario 3: Quick Code Fix (No DB Changes)
+
+```bash
+# Just deploy - migrations will be no-op
+fly deploy
+```
+
+#### Scenario 4: Database Schema is Broken
+
+```bash
+# Option A: Fresh start (lose data)
+fly volumes destroy memos_data
+fly volumes create memos_data --size 1 --region sjc
+fly deploy
+
+# Option B: Manual fix via SSH
+fly ssh console
+sqlite3 /var/opt/memos/memos.db
+# Run manual SQL fixes
+.quit
+exit
+fly apps restart
+```
+
+### Deployment Checklist
+
+Before running `fly deploy`:
+
+- [ ] Ran `./scripts/validate-migrations.sh` (if DB changes)
+- [ ] Updated `LATEST.sql` (if added new migrations)
+- [ ] Committed changes to git (recommended)
+- [ ] Verified secrets are set: `fly secrets list`
+
+After running `fly deploy`:
+
+- [ ] Check deployment succeeded: `fly status`
+- [ ] Check logs for migration messages: `fly logs`
+- [ ] Verify app is working: `fly open`
+
+---
+
 ## See Also
 
 - [DOCS_DOCKERFILE.MD](./DOCS_DOCKERFILE.MD) - Docker deployment details
 - [DOCS_UNIFIED_ENV_WORKFLOW.MD](./DOCS_UNIFIED_ENV_WORKFLOW.MD) - Environment workflow
 - [DOCS_ENV_VAR.MD](./DOCS_ENV_VAR.MD) - Complete environment variable reference
 - [DOCS_LANCEDB.MD](./DOCS_LANCEDB.MD) - RAG implementation details
+- [DOCS_DATABASE_MIGRATION.MD](./DOCS_DATABASE_MIGRATION.MD) - Database migration deep dive
 
 ---
 
-*Document Version: 1.0*
-*Created: 2026-01-30*
+*Document Version: 1.1*
+*Updated: 2026-01-30* - Added deployment flow and redeployment commands

@@ -154,27 +154,34 @@ CREATE TABLE tickets (
   created_ts BIGINT NOT NULL,
   updated_ts BIGINT NOT NULL,
   type TEXT NOT NULL DEFAULT 'TASK',
-  tags TEXT NOT NULL DEFAULT '[]'
+  tags TEXT NOT NULL DEFAULT '[]',
+  beads_id TEXT UNIQUE,
+  parent_id INTEGER REFERENCES tickets(id),
+  labels TEXT DEFAULT '[]',
+  dependencies TEXT DEFAULT '[]',
+  discovery_context TEXT,
+  closed_reason TEXT,
+  issue_type TEXT
 );
 
 CREATE INDEX idx_tickets_creator_id ON tickets (creator_id);
 CREATE INDEX idx_tickets_status ON tickets (status);
+CREATE INDEX idx_tickets_beads_id ON tickets(beads_id);
+CREATE INDEX idx_tickets_parent_id ON tickets(parent_id);
+CREATE INDEX idx_tickets_issue_type ON tickets(issue_type);
 
 -- notifications
-CREATE TABLE notification (
+CREATE TABLE notifications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER NOT NULL,
-  type TEXT NOT NULL,
-  title TEXT NOT NULL,
-  message TEXT NOT NULL DEFAULT '',
-  metadata TEXT NOT NULL DEFAULT '{}',
-  is_read INTEGER NOT NULL DEFAULT 0,
-  created_ts BIGINT NOT NULL DEFAULT (strftime('%s', 'now')),
-  updated_ts BIGINT NOT NULL DEFAULT (strftime('%s', 'now'))
+  initiator_id INTEGER NOT NULL,
+  receiver_id INTEGER NOT NULL,
+  ticket_url TEXT NOT NULL,
+  created_ts BIGINT NOT NULL,
+  is_read BOOLEAN NOT NULL DEFAULT 0
 );
 
-CREATE INDEX idx_notification_user_id ON notification (user_id);
-CREATE INDEX idx_notification_is_read ON notification (is_read);
+CREATE INDEX idx_notifications_receiver ON notifications(receiver_id);
+CREATE INDEX idx_notifications_is_read ON notifications(is_read);
 
 -- ============================================================================
 -- AGENT CHAT SYSTEM TABLES
@@ -187,6 +194,7 @@ CREATE TABLE agent_tenants (
     company_name TEXT NOT NULL,
     vertical TEXT,
     is_active INTEGER NOT NULL DEFAULT 1,
+    processing_options TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -372,3 +380,282 @@ CREATE INDEX idx_agent_intents_tenant_audience ON agent_intents(tenant_id, audie
 CREATE INDEX idx_agent_sessions_tenant ON agent_sessions(tenant_id);
 CREATE INDEX idx_agent_sessions_user ON agent_sessions(user_id);
 CREATE INDEX idx_agent_rate_limits_lookup ON agent_rate_limits(tenant_id, audience_type, client_ip);
+
+-- ============================================================================
+-- RBAC TABLES (migration 07)
+-- ============================================================================
+
+-- user_tenant_permission
+CREATE TABLE user_tenant_permission (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    permissions TEXT NOT NULL DEFAULT '',
+    granted_by INTEGER REFERENCES user(id) ON DELETE SET NULL,
+    granted_at BIGINT NOT NULL DEFAULT (strftime('%s', 'now')),
+    UNIQUE(user_id, tenant_id)
+);
+
+CREATE INDEX idx_user_tenant_permission_user ON user_tenant_permission(user_id);
+CREATE INDEX idx_user_tenant_permission_tenant ON user_tenant_permission(tenant_id);
+
+-- tenant_config
+CREATE TABLE tenant_config (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL UNIQUE REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    llm_model TEXT NOT NULL DEFAULT '',
+    openrouter_api_key_encrypted BLOB,
+    openrouter_api_key_nonce BLOB,
+    features TEXT NOT NULL DEFAULT '{}',
+    simulation_human_model TEXT DEFAULT '',
+    retrieval_mode TEXT DEFAULT 'long_context',
+    content_tokens INTEGER DEFAULT 0,
+    record_transcripts INTEGER DEFAULT 1,
+    reasoning_model TEXT DEFAULT '',
+    updated_at BIGINT NOT NULL DEFAULT (strftime('%s', 'now')),
+    updated_by INTEGER REFERENCES user(id) ON DELETE SET NULL
+);
+
+CREATE INDEX idx_tenant_config_tenant ON tenant_config(tenant_id);
+
+-- system_secret
+CREATE TABLE system_secret (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    encryption_salt BLOB NOT NULL,
+    key_version INTEGER NOT NULL DEFAULT 1,
+    created_at BIGINT NOT NULL DEFAULT (strftime('%s', 'now')),
+    rotated_at BIGINT
+);
+
+-- ============================================================================
+-- AGENT SIMULATION TABLES (migration 08)
+-- ============================================================================
+
+-- agent_simulations
+CREATE TABLE agent_simulations (
+    id TEXT PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES user(id) ON DELETE SET NULL,
+    audience_type TEXT NOT NULL DEFAULT 'external',
+    status TEXT NOT NULL DEFAULT 'pending',
+    scenario TEXT,
+    messages TEXT DEFAULT '[]',
+    message_count INTEGER DEFAULT 0,
+    max_turns INTEGER DEFAULT 20,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    error_message TEXT
+);
+
+CREATE INDEX idx_agent_simulations_tenant ON agent_simulations(tenant_id);
+CREATE INDEX idx_agent_simulations_user ON agent_simulations(user_id);
+CREATE INDEX idx_agent_simulations_status ON agent_simulations(status);
+
+-- ============================================================================
+-- AGENT SCRIPT TABLES (migration 09)
+-- ============================================================================
+
+-- agent_tenant_scripts
+CREATE TABLE agent_tenant_scripts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    audience_type TEXT NOT NULL DEFAULT 'external',
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    summary TEXT,
+    imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    version INTEGER DEFAULT 1,
+    FOREIGN KEY (tenant_id) REFERENCES agent_tenants(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_tenant_scripts_lookup ON agent_tenant_scripts(tenant_id, audience_type, imported_at DESC);
+CREATE INDEX idx_agent_tenant_scripts_tenant ON agent_tenant_scripts(tenant_id);
+
+-- agent_script_analysis
+CREATE TABLE agent_script_analysis (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    simulation_id TEXT REFERENCES agent_simulations(id) ON DELETE CASCADE,
+    audience_type TEXT NOT NULL DEFAULT 'external',
+    analysis_type TEXT NOT NULL DEFAULT 'compliance',
+    input_messages TEXT NOT NULL,
+    result TEXT NOT NULL,
+    score REAL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_script_analysis_tenant ON agent_script_analysis(tenant_id);
+CREATE INDEX idx_script_analysis_simulation ON agent_script_analysis(simulation_id);
+
+-- ============================================================================
+-- AGENT QA PAIRS TABLE (migration 17)
+-- ============================================================================
+
+CREATE TABLE agent_qa_pairs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    question TEXT NOT NULL,
+    expected_answer TEXT NOT NULL,
+    source_section TEXT,
+    source_chunk_id TEXT,
+    difficulty TEXT DEFAULT 'medium',
+    category TEXT,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES agent_tenants(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_qa_pairs_tenant ON agent_qa_pairs(tenant_id);
+CREATE INDEX idx_qa_pairs_category ON agent_qa_pairs(category);
+CREATE INDEX idx_qa_pairs_active ON agent_qa_pairs(is_active);
+
+-- ============================================================================
+-- AGENT TRANSCRIPTS TABLE (migration 18)
+-- ============================================================================
+
+CREATE TABLE agent_transcripts (
+    id TEXT PRIMARY KEY,
+    tenant_id INTEGER NOT NULL,
+    session_id TEXT NOT NULL,
+    audience_type TEXT NOT NULL,
+    messages TEXT NOT NULL DEFAULT '[]',
+    message_count INTEGER DEFAULT 0,
+    client_ip TEXT,
+    user_agent TEXT,
+    customer_name TEXT,
+    customer_phone TEXT,
+    customer_email TEXT,
+    customer_location TEXT,
+    detected_intent TEXT,
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    ended_at TIMESTAMP,
+    last_message_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_completed INTEGER DEFAULT 0,
+    completion_reason TEXT,
+    FOREIGN KEY (tenant_id) REFERENCES agent_tenants(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_transcripts_tenant ON agent_transcripts(tenant_id);
+CREATE INDEX idx_transcripts_started ON agent_transcripts(started_at DESC);
+CREATE INDEX idx_transcripts_audience ON agent_transcripts(tenant_id, audience_type);
+CREATE INDEX idx_transcripts_session ON agent_transcripts(session_id);
+
+-- ============================================================================
+-- AGENT WORKFLOWS TABLE (migration 03)
+-- ============================================================================
+
+CREATE TABLE agent_workflows (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL,
+    agent_name TEXT NOT NULL DEFAULT 'antigravity',
+    task_name TEXT,
+    task_mode TEXT CHECK(task_mode IN ('PLANNING', 'EXECUTION', 'VERIFICATION')),
+    task_status TEXT,
+    task_summary TEXT,
+    predicted_size INTEGER,
+    created_ts INTEGER NOT NULL,
+    metadata TEXT DEFAULT '{}'
+);
+
+CREATE INDEX idx_workflows_ticket ON agent_workflows(ticket_id);
+CREATE INDEX idx_workflows_session ON agent_workflows(session_id);
+CREATE INDEX idx_workflows_created ON agent_workflows(created_ts);
+
+-- ============================================================================
+-- AGENT SIMULATION TRANSCRIPTS TABLE (migration 08)
+-- ============================================================================
+
+CREATE TABLE agent_simulation_transcripts (
+    id TEXT PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES user(id),
+    initial_prompt TEXT NOT NULL,
+    persona_hint TEXT,
+    total_turns INTEGER NOT NULL DEFAULT 0,
+    end_reason TEXT NOT NULL DEFAULT 'unknown',
+    messages TEXT NOT NULL DEFAULT '[]',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_simulation_transcript_tenant ON agent_simulation_transcripts(tenant_id);
+CREATE INDEX idx_simulation_transcript_user ON agent_simulation_transcripts(user_id);
+CREATE INDEX idx_simulation_transcript_created ON agent_simulation_transcripts(created_at);
+
+-- ============================================================================
+-- AGENT ANALYSIS RESULTS TABLE (migration 09)
+-- ============================================================================
+
+CREATE TABLE agent_analysis_results (
+    id TEXT PRIMARY KEY,
+    tenant_id INTEGER NOT NULL,
+    conversation_id TEXT NOT NULL,
+    conversation_type TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    score INTEGER NOT NULL,
+    grade TEXT NOT NULL,
+    breakdown TEXT NOT NULL,
+    issues TEXT NOT NULL,
+    suggestions TEXT,
+    benchmark_version TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES agent_tenants(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_agent_analysis_tenant ON agent_analysis_results(tenant_id);
+CREATE INDEX idx_agent_analysis_conversation ON agent_analysis_results(conversation_id);
+CREATE INDEX idx_agent_analysis_created ON agent_analysis_results(created_at);
+
+-- ============================================================================
+-- AGENT LEARNING MEMORY TABLE (migration 10)
+-- ============================================================================
+
+CREATE TABLE agent_learning_memory (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL UNIQUE,
+    common_issues TEXT NOT NULL DEFAULT '[]',
+    learned_behaviors TEXT NOT NULL DEFAULT '[]',
+    improvement_areas TEXT NOT NULL DEFAULT '[]',
+    pending_suggestions TEXT NOT NULL DEFAULT '[]',
+    analysis_count INTEGER DEFAULT 0,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    version INTEGER DEFAULT 1,
+    FOREIGN KEY (tenant_id) REFERENCES agent_tenants(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_agent_learning_memory_tenant ON agent_learning_memory(tenant_id);
+
+-- ============================================================================
+-- AGENT COMPLIANCE TABLES (migration 11)
+-- ============================================================================
+
+CREATE TABLE agent_compliance_audits (
+    id TEXT PRIMARY KEY,
+    tenant_id INTEGER NOT NULL,
+    conversation_id TEXT NOT NULL,
+    conversation_type TEXT NOT NULL,
+    score INTEGER NOT NULL,
+    checks TEXT NOT NULL,
+    overall_passed BOOLEAN NOT NULL DEFAULT 0,
+    audited_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES agent_tenants(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_compliance_audit_tenant ON agent_compliance_audits(tenant_id);
+CREATE INDEX idx_compliance_audit_conversation ON agent_compliance_audits(conversation_id);
+CREATE INDEX idx_compliance_audit_score ON agent_compliance_audits(score);
+CREATE INDEX idx_compliance_audit_date ON agent_compliance_audits(audited_at);
+
+CREATE TABLE agent_scoring_config (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL UNIQUE,
+    version TEXT NOT NULL DEFAULT '1.0',
+    config TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES agent_tenants(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_scoring_config_tenant ON agent_scoring_config(tenant_id);

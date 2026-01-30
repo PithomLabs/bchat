@@ -26,6 +26,11 @@ tasks:
     status:
       - test -f "{{.LANCEDB_LIB_DIR}}/liblancedb_go.a"
 
+  validate:migrations:
+    desc: Validate LATEST.sql is in sync with migration files
+    cmds:
+      - ./scripts/validate-migrations.sh
+
   build:frontend:
     desc: Build frontend assets
     cmds:
@@ -33,13 +38,14 @@ tasks:
 
   build:backend:
     desc: Build the Go binary
+    deps: [validate:migrations]
     cmds:
       - mkdir -p build
       - go build -o build/memos ./bin/memos/main.go
 
   build:backend:rag:
     desc: Build the Go binary with LanceDB RAG support
-    deps: [setup:lancedb]
+    deps: [setup:lancedb, validate:migrations]
     env:
       CGO_ENABLED: "1"
       CGO_CFLAGS: "-I{{.ROOT_DIR}}/include"
