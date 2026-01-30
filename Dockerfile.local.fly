@@ -1,0 +1,87 @@
+# =============================================================================
+# Multi-stage Dockerfile for fly.io deployment with LanceDB RAG support
+# Runtime: Ubuntu 24.04 LTS (Noble Numbat)
+# Storage: Local volume (SQLite + LanceDB on same fly volume)
+# =============================================================================
+
+# Stage 1: Build frontend
+FROM node:20-alpine AS frontend
+WORKDIR /frontend-build
+COPY web/package*.json ./
+RUN npm ci
+COPY web/ .
+RUN npm run release
+
+# Stage 2: Build backend with LanceDB CGO support
+FROM golang:1.24 AS backend
+WORKDIR /backend-build
+
+# Install build dependencies for CGO
+RUN apt-get update && apt-get install -y \
+    gcc \
+    libc-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy LanceDB native libraries and headers
+COPY lib/linux_amd64/ /usr/local/lib/lancedb/
+COPY include/ /usr/local/include/lancedb/
+
+# Copy go modules first for better layer caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Copy frontend build from stage 1
+COPY --from=frontend /frontend-build/dist ./web/dist
+
+# Build with LanceDB RAG support
+ENV CGO_ENABLED=1
+ENV CGO_CFLAGS="-I/usr/local/include/lancedb"
+ENV CGO_LDFLAGS="-L/usr/local/lib/lancedb -llancedb_go -Wl,-rpath,/usr/local/lib/lancedb"
+
+RUN go build -tags rag -ldflags="-s -w" -o memos ./bin/memos/main.go
+
+# Stage 3: Ubuntu 24.04 LTS runtime image
+FROM ubuntu:24.04
+
+WORKDIR /usr/local/memos
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy LanceDB shared library for runtime
+COPY --from=backend /usr/local/lib/lancedb/liblancedb_go.so /usr/local/lib/
+RUN ldconfig
+
+# Copy application binary and scripts
+COPY --from=backend /backend-build/memos .
+COPY scripts/entrypoint.sh .
+RUN chmod +x entrypoint.sh
+
+# Create data directory for SQLite and LanceDB local storage
+RUN mkdir -p /var/opt/memos/lancedb
+VOLUME /var/opt/memos
+
+# Environment defaults
+ENV TZ="UTC"
+ENV MEMOS_MODE="prod"
+ENV MEMOS_PORT="5230"
+
+# RAG pipeline configuration (local storage - mirrors task run:rag:l12)
+ENV RAG_PIPELINE_ENABLED="true"
+ENV LANCEDB_STORAGE_PROVIDER="local"
+ENV LANCEDB_LOCAL_PATH="/var/opt/memos/lancedb"
+ENV EMBEDDING_PROVIDER="openrouter"
+ENV EMBEDDING_MODEL="sentence-transformers/all-minilm-l12-v2"
+
+# Optional LLM verifier (disabled by default)
+ENV LLM_VERIFIER_ENABLED="false"
+
+EXPOSE 5230
+
+ENTRYPOINT ["./entrypoint.sh", "./memos"]

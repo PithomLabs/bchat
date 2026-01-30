@@ -1,11 +1,13 @@
 # fly.io configuration for bchat with LanceDB RAG support
-# Storage: Local volume (SQLite + LanceDB on same fly volume)
+# Storage: Tigrisdata S3 for LanceDB, fly volume for SQLite
 #
 # Usage:
-#   cp fly.local.toml fly.toml
+#   cp fly.s3.toml fly.toml
 #   fly deploy
 #
 # Required secrets:
+#   fly storage create  # Creates bucket and sets AWS credentials
+#   fly secrets set LANCEDB_S3_BUCKET=<bucket-name-from-storage-create>
 #   fly secrets set OPENROUTER_API_KEY=sk-or-v1-xxx
 #   fly secrets set ENCRYPTION_MASTER_KEY=$(uuidgen)
 #
@@ -16,17 +18,18 @@ app = "bchat"
 primary_region = "sjc"
 
 [build]
-  dockerfile = "Dockerfile.local.fly"
+  dockerfile = "Dockerfile.s3.fly"
 
 [env]
   MEMOS_MODE = "prod"
   MEMOS_PORT = "5230"
   TZ = "UTC"
 
-  # RAG Pipeline Configuration (Local Storage)
+  # RAG Pipeline Configuration (Tigrisdata S3)
   RAG_PIPELINE_ENABLED = "true"
-  LANCEDB_STORAGE_PROVIDER = "local"
-  LANCEDB_LOCAL_PATH = "/var/opt/memos/lancedb"
+  LANCEDB_STORAGE_PROVIDER = "s3"
+  LANCEDB_S3_ENDPOINT = "fly.storage.tigris.dev"
+  LANCEDB_S3_REGION = "auto"
   EMBEDDING_PROVIDER = "openrouter"
   EMBEDDING_MODEL = "sentence-transformers/all-minilm-l12-v2"
   LLM_VERIFIER_ENABLED = "false"
