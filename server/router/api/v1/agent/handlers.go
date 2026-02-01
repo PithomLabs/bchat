@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -92,6 +93,20 @@ func (h *Handler) HandleValidateTenant(c echo.Context) error {
 func (h *Handler) HandleChatExternal(c echo.Context) error {
 	ctx := c.Request().Context()
 	slug := c.Param("slug")
+
+	// Get tenant to check domain allowlist
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil || !tenant.IsActive {
+		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
+	}
+
+	// Check domain allowlist if enabled
+	if tenant.AllowedDomains != "" {
+		origin := c.Request().Header.Get("Origin")
+		if !h.isDomainAllowed(tenant.AllowedDomains, origin, "") {
+			return echo.NewHTTPError(http.StatusForbidden, "Domain not allowed")
+		}
+	}
 
 	// Get client IP for rate limiting
 	clientIP := c.RealIP()
@@ -202,14 +217,20 @@ func (h *Handler) HandleListTenants(c echo.Context) error {
 	// Convert to response format
 	result := make([]map[string]interface{}, len(tenants))
 	for i, t := range tenants {
+		var domains []string
+		if t.AllowedDomains != "" {
+			json.Unmarshal([]byte(t.AllowedDomains), &domains)
+		}
 		result[i] = map[string]interface{}{
-			"id":          t.ID,
-			"slug":        t.Slug,
-			"companyName": t.CompanyName,
-			"vertical":    t.Vertical,
-			"isActive":    t.IsActive,
-			"createdAt":   t.CreatedAt,
-			"updatedAt":   t.UpdatedAt,
+			"id":             t.ID,
+			"slug":           t.Slug,
+			"companyName":    t.CompanyName,
+			"guid":           t.GUID,
+			"vertical":       t.Vertical,
+			"isActive":       t.IsActive,
+			"allowedDomains": domains,
+			"createdAt":      t.CreatedAt,
+			"updatedAt":      t.UpdatedAt,
 		}
 	}
 
@@ -263,15 +284,23 @@ func (h *Handler) HandleGetTenantFullConfig(c echo.Context) error {
 		}
 	}
 
+	// Parse allowed domains for response
+	var allowedDomains []string
+	if tenant.AllowedDomains != "" {
+		json.Unmarshal([]byte(tenant.AllowedDomains), &allowedDomains)
+	}
+
 	response := map[string]interface{}{
 		"tenant": map[string]interface{}{
-			"id":          tenant.ID,
-			"slug":        tenant.Slug,
-			"companyName": tenant.CompanyName,
-			"vertical":    tenant.Vertical,
-			"isActive":    tenant.IsActive,
-			"createdAt":   tenant.CreatedAt,
-			"updatedAt":   tenant.UpdatedAt,
+			"id":             tenant.ID,
+			"slug":           tenant.Slug,
+			"companyName":    tenant.CompanyName,
+			"guid":           tenant.GUID,
+			"vertical":       tenant.Vertical,
+			"isActive":       tenant.IsActive,
+			"allowedDomains": allowedDomains,
+			"createdAt":      tenant.CreatedAt,
+			"updatedAt":      tenant.UpdatedAt,
 		},
 		"external": getAudienceStats("external"),
 		"internal": getAudienceStats("internal"),
@@ -305,9 +334,10 @@ func (h *Handler) HandleUpdateTenant(c echo.Context) error {
 
 	// Bind update request
 	var req struct {
-		IsActive    *bool   `json:"is_active"`
-		CompanyName *string `json:"company_name"`
-		Vertical    *string `json:"vertical"`
+		IsActive       *bool     `json:"is_active"`
+		CompanyName    *string   `json:"company_name"`
+		Vertical       *string   `json:"vertical"`
+		AllowedDomains *[]string `json:"allowed_domains"` // nil = no change, empty array = clear
 	}
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
@@ -323,6 +353,15 @@ func (h *Handler) HandleUpdateTenant(c echo.Context) error {
 	if req.Vertical != nil {
 		tenant.Vertical = *req.Vertical
 	}
+	if req.AllowedDomains != nil {
+		// Convert to JSON string for storage
+		if len(*req.AllowedDomains) == 0 {
+			tenant.AllowedDomains = "" // Empty = no restrictions
+		} else {
+			domainsJSON, _ := json.Marshal(*req.AllowedDomains)
+			tenant.AllowedDomains = string(domainsJSON)
+		}
+	}
 
 	// Save
 	tenant, err = h.store.UpdateAgentTenant(ctx, tenant)
@@ -334,14 +373,22 @@ func (h *Handler) HandleUpdateTenant(c echo.Context) error {
 	// Invalidate cache
 	h.service.configCache.Invalidate(tenant.Slug)
 
+	// Parse allowed domains for response
+	var allowedDomains []string
+	if tenant.AllowedDomains != "" {
+		json.Unmarshal([]byte(tenant.AllowedDomains), &allowedDomains)
+	}
+
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"success": true,
 		"tenant": map[string]interface{}{
-			"id":          tenant.ID,
-			"slug":        tenant.Slug,
-			"companyName": tenant.CompanyName,
-			"vertical":    tenant.Vertical,
-			"isActive":    tenant.IsActive,
+			"id":             tenant.ID,
+			"slug":           tenant.Slug,
+			"companyName":    tenant.CompanyName,
+			"guid":           tenant.GUID,
+			"vertical":       tenant.Vertical,
+			"isActive":       tenant.IsActive,
+			"allowedDomains": allowedDomains,
 		},
 	})
 }
@@ -1254,8 +1301,12 @@ func (h *Handler) HandleWidget(c echo.Context) error {
 	}
 	baseURL := scheme + "://" + c.Request().Host
 
-	// Generate widget script
-	script := generateWidgetScript(baseURL, slug, tenant.CompanyName)
+	// Generate widget script with combined companyName-GUID format
+	combinedName := tenant.CompanyName
+	if tenant.GUID != "" {
+		combinedName = fmt.Sprintf("%s-%s", tenant.CompanyName, tenant.GUID)
+	}
+	script := generateWidgetScript(baseURL, slug, combinedName)
 
 	c.Response().Header().Set("Content-Type", "application/javascript")
 	c.Response().Header().Set("Cache-Control", "public, max-age=3600")
@@ -1468,16 +1519,82 @@ func generateWidgetScript(baseURL, tenantSlug, companyName string) string {
 })();`
 }
 
+// findTenantBySlugGuid finds a tenant by matching slug-guid combination.
+// The slugGuid format is "tenant-slug-uuid" where uuid has dashes.
+func (h *Handler) findTenantBySlugGuid(ctx context.Context, slugGuid string) (*store.AgentTenant, error) {
+	tenants, err := h.store.ListAgentTenants(ctx, &store.FindAgentTenant{})
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range tenants {
+		expected := fmt.Sprintf("%s-%s", t.Slug, t.GUID)
+		if slugGuid == expected && t.IsActive {
+			return t, nil
+		}
+	}
+	return nil, nil
+}
+
+// isDomainAllowed checks if the request origin/referer matches allowed domains.
+func (h *Handler) isDomainAllowed(allowedDomainsJSON, origin, referer string) bool {
+	if allowedDomainsJSON == "" {
+		return true // No restrictions
+	}
+
+	var domains []string
+	if err := json.Unmarshal([]byte(allowedDomainsJSON), &domains); err != nil {
+		return true // Invalid JSON, allow by default
+	}
+	if len(domains) == 0 {
+		return true // Empty list, allow all
+	}
+
+	// Extract hostname from origin/referer
+	checkDomain := func(urlStr string) bool {
+		if urlStr == "" {
+			return false
+		}
+		parsed, err := url.Parse(urlStr)
+		if err != nil {
+			return false
+		}
+		host := parsed.Hostname()
+		for _, allowed := range domains {
+			// Support wildcard prefix (*.example.com)
+			if strings.HasPrefix(allowed, "*.") {
+				suffix := allowed[1:] // .example.com
+				if strings.HasSuffix(host, suffix) || host == allowed[2:] {
+					return true
+				}
+			} else if host == allowed {
+				return true
+			}
+		}
+		return false
+	}
+
+	return checkDomain(origin) || checkDomain(referer)
+}
+
 // HandleWidgetEmbed serves the built widget JavaScript bundle.
-// GET /widget/:slug/embed.js
+// GET /widget/:slugGuid/embed.js
 func (h *Handler) HandleWidgetEmbed(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
+	slugGuid := c.Param("slugGuid")
 
-	// Validate tenant exists and is active
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
-	if err != nil || tenant == nil || !tenant.IsActive {
+	// Find tenant by slug-guid combination
+	tenant, err := h.findTenantBySlugGuid(ctx, slugGuid)
+	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
+	}
+
+	// Check domain allowlist if enabled
+	if tenant.AllowedDomains != "" {
+		origin := c.Request().Header.Get("Origin")
+		referer := c.Request().Header.Get("Referer")
+		if !h.isDomainAllowed(tenant.AllowedDomains, origin, referer) {
+			return echo.NewHTTPError(http.StatusForbidden, "Domain not allowed")
+		}
 	}
 
 	// Get base URL from request (check X-Forwarded-Proto for reverse proxy)
@@ -1495,18 +1612,23 @@ func (h *Handler) HandleWidgetEmbed(c echo.Context) error {
 	if err != nil {
 		// Fallback to inline-generated script if built file not found
 		slog.Warn("widget embed.min.js not found, using inline fallback", "path", widgetPath, "error", err)
-		script := generateWidgetScript(baseURL, slug, tenant.CompanyName)
+		script := generateWidgetScript(baseURL, tenant.Slug, tenant.CompanyName)
 		c.Response().Header().Set("Content-Type", "application/javascript")
 		c.Response().Header().Set("Cache-Control", "public, max-age=3600")
 		return c.String(http.StatusOK, script)
 	}
 
 	// Inject configuration at the start of the script
+	// Use combined companyName-GUID format for security
+	combinedName := tenant.CompanyName
+	if tenant.GUID != "" {
+		combinedName = fmt.Sprintf("%s-%s", tenant.CompanyName, tenant.GUID)
+	}
 	configScript := fmt.Sprintf(`window.AgentChatConfig=window.AgentChatConfig||{};
 window.AgentChatConfig.baseUrl=window.AgentChatConfig.baseUrl||%q;
 window.AgentChatConfig.tenant=window.AgentChatConfig.tenant||%q;
 window.AgentChatConfig.companyName=window.AgentChatConfig.companyName||%q;
-`, baseURL, slug, tenant.CompanyName)
+`, baseURL, tenant.Slug, combinedName)
 
 	finalScript := configScript + string(content)
 
@@ -1516,15 +1638,24 @@ window.AgentChatConfig.companyName=window.AgentChatConfig.companyName||%q;
 }
 
 // HandleWidgetIframe serves the widget as a standalone HTML page for iframe embedding.
-// GET /widget/:slug/iframe
+// GET /widget/:slugGuid/iframe
 func (h *Handler) HandleWidgetIframe(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
+	slugGuid := c.Param("slugGuid")
 
-	// Validate tenant exists and is active
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
-	if err != nil || tenant == nil || !tenant.IsActive {
+	// Find tenant by slug-guid combination
+	tenant, err := h.findTenantBySlugGuid(ctx, slugGuid)
+	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
+	}
+
+	// Check domain allowlist if enabled
+	if tenant.AllowedDomains != "" {
+		origin := c.Request().Header.Get("Origin")
+		referer := c.Request().Header.Get("Referer")
+		if !h.isDomainAllowed(tenant.AllowedDomains, origin, referer) {
+			return echo.NewHTTPError(http.StatusForbidden, "Domain not allowed")
+		}
 	}
 
 	// Get base URL from request (check X-Forwarded-Proto for reverse proxy)
@@ -1545,13 +1676,19 @@ func (h *Handler) HandleWidgetIframe(c echo.Context) error {
 	if welcome == "" {
 		welcome = "How can we help you today?"
 	}
+	// Use combined companyName-GUID format for security
 	companyName := tenant.CompanyName
+	if tenant.GUID != "" {
+		companyName = fmt.Sprintf("%s-%s", tenant.CompanyName, tenant.GUID)
+	}
+	// Allow query param override (for testing)
 	if qName := c.QueryParam("companyName"); qName != "" {
 		companyName = qName
 	}
 
 	// Generate the iframe HTML with embedded widget
-	html := generateIframeHTML(baseURL, slug, companyName, color, welcome)
+	// Pass slugGuid for embed.js URL, slug for API calls
+	html := generateIframeHTML(baseURL, tenant.Slug, slugGuid, companyName, color, welcome)
 
 	c.Response().Header().Set("Content-Type", "text/html; charset=utf-8")
 	c.Response().Header().Set("Cache-Control", "public, max-age=3600")
@@ -1559,7 +1696,8 @@ func (h *Handler) HandleWidgetIframe(c echo.Context) error {
 }
 
 // generateIframeHTML generates a standalone HTML page for the widget iframe.
-func generateIframeHTML(baseURL, tenantSlug, companyName, color, welcomeMessage string) string {
+// tenantSlug is used for API calls, slugGuid is used for the embed.js URL path.
+func generateIframeHTML(baseURL, tenantSlug, slugGuid, companyName, color, welcomeMessage string) string {
 	// Escape values for use in JavaScript
 	escapeJS := func(s string) string {
 		s = strings.ReplaceAll(s, "\\", "\\\\")
@@ -1623,7 +1761,7 @@ func generateIframeHTML(baseURL, tenantSlug, companyName, color, welcomeMessage 
 		escapeJS(color),
 		escapeJS(welcomeMessage),
 		escapeJS(baseURL),
-		escapeJS(tenantSlug),
+		escapeJS(slugGuid),
 	)
 }
 
@@ -2104,6 +2242,25 @@ func (h *Handler) HandleGetUserTenants(c echo.Context) error {
 
 	result := make([]map[string]interface{}, 0)
 
+	// Helper to convert tenant to map with correct JSON field names
+	tenantToMap := func(t *store.AgentTenant) map[string]interface{} {
+		var domains []string
+		if t.AllowedDomains != "" {
+			json.Unmarshal([]byte(t.AllowedDomains), &domains)
+		}
+		return map[string]interface{}{
+			"id":             t.ID,
+			"slug":           t.Slug,
+			"companyName":    t.CompanyName,
+			"guid":           t.GUID,
+			"vertical":       t.Vertical,
+			"isActive":       t.IsActive,
+			"allowedDomains": domains,
+			"createdAt":      t.CreatedAt,
+			"updatedAt":      t.UpdatedAt,
+		}
+	}
+
 	// HOST/ADMIN can access all tenants
 	if user.Role == store.RoleHost || user.Role == store.RoleAdmin {
 		tenants, _ := h.store.ListAgentTenants(ctx, &store.FindAgentTenant{})
@@ -2113,7 +2270,7 @@ func (h *Handler) HandleGetUserTenants(c echo.Context) error {
 				perms = []string{PermTenantRead, PermAPIConfig}
 			}
 			result = append(result, map[string]interface{}{
-				"tenant":      t,
+				"tenant":      tenantToMap(t),
 				"permissions": perms,
 			})
 		}
@@ -2124,7 +2281,7 @@ func (h *Handler) HandleGetUserTenants(c echo.Context) error {
 			tenant, _ := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{ID: &p.TenantID})
 			if tenant != nil {
 				result = append(result, map[string]interface{}{
-					"tenant":      tenant,
+					"tenant":      tenantToMap(tenant),
 					"permissions": p.Permissions,
 				})
 			}

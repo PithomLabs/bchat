@@ -6,8 +6,10 @@ export interface AgentTenant {
   id: number;
   slug: string;
   companyName: string;
+  guid: string;
   vertical: string;
   isActive: boolean;
+  allowedDomains: string[]; // Empty array = allow all (domain allowlisting disabled)
   createdAt: string;
   updatedAt: string;
 }
@@ -1101,6 +1103,34 @@ const agentAdminStore = (() => {
     state.setPartial({ error: null });
   };
 
+  const updateAllowedDomains = async (slug: string, domains: string[]): Promise<boolean> => {
+    state.setPartial({ isSaving: true, error: null });
+
+    try {
+      await axios.patch(`/api/v1/agent/${slug}`, { allowed_domains: domains });
+
+      runInAction(() => {
+        state.isSaving = false;
+        // Update local state
+        const tenant = state.tenants.find((t) => t.slug === slug);
+        if (tenant) {
+          tenant.allowedDomains = domains;
+        }
+        if (state.selectedTenant && state.selectedTenant.tenant.slug === slug) {
+          state.selectedTenant.tenant.allowedDomains = domains;
+        }
+      });
+
+      return true;
+    } catch (error: any) {
+      runInAction(() => {
+        state.isSaving = false;
+        state.error = error.response?.data?.message || "Failed to update allowed domains";
+      });
+      return false;
+    }
+  };
+
   // ============================================================================
   // LLM CONFIGURATION
   // ============================================================================
@@ -1309,6 +1339,7 @@ const agentAdminStore = (() => {
     deleteTenant,
     reindexTenant,
     toggleTenantActive,
+    updateAllowedDomains,
     clearSelectedTenant,
     clearError,
     fetchLLMConfig,

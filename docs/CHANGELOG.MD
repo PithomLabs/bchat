@@ -6,6 +6,13 @@ All notable changes to the bchat AI Agent System are documented in this file.
 
 ## 2026-02-01
 
+### Changed
+- **LATEST.sql Sync** - Added missing columns from migrations 22-23 to `agent_tenants` table
+  - Added `guid TEXT` column for widget URL security
+  - Added `allowed_domains TEXT` column for domain allowlisting
+  - Added `idx_agent_tenants_guid` index
+  - File: `store/migration/sqlite/LATEST.sql`
+
 ### Fixed
 - **Widget HTTPS Scheme Detection** - Fixed widget embed.js generating HTTP URLs instead of HTTPS
   - Added `X-Forwarded-Proto` header check for reverse proxy environments (fly.io)
@@ -25,6 +32,25 @@ All notable changes to the bchat AI Agent System are documented in this file.
   - Location: `build/widget-test/`
   - Run: `cd build/widget-test && go run main.go` → http://localhost:8888
   - Documentation: `docs/DOCS_TEST_WIDGET.MD`
+
+- **Tenant GUID for Widget Security** - Added unique GUID to tenant records
+  - New `guid` field auto-generated on tenant creation (UUID v4)
+  - Existing tenants received GUIDs via migration
+  - Widget URLs now use `slug-guid` format: `/widget/rizal-abc123-def456/embed.js`
+  - Makes widget URLs harder to guess, adding security through obscurity
+  - Migration: `store/migration/sqlite/0.25/22__tenant_guid.sql`
+  - Files: `store/agent.go`, `store/db/sqlite/agent.go`, `handlers.go`
+
+- **Optional Domain Allowlisting** - Restrict widget to approved domains only
+  - New `allowed_domains` field in tenant table (JSON array)
+  - When enabled, widget/API rejects requests from unlisted domains
+  - Supports wildcards: `*.example.com` matches any subdomain
+  - Checks both `Origin` and `Referer` headers for widget requests
+  - Checks `Origin` header for chat API requests
+  - UI: Checkbox toggle + domain list textarea in Agent Admin
+  - Empty list = no restrictions (default, backwards compatible)
+  - Migration: `store/migration/sqlite/0.25/23__tenant_allowed_domains.sql`
+  - Files: `handlers.go`, `AgentAdmin.tsx`, `agentAdmin.ts`
 
 ---
 

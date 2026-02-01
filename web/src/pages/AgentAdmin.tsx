@@ -47,6 +47,11 @@ const AgentAdmin = observer(() => {
   const [widgetWelcome, setWidgetWelcome] = useState("Hi! How can I help you today?");
   const [showWidgetPreview, setShowWidgetPreview] = useState(true);
 
+  // Domain allowlisting state
+  const [domainAllowlistEnabled, setDomainAllowlistEnabled] = useState(false);
+  const [allowedDomainsText, setAllowedDomainsText] = useState("");
+  const [isSavingDomains, setIsSavingDomains] = useState(false);
+
   const { tenants, selectedTenant, isLoading, isSaving, error, fileVersions, llmConfig, tenantPermissions, myPermissions, script, isLoadingScript, qaPairs, qaTestResults, isGeneratingQA, isTestingQA, ragSearchResults, isSearchingRAG, transcripts, isLoadingTranscripts, tenantSettings } = agentAdminStore.state;
 
   // Get current user and determine if they're an admin
@@ -110,6 +115,15 @@ const AgentAdmin = observer(() => {
       agentAdminStore.clearError();
     }
   }, [error]);
+
+  // Sync domain allowlist state when tenant changes
+  useEffect(() => {
+    if (selectedTenant) {
+      const domains = selectedTenant.tenant.allowedDomains || [];
+      setDomainAllowlistEnabled(domains.length > 0);
+      setAllowedDomainsText(domains.join("\n"));
+    }
+  }, [selectedTenant?.tenant.slug]);
 
   const handleSelectTenant = async (slug: string, tenantId: number) => {
     // Set permissions first so they're available when tenant loads
@@ -309,7 +323,9 @@ const AgentAdmin = observer(() => {
             )}
             <SettingsIcon className="w-6 h-6 opacity-70" />
             <h1 className="text-xl font-semibold text-gray-800 dark:text-gray-200">
-              {selectedTenant ? selectedTenant.tenant.companyName : t("agent-admin.title")}
+              {selectedTenant
+                ? `${selectedTenant.tenant.companyName}${selectedTenant.tenant.guid ? `-${selectedTenant.tenant.guid}` : ""}`
+                : t("agent-admin.title")}
             </h1>
           </div>
           {!selectedTenant && isAdmin && (
@@ -342,7 +358,9 @@ const AgentAdmin = observer(() => {
                     <div className="flex justify-between items-start">
                       <div>
                         <div className="flex items-center gap-2 mb-1">
-                          <h3 className="font-semibold text-gray-800 dark:text-gray-200">{tenant.companyName}</h3>
+                          <h3 className="font-semibold text-gray-800 dark:text-gray-200">
+                            {tenant.companyName}{tenant.guid ? `-${tenant.guid}` : ""}
+                          </h3>
                           <Chip size="sm" color={tenant.isActive ? "success" : "neutral"} variant="soft">
                             {tenant.isActive ? t("agent-admin.active") : t("agent-admin.inactive")}
                           </Chip>
@@ -895,7 +913,11 @@ const AgentAdmin = observer(() => {
                               <svg viewBox="0 0 24 24" className="w-5 h-5" style={{ fill: widgetColor }}>
                                 <path d="M12 2C6.48 2 2 6.48 2 12c0 1.85.5 3.58 1.36 5.07L2 22l4.93-1.36C8.42 21.5 10.15 22 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2zm0 18c-1.58 0-3.08-.38-4.4-1.06l-.31-.17-3.23.89.89-3.23-.17-.31C4.38 15.08 4 13.58 4 12c0-4.41 3.59-8 8-8s8 3.59 8 8-3.59 8-8 8z"/>
                               </svg>
-                              <span className="font-semibold text-sm text-gray-800">{selectedTenant?.tenant.companyName || "Company"}</span>
+                              <span className="font-semibold text-sm text-gray-800">
+                                {selectedTenant?.tenant.guid
+                                  ? `${selectedTenant?.tenant.companyName}-${selectedTenant?.tenant.guid}`
+                                  : selectedTenant?.tenant.companyName || "Company"}
+                              </span>
                             </div>
                             <div className="flex gap-1">
                               <div className="w-6 h-6 rounded-md hover:bg-gray-100 flex items-center justify-center cursor-pointer">
@@ -959,7 +981,13 @@ const AgentAdmin = observer(() => {
                       color="neutral"
                       startDecorator={<CopyIcon className="w-4 h-4" />}
                       onClick={() => {
-                        const code = `<script src="${window.location.origin}/widget/${selectedTenant?.tenant.slug}/embed.js"></script>
+                        const slugGuid = selectedTenant?.tenant.guid
+                          ? `${selectedTenant?.tenant.slug}-${selectedTenant?.tenant.guid}`
+                          : selectedTenant?.tenant.slug || "";
+                        const combinedName = selectedTenant?.tenant.guid
+                          ? `${selectedTenant?.tenant.companyName}-${selectedTenant?.tenant.guid}`
+                          : selectedTenant?.tenant.companyName || "";
+                        const code = `<script src="${window.location.origin}/widget/${slugGuid}/embed.js"></script>
 <script>
   AgentChatWidget.init({
     tenant: "${selectedTenant?.tenant.slug}",
@@ -967,7 +995,7 @@ const AgentAdmin = observer(() => {
     color: "${widgetColor}",
     position: "${widgetPosition}",
     welcomeMessage: "${widgetWelcome}",
-    companyName: "${selectedTenant?.tenant.companyName || ""}"
+    companyName: "${combinedName}"
   });
 </script>`;
                         navigator.clipboard.writeText(code);
@@ -978,7 +1006,7 @@ const AgentAdmin = observer(() => {
                     </Button>
                   </div>
                   <pre className="bg-gray-900 text-gray-100 rounded-lg p-4 text-xs overflow-x-auto font-mono">
-{`<script src="${window.location.origin}/widget/${selectedTenant?.tenant.slug}/embed.js"></script>
+{`<script src="${window.location.origin}/widget/${selectedTenant?.tenant.guid ? `${selectedTenant?.tenant.slug}-${selectedTenant?.tenant.guid}` : selectedTenant?.tenant.slug}/embed.js"></script>
 <script>
   AgentChatWidget.init({
     tenant: "${selectedTenant?.tenant.slug}",
@@ -986,10 +1014,90 @@ const AgentAdmin = observer(() => {
     color: "${widgetColor}",
     position: "${widgetPosition}",
     welcomeMessage: "${widgetWelcome}",
-    companyName: "${selectedTenant?.tenant.companyName || ""}"
+    companyName: "${selectedTenant?.tenant.guid ? `${selectedTenant?.tenant.companyName}-${selectedTenant?.tenant.guid}` : selectedTenant?.tenant.companyName || ""}"
   });
 </script>`}
                   </pre>
+                </div>
+
+                {/* Domain Allowlisting */}
+                <div className="mt-4 p-4 border border-gray-200 dark:border-zinc-700 rounded-lg">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Checkbox
+                      checked={domainAllowlistEnabled}
+                      onChange={(e) => {
+                        setDomainAllowlistEnabled(e.target.checked);
+                        if (!e.target.checked) {
+                          // Clear domains when disabled
+                          setAllowedDomainsText("");
+                        }
+                      }}
+                    />
+                    <label className="font-medium text-sm">{t("agent-admin.domain-allowlist-enable")}</label>
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-zinc-400 mb-3">
+                    {t("agent-admin.domain-allowlist-desc")}
+                  </p>
+                  {domainAllowlistEnabled && (
+                    <div className="space-y-3">
+                      <Textarea
+                        value={allowedDomainsText}
+                        onChange={(e) => setAllowedDomainsText(e.target.value)}
+                        placeholder={"example.com\n*.example.com\nlocalhost:3000"}
+                        minRows={3}
+                        sx={{ fontFamily: "monospace", fontSize: "0.875rem" }}
+                      />
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-gray-500 dark:text-zinc-400">
+                          {t("agent-admin.domain-allowlist-hint")}
+                        </p>
+                        <Button
+                          size="sm"
+                          loading={isSavingDomains}
+                          onClick={async () => {
+                            if (!selectedTenant) return;
+                            setIsSavingDomains(true);
+                            const domains = allowedDomainsText
+                              .split("\n")
+                              .map((d) => d.trim())
+                              .filter((d) => d.length > 0);
+                            const success = await agentAdminStore.updateAllowedDomains(
+                              selectedTenant.tenant.slug,
+                              domains
+                            );
+                            setIsSavingDomains(false);
+                            if (success) {
+                              toast.success(t("agent-admin.domain-allowlist-saved"));
+                            }
+                          }}
+                        >
+                          {t("agent-admin.domain-allowlist-save")}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                  {!domainAllowlistEnabled && selectedTenant?.tenant.allowedDomains && selectedTenant.tenant.allowedDomains.length > 0 && (
+                    <Button
+                      size="sm"
+                      color="warning"
+                      variant="soft"
+                      loading={isSavingDomains}
+                      onClick={async () => {
+                        if (!selectedTenant) return;
+                        setIsSavingDomains(true);
+                        const success = await agentAdminStore.updateAllowedDomains(
+                          selectedTenant.tenant.slug,
+                          []
+                        );
+                        setIsSavingDomains(false);
+                        if (success) {
+                          toast.success(t("agent-admin.domain-allowlist-disabled"));
+                        }
+                      }}
+                    >
+                      {t("agent-admin.domain-allowlist-clear")}
+                    </Button>
+                  )}
                 </div>
               </div>
             )}

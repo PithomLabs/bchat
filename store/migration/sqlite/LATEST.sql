@@ -192,12 +192,16 @@ CREATE TABLE agent_tenants (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     slug TEXT UNIQUE NOT NULL,
     company_name TEXT NOT NULL,
+    guid TEXT,
     vertical TEXT,
     is_active INTEGER NOT NULL DEFAULT 1,
     processing_options TEXT,
+    allowed_domains TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS idx_agent_tenants_guid ON agent_tenants(guid);
 
 -- agent_audiences
 CREATE TABLE agent_audiences (

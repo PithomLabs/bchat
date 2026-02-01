@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/usememos/memos/store"
 )
 
@@ -17,13 +18,14 @@ import (
 
 func (d *DB) CreateAgentTenant(ctx context.Context, tenant *store.AgentTenant) (*store.AgentTenant, error) {
 	stmt := `
-		INSERT INTO agent_tenants (slug, company_name, vertical, is_active, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO agent_tenants (slug, company_name, guid, vertical, is_active, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		RETURNING id
 	`
 	now := time.Now()
+	tenant.GUID = uuid.New().String() // Generate UUID for security
 	if err := d.db.QueryRowContext(ctx, stmt,
-		tenant.Slug, tenant.CompanyName, tenant.Vertical, tenant.IsActive, now, now,
+		tenant.Slug, tenant.CompanyName, tenant.GUID, tenant.Vertical, tenant.IsActive, now, now,
 	).Scan(&tenant.ID); err != nil {
 		return nil, err
 	}
@@ -59,7 +61,7 @@ func (d *DB) ListAgentTenants(ctx context.Context, find *store.FindAgentTenant) 
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, slug, company_name, vertical, is_active, processing_options, created_at, updated_at
+		SELECT id, slug, company_name, guid, vertical, is_active, processing_options, allowed_domains, created_at, updated_at
 		FROM agent_tenants
 		WHERE %s
 		ORDER BY created_at DESC
@@ -74,15 +76,21 @@ func (d *DB) ListAgentTenants(ctx context.Context, find *store.FindAgentTenant) 
 	var tenants []*store.AgentTenant
 	for rows.Next() {
 		var t store.AgentTenant
-		var vertical, processingOptions sql.NullString
-		if err := rows.Scan(&t.ID, &t.Slug, &t.CompanyName, &vertical, &t.IsActive, &processingOptions, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		var guid, vertical, processingOptions, allowedDomains sql.NullString
+		if err := rows.Scan(&t.ID, &t.Slug, &t.CompanyName, &guid, &vertical, &t.IsActive, &processingOptions, &allowedDomains, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
+		}
+		if guid.Valid {
+			t.GUID = guid.String
 		}
 		if vertical.Valid {
 			t.Vertical = vertical.String
 		}
 		if processingOptions.Valid {
 			t.ProcessingOptions = processingOptions.String
+		}
+		if allowedDomains.Valid {
+			t.AllowedDomains = allowedDomains.String
 		}
 		tenants = append(tenants, &t)
 	}
@@ -92,7 +100,7 @@ func (d *DB) ListAgentTenants(ctx context.Context, find *store.FindAgentTenant) 
 func (d *DB) UpdateAgentTenant(ctx context.Context, tenant *store.AgentTenant) (*store.AgentTenant, error) {
 	stmt := `
 		UPDATE agent_tenants
-		SET company_name = ?, vertical = ?, is_active = ?, processing_options = ?, updated_at = ?
+		SET company_name = ?, vertical = ?, is_active = ?, processing_options = ?, allowed_domains = ?, updated_at = ?
 		WHERE id = ?
 	`
 	now := time.Now()
@@ -100,7 +108,11 @@ func (d *DB) UpdateAgentTenant(ctx context.Context, tenant *store.AgentTenant) (
 	if tenant.ProcessingOptions != "" {
 		processingOptions = tenant.ProcessingOptions
 	}
-	_, err := d.db.ExecContext(ctx, stmt, tenant.CompanyName, tenant.Vertical, tenant.IsActive, processingOptions, now, tenant.ID)
+	var allowedDomains interface{} = nil
+	if tenant.AllowedDomains != "" {
+		allowedDomains = tenant.AllowedDomains
+	}
+	_, err := d.db.ExecContext(ctx, stmt, tenant.CompanyName, tenant.Vertical, tenant.IsActive, processingOptions, allowedDomains, now, tenant.ID)
 	if err != nil {
 		return nil, err
 	}

@@ -10,9 +10,11 @@ type AgentTenant struct {
 	ID                int32
 	Slug              string
 	CompanyName       string
+	GUID              string // Unique identifier for security (used in widget embed)
 	Vertical          string
 	IsActive          bool
 	ProcessingOptions string // JSON-encoded ProcessingOptions for Format for RAG
+	AllowedDomains    string // JSON array of allowed domains for widget embedding, empty = allow all
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 }

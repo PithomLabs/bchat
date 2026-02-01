@@ -315,7 +315,14 @@
     "widget-preview": "Preview",
     "widget-code": "Embed Code",
     "widget-copy": "Copy Code",
-    "widget-copied": "Embed code copied to clipboard"
+    "widget-copied": "Embed code copied to clipboard",
+    "domain-allowlist-enable": "Enable domain allowlisting",
+    "domain-allowlist-desc": "When enabled, the widget will only work on specified domains. Leave disabled to allow embedding on any website.",
+    "domain-allowlist-hint": "Enter one domain per line. Use *.example.com for wildcards.",
+    "domain-allowlist-save": "Save Domains",
+    "domain-allowlist-saved": "Allowed domains updated",
+    "domain-allowlist-disabled": "Domain restrictions removed",
+    "domain-allowlist-clear": "Clear Restrictions"
   },
   "agent-simulation": {
     "title": "Agent Simulation",

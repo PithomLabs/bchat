@@ -189,9 +189,10 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	publicGroup.GET("/:slug/widget.js", s.agentHandler.HandleWidget) // Legacy - inline JS
 
 	// Widget routes (public, no auth) - CORS handled globally
+	// URL format: /widget/:slugGuid/embed.js where slugGuid = "tenant-slug-uuid"
 	widgetGroup := echoServer.Group("/widget")
-	widgetGroup.GET("/:slug/embed.js", s.agentHandler.HandleWidgetEmbed)  // Built bundle
-	widgetGroup.GET("/:slug/iframe", s.agentHandler.HandleWidgetIframe)   // iframe HTML
+	widgetGroup.GET("/:slugGuid/embed.js", s.agentHandler.HandleWidgetEmbed) // Built bundle
+	widgetGroup.GET("/:slugGuid/iframe", s.agentHandler.HandleWidgetIframe)  // iframe HTML
 
 	// Authenticated routes (Memos user auth required)
 	authGroup := echoServer.Group("/api/v1/agent")
