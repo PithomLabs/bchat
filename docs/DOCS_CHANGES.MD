@@ -792,4 +792,42 @@ LANCEDB_INSERT_BATCH_SIZE=100  # Default
 
 ---
 
+## 2026-02-01 ~10:30 - Simplify Widget Embed Code to Use Slug Only
+
+**Status:** Implemented
+**Priority:** Medium
+**Reason:** Simplify widget URLs by removing GUID requirement, using just tenant slug
+
+### Problem
+
+Widget embed code was designed to use slug-guid format (`/widget/bchat-{guid}/embed.js`) for security, but this added complexity without significant benefit. The tenant slug is already unique.
+
+### Solution
+
+Simplified the widget system to use just the slug:
+- **Before:** `/widget/bchat-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/embed.js`
+- **After:** `/widget/bchat/embed.js`
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `server/router/api/v1/agent/handlers.go` | Renamed `findTenantBySlugGuid` to `findTenantBySlug`, simplified to match by slug only |
+| `server/router/api/v1/agent/handlers.go` | Updated `HandleWidgetEmbed` to use slug parameter, removed GUID from companyName injection |
+| `server/router/api/v1/agent/handlers.go` | Updated `HandleWidgetIframe` to use slug, removed GUID from companyName |
+| `server/router/api/v1/agent/handlers.go` | Simplified `generateIframeHTML` function signature |
+| `server/router/api/v1/v1.go` | Changed route params from `:slugGuid` to `:slug` |
+| `web/src/pages/AgentAdmin.tsx` | Simplified embed code to use just slug |
+
+**Widget header title fix:** Removed GUID suffix from `companyName` that was causing the chat panel to display "CompanyName-{guid}" instead of just "CompanyName".
+
+### Verification
+
+1. Build and run: `task build && task dev`
+2. Go to Agent Admin, select a tenant
+3. Widget Embed Code should show `/widget/{slug}/embed.js`
+4. Test widget embedding on external page with new URL format
+
+---
+
 *Add new changes below with timestamp*

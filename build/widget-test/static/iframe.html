@@ -141,7 +141,7 @@
       <p>The widget was embedded using this code:</p>
 
       <pre><code>&lt;iframe
-  src="https://bchat.fly.dev/widget/rizal-YOUR_GUID_HERE/iframe?color=%230d9488&amp;welcome=Hi!%20How%20can%20I%20help%20you%20today%3F&amp;companyName=rizal"
+  src="https://bchat.fly.dev/widget/rizal/iframe?color=%230d9488&amp;welcome=Hi!%20How%20can%20I%20help%20you%20today%3F&amp;companyName=rizal"
   style="width: 100%; height: 500px; border: none;"
   title="Chat Widget"
 &gt;&lt;/iframe&gt;</code></pre>
@@ -150,7 +150,7 @@
         <strong>How it works:</strong>
       </p>
       <ol>
-        <li>The iframe loads <code>/widget/rizal-YOUR_GUID_HERE/iframe</code> from bchat</li>
+        <li>The iframe loads <code>/widget/rizal/iframe</code> from bchat</li>
         <li>Query parameters customize color, welcome message, etc.</li>
         <li>The server returns a complete HTML page with the widget</li>
         <li>The widget auto-opens in iframe mode (no floating button)</li>
@@ -175,7 +175,7 @@
       </div>
       <div class="iframe-wrapper" id="iframeWrapper">
         <iframe
-          src="https://bchat.fly.dev/widget/rizal-YOUR_GUID_HERE/iframe?color=%230d9488&welcome=Hi!%20How%20can%20I%20help%20you%20today%3F&companyName=rizal"
+          src="https://bchat.fly.dev/widget/rizal/iframe?color=%230d9488&welcome=Hi!%20How%20can%20I%20help%20you%20today%3F&companyName=rizal"
           title="Chat Widget"
         ></iframe>
       </div>
@@ -211,7 +211,7 @@
       if (wrapper.classList.contains('hidden')) {
         wrapper.classList.remove('hidden');
         wrapper.innerHTML = `<iframe
-          src="https://bchat.fly.dev/widget/rizal-YOUR_GUID_HERE/iframe?color=%230d9488&welcome=Hi!%20How%20can%20I%20help%20you%20today%3F&companyName=rizal"
+          src="https://bchat.fly.dev/widget/rizal/iframe?color=%230d9488&welcome=Hi!%20How%20can%20I%20help%20you%20today%3F&companyName=rizal"
           title="Chat Widget"
         ></iframe>`;
         btn.textContent = 'Hide';

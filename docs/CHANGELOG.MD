@@ -7,6 +7,14 @@ All notable changes to the bchat AI Agent System are documented in this file.
 ## 2026-02-01
 
 ### Changed
+- **Simplified Widget URLs** - Removed GUID requirement from widget embed URLs
+  - Widget URLs now use simple slug format: `/widget/bchat/embed.js`
+  - Previously used slug-guid format: `/widget/bchat-xxxxxxxx-xxxx/embed.js`
+  - Removed GUID suffix from widget header title (was showing "CompanyName-{guid}")
+  - GUID field remains in database but is no longer used for widget routing
+  - Updated widget-test files to use simple slug format
+  - Files: `server/router/api/v1/agent/handlers.go`, `server/router/api/v1/v1.go`, `web/src/pages/AgentAdmin.tsx`, `build/widget-test/static/*.html`
+
 - **LATEST.sql Sync** - Added missing columns from migrations 22-23 to `agent_tenants` table
   - Added `guid TEXT` column for widget URL security
   - Added `allowed_domains TEXT` column for domain allowlisting

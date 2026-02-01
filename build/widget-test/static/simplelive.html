@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simple Embed Test</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 40px 20px;
+      background: #f5f5f5;
+      color: #333;
+    }
+    h1 {
+      color: #0d9488;
+    }
+    .back-link {
+      display: inline-block;
+      margin-bottom: 20px;
+      color: #0d9488;
+      text-decoration: none;
+    }
+    .back-link:hover {
+      text-decoration: underline;
+    }
+    .content {
+      background: white;
+      border-radius: 12px;
+      padding: 24px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    .content p {
+      line-height: 1.6;
+      color: #666;
+    }
+    .highlight {
+      background: #e0f2f1;
+      border-left: 4px solid #0d9488;
+      padding: 16px;
+      margin: 20px 0;
+      border-radius: 0 8px 8px 0;
+    }
+    code {
+      background: #f0f0f0;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.9em;
+    }
+    pre {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 16px;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 0.85em;
+    }
+    .arrow {
+      font-size: 2em;
+      text-align: center;
+      color: #0d9488;
+      margin: 20px 0;
+    }
+  </style>
+</head>
+<body>
+  <a href="index.html" class="back-link">&larr; Back to Index</a>
+
+  <h1>Simple Embed Test</h1>
+
+  <div class="content">
+    <p>
+      This page demonstrates the <strong>JavaScript widget injection</strong> method.
+      The widget loads and injects a floating chat button into the page.
+    </p>
+
+    <div class="highlight">
+      <strong>Look at the bottom-right corner</strong> - you should see a teal chat button.
+      Click it to open the chat panel.
+    </div>
+
+    <p>The widget was embedded using this code:</p>
+
+
+    <div class="arrow">&darr;</div>
+
+    <p>
+      <strong>How it works:</strong>
+    </p>
+    <ol>
+      <li>The script tag loads <code>embed.js</code> from the bchat server</li>
+      <li><code>AgentChatWidget.init()</code> merges your config with defaults</li>
+      <li>The widget injects CSS and DOM elements into your page</li>
+      <li>A floating button appears; clicking it opens the chat panel</li>
+      <li>Messages are sent to <code>/api/v1/agent/rizal/chat/ext</code></li>
+    </ol>
+  </div>
+
+  <!-- Widget embed code -->
+<script src="https://bchat.fly.dev/widget/inc/embed.js"></script>
+<script>
+  AgentChatWidget.init({
+    tenant: "bchat",
+    baseUrl: "https://bchat.fly.dev",
+    color: "#0d9488",
+    position: "bottom-right",
+    welcomeMessage: "Hi! How can I help you today?",
+    companyName: "bchat"
+  });
+</script>
+</body>
+</html>

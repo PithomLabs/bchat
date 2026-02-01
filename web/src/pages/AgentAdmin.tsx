@@ -981,21 +981,16 @@ const AgentAdmin = observer(() => {
                       color="neutral"
                       startDecorator={<CopyIcon className="w-4 h-4" />}
                       onClick={() => {
-                        const slugGuid = selectedTenant?.tenant.guid
-                          ? `${selectedTenant?.tenant.slug}-${selectedTenant?.tenant.guid}`
-                          : selectedTenant?.tenant.slug || "";
-                        const combinedName = selectedTenant?.tenant.guid
-                          ? `${selectedTenant?.tenant.companyName}-${selectedTenant?.tenant.guid}`
-                          : selectedTenant?.tenant.companyName || "";
-                        const code = `<script src="${window.location.origin}/widget/${slugGuid}/embed.js"></script>
+                        const slug = selectedTenant?.tenant.slug || "";
+                        const code = `<script src="${window.location.origin}/widget/${slug}/embed.js"></script>
 <script>
   AgentChatWidget.init({
-    tenant: "${selectedTenant?.tenant.slug}",
+    tenant: "${slug}",
     baseUrl: "${window.location.origin}",
     color: "${widgetColor}",
     position: "${widgetPosition}",
     welcomeMessage: "${widgetWelcome}",
-    companyName: "${combinedName}"
+    companyName: "${selectedTenant?.tenant.companyName || ""}"
   });
 </script>`;
                         navigator.clipboard.writeText(code);
@@ -1006,7 +1001,7 @@ const AgentAdmin = observer(() => {
                     </Button>
                   </div>
                   <pre className="bg-gray-900 text-gray-100 rounded-lg p-4 text-xs overflow-x-auto font-mono">
-{`<script src="${window.location.origin}/widget/${selectedTenant?.tenant.guid ? `${selectedTenant?.tenant.slug}-${selectedTenant?.tenant.guid}` : selectedTenant?.tenant.slug}/embed.js"></script>
+{`<script src="${window.location.origin}/widget/${selectedTenant?.tenant.slug}/embed.js"></script>
 <script>
   AgentChatWidget.init({
     tenant: "${selectedTenant?.tenant.slug}",
@@ -1014,7 +1009,7 @@ const AgentAdmin = observer(() => {
     color: "${widgetColor}",
     position: "${widgetPosition}",
     welcomeMessage: "${widgetWelcome}",
-    companyName: "${selectedTenant?.tenant.guid ? `${selectedTenant?.tenant.companyName}-${selectedTenant?.tenant.guid}` : selectedTenant?.tenant.companyName || ""}"
+    companyName: "${selectedTenant?.tenant.companyName || ""}"
   });
 </script>`}
                   </pre>

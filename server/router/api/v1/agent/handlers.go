@@ -1519,16 +1519,14 @@ func generateWidgetScript(baseURL, tenantSlug, companyName string) string {
 })();`
 }
 
-// findTenantBySlugGuid finds a tenant by matching slug-guid combination.
-// The slugGuid format is "tenant-slug-uuid" where uuid has dashes.
-func (h *Handler) findTenantBySlugGuid(ctx context.Context, slugGuid string) (*store.AgentTenant, error) {
+// findTenantBySlug finds a tenant by slug.
+func (h *Handler) findTenantBySlug(ctx context.Context, slug string) (*store.AgentTenant, error) {
 	tenants, err := h.store.ListAgentTenants(ctx, &store.FindAgentTenant{})
 	if err != nil {
 		return nil, err
 	}
 	for _, t := range tenants {
-		expected := fmt.Sprintf("%s-%s", t.Slug, t.GUID)
-		if slugGuid == expected && t.IsActive {
+		if t.Slug == slug && t.IsActive {
 			return t, nil
 		}
 	}
@@ -1577,13 +1575,13 @@ func (h *Handler) isDomainAllowed(allowedDomainsJSON, origin, referer string) bo
 }
 
 // HandleWidgetEmbed serves the built widget JavaScript bundle.
-// GET /widget/:slugGuid/embed.js
+// GET /widget/:slug/embed.js
 func (h *Handler) HandleWidgetEmbed(c echo.Context) error {
 	ctx := c.Request().Context()
-	slugGuid := c.Param("slugGuid")
+	slug := c.Param("slug")
 
-	// Find tenant by slug-guid combination
-	tenant, err := h.findTenantBySlugGuid(ctx, slugGuid)
+	// Find tenant by slug
+	tenant, err := h.findTenantBySlug(ctx, slug)
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
 	}
@@ -1619,16 +1617,11 @@ func (h *Handler) HandleWidgetEmbed(c echo.Context) error {
 	}
 
 	// Inject configuration at the start of the script
-	// Use combined companyName-GUID format for security
-	combinedName := tenant.CompanyName
-	if tenant.GUID != "" {
-		combinedName = fmt.Sprintf("%s-%s", tenant.CompanyName, tenant.GUID)
-	}
 	configScript := fmt.Sprintf(`window.AgentChatConfig=window.AgentChatConfig||{};
 window.AgentChatConfig.baseUrl=window.AgentChatConfig.baseUrl||%q;
 window.AgentChatConfig.tenant=window.AgentChatConfig.tenant||%q;
 window.AgentChatConfig.companyName=window.AgentChatConfig.companyName||%q;
-`, baseURL, tenant.Slug, combinedName)
+`, baseURL, tenant.Slug, tenant.CompanyName)
 
 	finalScript := configScript + string(content)
 
@@ -1638,13 +1631,13 @@ window.AgentChatConfig.companyName=window.AgentChatConfig.companyName||%q;
 }
 
 // HandleWidgetIframe serves the widget as a standalone HTML page for iframe embedding.
-// GET /widget/:slugGuid/iframe
+// GET /widget/:slug/iframe
 func (h *Handler) HandleWidgetIframe(c echo.Context) error {
 	ctx := c.Request().Context()
-	slugGuid := c.Param("slugGuid")
+	slug := c.Param("slug")
 
-	// Find tenant by slug-guid combination
-	tenant, err := h.findTenantBySlugGuid(ctx, slugGuid)
+	// Find tenant by slug
+	tenant, err := h.findTenantBySlug(ctx, slug)
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
 	}
@@ -1676,19 +1669,14 @@ func (h *Handler) HandleWidgetIframe(c echo.Context) error {
 	if welcome == "" {
 		welcome = "How can we help you today?"
 	}
-	// Use combined companyName-GUID format for security
 	companyName := tenant.CompanyName
-	if tenant.GUID != "" {
-		companyName = fmt.Sprintf("%s-%s", tenant.CompanyName, tenant.GUID)
-	}
 	// Allow query param override (for testing)
 	if qName := c.QueryParam("companyName"); qName != "" {
 		companyName = qName
 	}
 
 	// Generate the iframe HTML with embedded widget
-	// Pass slugGuid for embed.js URL, slug for API calls
-	html := generateIframeHTML(baseURL, tenant.Slug, slugGuid, companyName, color, welcome)
+	html := generateIframeHTML(baseURL, tenant.Slug, companyName, color, welcome)
 
 	c.Response().Header().Set("Content-Type", "text/html; charset=utf-8")
 	c.Response().Header().Set("Cache-Control", "public, max-age=3600")
@@ -1696,8 +1684,7 @@ func (h *Handler) HandleWidgetIframe(c echo.Context) error {
 }
 
 // generateIframeHTML generates a standalone HTML page for the widget iframe.
-// tenantSlug is used for API calls, slugGuid is used for the embed.js URL path.
-func generateIframeHTML(baseURL, tenantSlug, slugGuid, companyName, color, welcomeMessage string) string {
+func generateIframeHTML(baseURL, slug, companyName, color, welcomeMessage string) string {
 	// Escape values for use in JavaScript
 	escapeJS := func(s string) string {
 		s = strings.ReplaceAll(s, "\\", "\\\\")
@@ -1756,12 +1743,12 @@ func generateIframeHTML(baseURL, tenantSlug, slugGuid, companyName, color, welco
 </body>
 </html>`,
 		escapeJS(baseURL),
-		escapeJS(tenantSlug),
+		escapeJS(slug),
 		escapeJS(companyName),
 		escapeJS(color),
 		escapeJS(welcomeMessage),
 		escapeJS(baseURL),
-		escapeJS(slugGuid),
+		escapeJS(slug),
 	)
 }
 
