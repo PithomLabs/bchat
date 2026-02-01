@@ -286,4 +286,87 @@ This starts Vite on port 3002 with the `src/test.html` page. Note: The Vite dev 
 
 ---
 
-*Last Updated: 2026-01-25*
+---
+
+## Standalone Test Server (External Widget)
+
+A simple Go web server for testing the widget embedded from an external origin (e.g., production bchat server).
+
+### Location
+
+```
+build/widget-test/
+├── main.go              # Go web server (stdlib only)
+├── static/
+│   ├── index.html       # Landing page
+│   ├── simple.html      # JavaScript embed test
+│   └── iframe.html      # iframe embed test
+```
+
+### Quick Start
+
+```bash
+cd build/widget-test
+go run main.go
+```
+
+Open http://localhost:8888 in your browser.
+
+### Test Pages
+
+#### Simple Embed (`/simple.html`)
+
+Tests the JavaScript widget injection from a remote server:
+
+```html
+<script src="https://bchat.fly.dev/widget/rizal/embed.js"></script>
+<script>
+  AgentChatWidget.init({
+    tenant: "rizal",
+    baseUrl: "https://bchat.fly.dev",
+    color: "#0d9488",
+    position: "bottom-right",
+    welcomeMessage: "Hi! How can I help you today?",
+    companyName: "rizal"
+  });
+</script>
+```
+
+**What to expect:**
+- A floating chat button appears in the bottom-right corner
+- Click the button to open the chat panel
+- Messages are sent to the remote bchat server
+
+#### iframe Wrapper (`/iframe.html`)
+
+Tests the iframe embedding method:
+
+```html
+<iframe
+  src="https://bchat.fly.dev/widget/rizal/iframe?color=%230d9488&welcome=Hi!%20How%20can%20I%20help%20you%20today%3F&companyName=rizal"
+  style="width: 100%; height: 500px; border: none;"
+  title="Chat Widget"
+></iframe>
+```
+
+**What to expect:**
+- Chat widget appears directly in the iframe (no floating button)
+- Chat panel is open by default
+- Complete isolation from parent page
+
+### When to Use
+
+Use the standalone test server when:
+- Testing widget embedding from production (https://bchat.fly.dev)
+- Verifying CORS behavior across different origins
+- Simulating real-world embedding scenarios
+- Testing cross-origin iframe behavior
+
+Use the local test files (`widget/site/`) when:
+- Developing the widget locally
+- Testing against local bchat server (localhost:8081)
+- Debugging widget code changes
+
+---
+
+*Last Updated: 2026-02-01*

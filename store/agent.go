@@ -555,23 +555,23 @@ type FindAgentQAPair struct {
 // AgentTranscript represents a recorded chat conversation transcript.
 type AgentTranscript struct {
 	ID               string         `json:"id"`
-	TenantID         int32          `json:"tenant_id"`
-	SessionID        string         `json:"session_id"`
-	AudienceType     string         `json:"audience_type"`
+	TenantID         int32          `json:"tenantId"`
+	SessionID        string         `json:"sessionId"`
+	AudienceType     string         `json:"audienceType"`
 	Messages         []AgentMessage `json:"messages"`
-	MessageCount     int            `json:"message_count"`
-	ClientIP         string         `json:"client_ip,omitempty"`
-	UserAgent        string         `json:"user_agent,omitempty"`
-	CustomerName     string         `json:"customer_name,omitempty"`
-	CustomerPhone    string         `json:"customer_phone,omitempty"`
-	CustomerEmail    string         `json:"customer_email,omitempty"`
-	CustomerLocation string         `json:"customer_location,omitempty"`
-	DetectedIntent   string         `json:"detected_intent,omitempty"`
-	StartedAt        time.Time      `json:"started_at"`
-	EndedAt          *time.Time     `json:"ended_at,omitempty"`
-	LastMessageAt    time.Time      `json:"last_message_at"`
-	IsCompleted      bool           `json:"is_completed"`
-	CompletionReason string         `json:"completion_reason,omitempty"`
+	MessageCount     int            `json:"messageCount"`
+	ClientIP         string         `json:"clientIp,omitempty"`
+	UserAgent        string         `json:"userAgent,omitempty"`
+	CustomerName     string         `json:"customerName,omitempty"`
+	CustomerPhone    string         `json:"customerPhone,omitempty"`
+	CustomerEmail    string         `json:"customerEmail,omitempty"`
+	CustomerLocation string         `json:"customerLocation,omitempty"`
+	DetectedIntent   string         `json:"detectedIntent,omitempty"`
+	StartedAt        time.Time      `json:"startedAt"`
+	EndedAt          *time.Time     `json:"endedAt,omitempty"`
+	LastMessageAt    time.Time      `json:"lastMessageAt"`
+	IsCompleted      bool           `json:"isCompleted"`
+	CompletionReason string         `json:"completionReason,omitempty"`
 }
 
 // FindAgentTranscript contains filters for finding transcripts.

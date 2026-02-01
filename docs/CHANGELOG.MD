@@ -4,6 +4,30 @@ All notable changes to the bchat AI Agent System are documented in this file.
 
 ---
 
+## 2026-02-01
+
+### Fixed
+- **Widget HTTPS Scheme Detection** - Fixed widget embed.js generating HTTP URLs instead of HTTPS
+  - Added `X-Forwarded-Proto` header check for reverse proxy environments (fly.io)
+  - Previously, `c.Request().TLS == nil` always returned true behind reverse proxy
+  - Fixed in 3 locations: HandleWidget, HandleWidgetEmbed, HandleWidgetIframe
+  - File: `server/router/api/v1/agent/handlers.go`
+
+### Added
+- **Widget Bundle in Docker Deployment** - Widget now built and included in fly.io deployments
+  - Added widget build step to Stage 1 (frontend) in Dockerfiles
+  - Added `COPY --from=frontend /widget-build/dist ./widget/dist` to runtime stage
+  - Files: `Dockerfile.fly`, `Dockerfile.s3.fly`, `Dockerfile.local.fly`
+
+- **Widget Test Server** - Simple Go server for testing external widget embedding
+  - Simulates third-party website embedding the chat widget
+  - Test pages: simple embed (JS injection) and iframe wrapper
+  - Location: `build/widget-test/`
+  - Run: `cd build/widget-test && go run main.go` → http://localhost:8888
+  - Documentation: `docs/DOCS_TEST_WIDGET.MD`
+
+---
+
 ## 2026-01-31
 
 ### Changed

@@ -2,13 +2,22 @@
 # Multi-stage Dockerfile for fly.io deployment with LanceDB RAG support
 # =============================================================================
 
-# Stage 1: Build frontend
+# Stage 1: Build frontend and widget
 FROM node:20-alpine AS frontend
+
+# Build main frontend
 WORKDIR /frontend-build
 COPY web/package*.json ./
 RUN npm ci
 COPY web/ .
 RUN npm run release
+
+# Build widget
+WORKDIR /widget-build
+COPY widget/package*.json ./
+RUN npm ci
+COPY widget/ .
+RUN npm run build
 
 # Stage 2: Build backend with LanceDB CGO support
 FROM golang:1.24 AS backend
@@ -60,6 +69,9 @@ RUN ldconfig
 COPY --from=backend /backend-build/memos .
 COPY scripts/entrypoint.sh .
 RUN chmod +x entrypoint.sh
+
+# Copy widget bundle for external embeds
+COPY --from=frontend /widget-build/dist ./widget/dist
 
 # Create data directory for SQLite and local storage
 RUN mkdir -p /var/opt/memos

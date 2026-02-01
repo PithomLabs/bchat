@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Widget Test Server</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 40px 20px;
+      background: #f5f5f5;
+      color: #333;
+    }
+    h1 {
+      color: #0d9488;
+      margin-bottom: 10px;
+    }
+    .subtitle {
+      color: #666;
+      margin-bottom: 40px;
+    }
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    .card h2 {
+      margin-top: 0;
+      color: #333;
+    }
+    .card p {
+      color: #666;
+      line-height: 1.6;
+    }
+    .card a {
+      display: inline-block;
+      background: #0d9488;
+      color: white;
+      padding: 12px 24px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-weight: 500;
+      margin-top: 10px;
+      transition: background 0.2s;
+    }
+    .card a:hover {
+      background: #0f766e;
+    }
+    code {
+      background: #f0f0f0;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.9em;
+    }
+    .info {
+      background: #e0f2f1;
+      border-left: 4px solid #0d9488;
+      padding: 16px;
+      margin-top: 30px;
+      border-radius: 0 8px 8px 0;
+    }
+    .info h3 {
+      margin-top: 0;
+      color: #0d9488;
+    }
+  </style>
+</head>
+<body>
+  <h1>Widget Test Server</h1>
+  <p class="subtitle">Test bchat widget embedding in different scenarios</p>
+
+  <div class="card">
+    <h2>Simple Embed</h2>
+    <p>
+      Tests the JavaScript widget injection method. The widget script is loaded
+      and <code>AgentChatWidget.init()</code> is called. A floating chat button
+      appears in the bottom-right corner.
+    </p>
+    <p>
+      <strong>Best for:</strong> Most websites - the widget injects directly into
+      the page DOM with full customization options.
+    </p>
+    <a href="simple.html">Open Simple Embed Test</a>
+  </div>
+
+  <div class="card">
+    <h2>iframe Wrapper</h2>
+    <p>
+      Tests the iframe embedding method. The widget is loaded inside an
+      <code>&lt;iframe&gt;</code> element, isolating it from the parent page.
+    </p>
+    <p>
+      <strong>Best for:</strong> Platforms with strict CSP policies, CMS systems
+      that block external scripts, or when DOM isolation is required.
+    </p>
+    <a href="iframe.html">Open iframe Test</a>
+  </div>
+
+  <div class="info">
+    <h3>Configuration</h3>
+    <p>Both tests connect to:</p>
+    <ul>
+      <li><strong>Server:</strong> https://bchat.fly.dev</li>
+      <li><strong>Tenant:</strong> rizal</li>
+      <li><strong>Color:</strong> #0d9488 (teal)</li>
+    </ul>
+  </div>
+</body>
+</html>

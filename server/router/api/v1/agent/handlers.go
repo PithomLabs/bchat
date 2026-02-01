@@ -1245,9 +1245,11 @@ func (h *Handler) HandleWidget(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
 	}
 
-	// Get base URL from request
+	// Get base URL from request (check X-Forwarded-Proto for reverse proxy)
 	scheme := "https"
-	if c.Request().TLS == nil {
+	if proto := c.Request().Header.Get("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	} else if c.Request().TLS == nil {
 		scheme = "http"
 	}
 	baseURL := scheme + "://" + c.Request().Host
@@ -1478,9 +1480,11 @@ func (h *Handler) HandleWidgetEmbed(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
 	}
 
-	// Get base URL from request
+	// Get base URL from request (check X-Forwarded-Proto for reverse proxy)
 	scheme := "https"
-	if c.Request().TLS == nil {
+	if proto := c.Request().Header.Get("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	} else if c.Request().TLS == nil {
 		scheme = "http"
 	}
 	baseURL := scheme + "://" + c.Request().Host
@@ -1523,9 +1527,11 @@ func (h *Handler) HandleWidgetIframe(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
 	}
 
-	// Get base URL from request
+	// Get base URL from request (check X-Forwarded-Proto for reverse proxy)
 	scheme := "https"
-	if c.Request().TLS == nil {
+	if proto := c.Request().Header.Get("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	} else if c.Request().TLS == nil {
 		scheme = "http"
 	}
 	baseURL := scheme + "://" + c.Request().Host

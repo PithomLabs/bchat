@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>iframe Wrapper Test</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 40px 20px;
+      background: #f5f5f5;
+      color: #333;
+    }
+    h1 {
+      color: #0d9488;
+    }
+    .back-link {
+      display: inline-block;
+      margin-bottom: 20px;
+      color: #0d9488;
+      text-decoration: none;
+    }
+    .back-link:hover {
+      text-decoration: underline;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 1fr 400px;
+      gap: 24px;
+    }
+    @media (max-width: 800px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+    }
+    .content {
+      background: white;
+      border-radius: 12px;
+      padding: 24px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    .content p {
+      line-height: 1.6;
+      color: #666;
+    }
+    .iframe-container {
+      background: white;
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    .iframe-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .iframe-header h3 {
+      margin: 0;
+      color: #333;
+    }
+    .toggle-btn {
+      background: #0d9488;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9em;
+    }
+    .toggle-btn:hover {
+      background: #0f766e;
+    }
+    .iframe-wrapper {
+      border: 2px dashed #ccc;
+      border-radius: 8px;
+      overflow: hidden;
+      transition: all 0.3s ease;
+    }
+    .iframe-wrapper.hidden {
+      height: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #999;
+    }
+    .iframe-wrapper iframe {
+      width: 100%;
+      height: 500px;
+      border: none;
+      display: block;
+    }
+    .iframe-wrapper.hidden iframe {
+      display: none;
+    }
+    code {
+      background: #f0f0f0;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.9em;
+    }
+    pre {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 16px;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 0.85em;
+    }
+    .highlight {
+      background: #e0f2f1;
+      border-left: 4px solid #0d9488;
+      padding: 16px;
+      margin: 20px 0;
+      border-radius: 0 8px 8px 0;
+    }
+  </style>
+</head>
+<body>
+  <a href="index.html" class="back-link">&larr; Back to Index</a>
+
+  <h1>iframe Wrapper Test</h1>
+
+  <div class="layout">
+    <div class="content">
+      <p>
+        This page demonstrates the <strong>iframe embedding</strong> method.
+        The widget is loaded inside an iframe, isolating it from the parent page.
+      </p>
+
+      <div class="highlight">
+        <strong>The chat widget is embedded in the iframe on the right.</strong>
+        The chat panel opens automatically in iframe mode.
+      </div>
+
+      <p>The widget was embedded using this code:</p>
+
+      <pre><code>&lt;iframe
+  src="https://bchat.fly.dev/widget/rizal/iframe?color=%230d9488&amp;welcome=Hi!%20How%20can%20I%20help%20you%20today%3F&amp;companyName=rizal"
+  style="width: 100%; height: 500px; border: none;"
+  title="Chat Widget"
+&gt;&lt;/iframe&gt;</code></pre>
+
+      <p>
+        <strong>How it works:</strong>
+      </p>
+      <ol>
+        <li>The iframe loads <code>/widget/rizal/iframe</code> from bchat</li>
+        <li>Query parameters customize color, welcome message, etc.</li>
+        <li>The server returns a complete HTML page with the widget</li>
+        <li>The widget auto-opens in iframe mode (no floating button)</li>
+        <li>Full DOM isolation - no CSS/JS conflicts with parent page</li>
+      </ol>
+
+      <p>
+        <strong>When to use iframe:</strong>
+      </p>
+      <ul>
+        <li>CMS platforms that block external scripts</li>
+        <li>Sites with strict Content Security Policy (CSP)</li>
+        <li>When you need complete style isolation</li>
+        <li>Embedding in sandboxed environments</li>
+      </ul>
+    </div>
+
+    <div class="iframe-container">
+      <div class="iframe-header">
+        <h3>Live Widget</h3>
+        <button class="toggle-btn" onclick="toggleIframe()">Hide</button>
+      </div>
+      <div class="iframe-wrapper" id="iframeWrapper">
+        <iframe
+          src="https://bchat.fly.dev/widget/rizal/iframe?color=%230d9488&welcome=Hi!%20How%20can%20I%20help%20you%20today%3F&companyName=rizal"
+          title="Chat Widget"
+        ></iframe>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function toggleIframe() {
+      const wrapper = document.getElementById('iframeWrapper');
+      const btn = document.querySelector('.toggle-btn');
+
+      if (wrapper.classList.contains('hidden')) {
+        wrapper.classList.remove('hidden');
+        btn.textContent = 'Hide';
+      } else {
+        wrapper.classList.add('hidden');
+        wrapper.innerHTML = '<span>iframe hidden - click Show to reveal</span>';
+        btn.textContent = 'Show';
+
+        // Re-add iframe when showing again
+        setTimeout(() => {
+          if (!wrapper.classList.contains('hidden')) return;
+        }, 0);
+      }
+    }
+
+    // Fix toggle to properly restore iframe
+    const originalToggle = toggleIframe;
+    toggleIframe = function() {
+      const wrapper = document.getElementById('iframeWrapper');
+      const btn = document.querySelector('.toggle-btn');
+
+      if (wrapper.classList.contains('hidden')) {
+        wrapper.classList.remove('hidden');
+        wrapper.innerHTML = `<iframe
+          src="https://bchat.fly.dev/widget/rizal/iframe?color=%230d9488&welcome=Hi!%20How%20can%20I%20help%20you%20today%3F&companyName=rizal"
+          title="Chat Widget"
+        ></iframe>`;
+        btn.textContent = 'Hide';
+      } else {
+        wrapper.classList.add('hidden');
+        wrapper.innerHTML = '<span>iframe hidden - click Show to reveal</span>';
+        btn.textContent = 'Show';
+      }
+    };
+  </script>
+</body>
+</html>
