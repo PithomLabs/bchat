@@ -48,6 +48,7 @@ git tag -a v0.5.18 -m "deploy to fly.io"
 git tag -a v0.5.19 -m "rebuild index fixes"
 git tag -a v0.5.20 -m "CHANGELOG.MD 2026-01-31 0320"
 git tag -a v0.5.21 -m "fixed chat widget"
+git tag -a v0.5.22 -m "CHANGELOG.MD 2026-02-01 1017"
 git push origin --tags
 ```
 

@@ -13,6 +13,12 @@ All notable changes to the bchat AI Agent System are documented in this file.
   - Added `idx_agent_tenants_guid` index
   - File: `store/migration/sqlite/LATEST.sql`
 
+- **Widget Test URLs** - Updated widget-test to use new `slug-guid` URL format
+  - Changed `/widget/rizal/...` to `/widget/rizal-YOUR_GUID_HERE/...`
+  - Updated simple.html, iframe.html, and index.html
+  - Added note about replacing placeholder with actual tenant GUID
+  - Files: `build/widget-test/static/*.html`
+
 ### Fixed
 - **Widget HTTPS Scheme Detection** - Fixed widget embed.js generating HTTP URLs instead of HTTPS
   - Added `X-Forwarded-Proto` header check for reverse proxy environments (fly.io)
