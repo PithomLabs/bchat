@@ -37,6 +37,24 @@ type ParsedPolicy struct {
 	Audience *store.AgentAudience
 }
 
+// ParseKBResult wraps ParsedKB with parsing metadata.
+type ParseKBResult struct {
+	KB           *ParsedKB
+	IsStructured bool // true if meaningful structured content was found
+	ParsedCount  int  // total items parsed (services + faqs + exclusions + coverage + safety + sections)
+}
+
+// ParsePolicyResult wraps ParsedPolicy with parsing metadata.
+type ParsePolicyResult struct {
+	Policy       *ParsedPolicy
+	IsStructured bool // true if meaningful structured content was found
+	ParsedCount  int  // total items parsed (intents + rules)
+}
+
+// StructuredContentThreshold is the minimum number of parsed items
+// to consider content as "structured" (vs unstructured prose).
+const StructuredContentThreshold = 2
+
 // ParsedIdentity represents the identity section from a policy file.
 type ParsedIdentity struct {
 	Role       string
@@ -340,6 +358,24 @@ func (p *Parser) ParseKB(content string, tenantID int32, audienceType string) (*
 	return result, nil
 }
 
+// ParseKBWithResult parses a KB.MD file and returns a result with metadata about parsing success.
+func (p *Parser) ParseKBWithResult(content string, tenantID int32, audienceType string) (*ParseKBResult, error) {
+	kb, err := p.ParseKB(content, tenantID, audienceType)
+	if err != nil {
+		return nil, err
+	}
+
+	// Count total parsed items
+	parsedCount := len(kb.Services) + len(kb.FAQs) + len(kb.Exclusions) +
+		len(kb.Coverage) + len(kb.Safety) + len(kb.Sections)
+
+	return &ParseKBResult{
+		KB:           kb,
+		IsStructured: parsedCount >= StructuredContentThreshold,
+		ParsedCount:  parsedCount,
+	}, nil
+}
+
 // ParsePolicy parses a POLICY.MD file and extracts structured data.
 func (p *Parser) ParsePolicy(content string, tenantID int32, audienceType string) (*ParsedPolicy, error) {
 	result := &ParsedPolicy{
@@ -527,6 +563,29 @@ func (p *Parser) ParsePolicy(content string, tenantID int32, audienceType string
 	}
 
 	return result, nil
+}
+
+// ParsePolicyWithResult parses a POLICY.MD file and returns a result with metadata about parsing success.
+func (p *Parser) ParsePolicyWithResult(content string, tenantID int32, audienceType string) (*ParsePolicyResult, error) {
+	policy, err := p.ParsePolicy(content, tenantID, audienceType)
+	if err != nil {
+		return nil, err
+	}
+
+	// Count total parsed items
+	parsedCount := len(policy.Intents) + len(policy.Rules)
+
+	// Also check if identity was extracted (role/tone)
+	hasIdentity := policy.Identity != nil && (policy.Identity.Role != "" || policy.Identity.Tone != "")
+	if hasIdentity {
+		parsedCount++ // Count identity as one item
+	}
+
+	return &ParsePolicyResult{
+		Policy:       policy,
+		IsStructured: parsedCount >= StructuredContentThreshold,
+		ParsedCount:  parsedCount,
+	}, nil
 }
 
 // parseFloat is a simple float parser for threshold values.

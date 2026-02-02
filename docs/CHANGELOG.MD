@@ -4,6 +4,34 @@ All notable changes to the bchat AI Agent System are documented in this file.
 
 ---
 
+## 2026-02-03
+
+### Added
+- **Unstructured File Upload Support** - Auto-detection for structured vs unstructured content
+  - `ParseKBResult` and `ParsePolicyResult` structs now include `IsStructured` flag and `ParsedCount`
+  - `StructuredContentThreshold` constant (2 items) determines structured vs unstructured classification
+  - `ChunkRawContent()` method in chunker.go for arbitrary text chunking
+  - `HasStructuredContent` field in `AudienceConfig` for runtime mode selection
+  - `AudienceInfo` response now includes `KBIsStructured`, `PolicyIsStructured`, `HasStructuredContent` fields
+  - Files: `parser.go`, `chunker.go`, `handlers.go`, `service.go`
+
+### Changed
+- **Automatic RAG Mode for Unstructured Content** - System now intelligently handles plain text uploads
+  - `importFiles()` detects structured vs unstructured content during parsing
+  - `processChat()` forces RAG mode when `HasStructuredContent=false`
+  - `buildRAGSystemPrompt()` handles minimal identity for unstructured content
+  - Enables use case: Upload a novel/document and chat about it without annotation requirements
+  - Files: `handlers.go:953-1114`, `service.go:1264-1270`
+
+### Documentation
+- **DOCS_RAG_OVERVIEW.MD** - Comprehensive RAG architecture overview document
+  - Content types (structured vs unstructured)
+  - Auto-detection mechanism and processing flow
+  - Configuration options and behavior matrix
+  - Verification and troubleshooting guide
+
+---
+
 ## 2026-02-01
 
 ### Changed

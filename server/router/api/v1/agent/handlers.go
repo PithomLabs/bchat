@@ -786,10 +786,13 @@ type TenantInfo struct {
 
 // AudienceInfo contains audience import statistics.
 type AudienceInfo struct {
-	ServicesCount int `json:"services_count"`
-	IntentsCount  int `json:"intents_count"`
-	FAQsCount     int `json:"faqs_count"`
-	RulesCount    int `json:"rules_count"`
+	ServicesCount       int  `json:"services_count"`
+	IntentsCount        int  `json:"intents_count"`
+	FAQsCount           int  `json:"faqs_count"`
+	RulesCount          int  `json:"rules_count"`
+	KBIsStructured      bool `json:"kb_is_structured"`      // true if KB has meaningful structured annotations
+	PolicyIsStructured  bool `json:"policy_is_structured"` // true if Policy has meaningful structured annotations
+	HasStructuredContent bool `json:"has_structured_content"` // true if either KB or Policy has structured content
 }
 
 // HandleOnboard handles tenant onboarding.
@@ -951,17 +954,28 @@ func (h *Handler) HandleImport(c echo.Context) error {
 func (h *Handler) importFiles(ctx context.Context, tenantID int32, audienceType, kbContent, policyContent string) (*AudienceInfo, error) {
 	parser := h.service.parser
 
-	// Parse KB
-	parsedKB, err := parser.ParseKB(kbContent, tenantID, audienceType)
+	// Parse KB with metadata about structured content
+	kbResult, err := parser.ParseKBWithResult(kbContent, tenantID, audienceType)
 	if err != nil {
 		return nil, err
 	}
+	parsedKB := kbResult.KB
 
-	// Parse Policy
-	parsedPolicy, err := parser.ParsePolicy(policyContent, tenantID, audienceType)
+	// Parse Policy with metadata about structured content
+	policyResult, err := parser.ParsePolicyWithResult(policyContent, tenantID, audienceType)
 	if err != nil {
 		return nil, err
 	}
+	parsedPolicy := policyResult.Policy
+
+	// Log content structure detection
+	slog.Info("parsed content structure",
+		"tenantID", tenantID,
+		"audience", audienceType,
+		"kb_structured", kbResult.IsStructured,
+		"kb_items", kbResult.ParsedCount,
+		"policy_structured", policyResult.IsStructured,
+		"policy_items", policyResult.ParsedCount)
 
 	// Clear existing data for this audience
 	h.store.DeleteAgentServices(ctx, tenantID, audienceType)
@@ -1079,16 +1093,23 @@ func (h *Handler) importFiles(ctx context.Context, tenantID int32, audienceType,
 	}
 
 	// Index content for RAG pipeline
+	// For unstructured content, RAG is the primary retrieval mechanism
 	if err := h.indexContentForRAG(ctx, tenantID, audienceType, parsedKB, parsedPolicy, kbContent, policyContent); err != nil {
 		slog.Warn("Failed to index content for RAG", "error", err, "tenantID", tenantID, "audience", audienceType)
 		// Don't fail the import if indexing fails - RAG is an enhancement
 	}
 
+	// Determine if this tenant has structured content
+	hasStructuredContent := kbResult.IsStructured || policyResult.IsStructured
+
 	return &AudienceInfo{
-		ServicesCount: len(parsedKB.Services),
-		IntentsCount:  len(parsedPolicy.Intents),
-		FAQsCount:     len(parsedKB.FAQs),
-		RulesCount:    len(parsedPolicy.Rules),
+		ServicesCount:        len(parsedKB.Services),
+		IntentsCount:         len(parsedPolicy.Intents),
+		FAQsCount:            len(parsedKB.FAQs),
+		RulesCount:           len(parsedPolicy.Rules),
+		KBIsStructured:       kbResult.IsStructured,
+		PolicyIsStructured:   policyResult.IsStructured,
+		HasStructuredContent: hasStructuredContent,
 	}, nil
 }
 
@@ -1134,11 +1155,12 @@ func (h *Handler) indexContentForRAG(ctx context.Context, tenantID int32, audien
 		kbChunks := chunker.ChunkKBContent(kb, tenantID, audienceType, 1)
 		allChunks = append(allChunks, kbChunks...)
 	} else if rawKBContent != "" {
-		// Fallback: chunk raw markdown content when no annotations found
-		slog.Info("No KB annotations found, using markdown-based chunking",
+		// Fallback: chunk raw content when no annotations found
+		// ChunkRawContent auto-detects markdown vs plain text
+		slog.Info("No KB annotations found, using raw content chunking",
 			"tenantID", tenantID,
 			"audience", audienceType)
-		kbChunks := chunker.ChunkMarkdownContent(rawKBContent, tenantID, audienceType, "kb", 1, maxChunkTokens)
+		kbChunks := chunker.ChunkRawContent(rawKBContent, "kb", tenantID, audienceType, 1, maxChunkTokens)
 		allChunks = append(allChunks, kbChunks...)
 	}
 
@@ -1148,11 +1170,12 @@ func (h *Handler) indexContentForRAG(ctx context.Context, tenantID int32, audien
 		policyChunks := chunker.ChunkPolicyContent(policy, tenantID, audienceType, 1)
 		allChunks = append(allChunks, policyChunks...)
 	} else if rawPolicyContent != "" {
-		// Fallback: chunk raw markdown content when no annotations found
-		slog.Info("No Policy annotations found, using markdown-based chunking",
+		// Fallback: chunk raw content when no annotations found
+		// ChunkRawContent auto-detects markdown vs plain text
+		slog.Info("No Policy annotations found, using raw content chunking",
 			"tenantID", tenantID,
 			"audience", audienceType)
-		policyChunks := chunker.ChunkMarkdownContent(rawPolicyContent, tenantID, audienceType, "policy", 1, maxChunkTokens)
+		policyChunks := chunker.ChunkRawContent(rawPolicyContent, "policy", tenantID, audienceType, 1, maxChunkTokens)
 		allChunks = append(allChunks, policyChunks...)
 	}
 

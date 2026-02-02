@@ -723,6 +723,11 @@ type AudienceConfig struct {
 
 	// Verification rules (parsed from POLICY.MD)
 	VerificationRules []VerificationRule
+
+	// HasStructuredContent indicates whether meaningful structured annotations were found
+	// in KB.MD or POLICY.MD. When false, the tenant relies entirely on RAG retrieval
+	// from unstructured content (e.g., uploaded novels, plain text documents).
+	HasStructuredContent bool
 }
 
 // VerificationRule represents a custom verification rule from POLICY.MD.
@@ -1003,24 +1008,31 @@ func (s *Service) LoadConfig(ctx context.Context, tenantSlug, audienceType strin
 		rawPolicy = policyFile.Content
 	}
 
+	// Determine if tenant has structured content
+	// This affects whether we use RAG-only mode or can fall back to long_context mode
+	hasStructuredContent := len(services) > 0 || len(faqs) > 0 || len(exclusions) > 0 ||
+		len(coverage) > 0 || len(safety) > 0 || len(sections) > 0 ||
+		len(intents) > 0 || len(rules) > 0
+
 	config := &AudienceConfig{
-		TenantID:         tenant.ID,
-		TenantSlug:       tenant.Slug,
-		CompanyName:      tenant.CompanyName,
-		AudienceType:     audienceType,
-		Audience:         audience,
-		Services:         services,
-		Exclusions:       exclusions,
-		Coverage:         coverage,
-		FAQs:             faqs,
-		Safety:           safety,
-		Sections:         sections,
-		Intents:          intents,
-		Rules:            rules,
-		Script:           script,
-		LearnedBehaviors: learnedBehaviors,
-		RawKB:            rawKB,
-		RawPolicy:        rawPolicy,
+		TenantID:             tenant.ID,
+		TenantSlug:           tenant.Slug,
+		CompanyName:          tenant.CompanyName,
+		AudienceType:         audienceType,
+		Audience:             audience,
+		Services:             services,
+		Exclusions:           exclusions,
+		Coverage:             coverage,
+		FAQs:                 faqs,
+		Safety:               safety,
+		Sections:             sections,
+		Intents:              intents,
+		Rules:                rules,
+		Script:               script,
+		LearnedBehaviors:     learnedBehaviors,
+		RawKB:                rawKB,
+		RawPolicy:            rawPolicy,
+		HasStructuredContent: hasStructuredContent,
 	}
 
 	s.configCache.Set(config)
@@ -1250,8 +1262,16 @@ func (s *Service) processChat(ctx context.Context, config *AudienceConfig, sessi
 	// Determine which generation method to use based on tenant's retrieval mode:
 	// - "rag" mode: Use RAG pipeline with retrieved chunks (for large KBs)
 	// - "long_context" mode (default): Full KB in system prompt (for small/medium KBs)
+	// - For unstructured content (no structured KB/Policy), always use RAG mode
 	useRAG := false
-	if s.UseRAGPipeline() {
+	forceRAG := !config.HasStructuredContent && s.UseRAGPipeline()
+	if forceRAG {
+		// No structured content - must use RAG mode since there's nothing to build long_context from
+		useRAG = true
+		slog.Debug("forcing RAG mode for unstructured content",
+			"tenant_slug", config.TenantSlug,
+			"session_id", session.ID)
+	} else if s.UseRAGPipeline() {
 		// Check tenant-specific retrieval mode
 		tenantConfig, _ := s.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &config.TenantID})
 		if tenantConfig != nil && tenantConfig.RetrievalMode == "rag" {
@@ -1260,9 +1280,15 @@ func (s *Service) processChat(ctx context.Context, config *AudienceConfig, sessi
 	}
 
 	if useRAG {
-		// Use RAG retrieval for focused context (large KBs)
+		// Use RAG retrieval for focused context (large KBs or unstructured content)
 		response, genErr = s.generateRAGResponse(ctx, config, session, classification, decision, userMessage)
 		if genErr != nil {
+			if forceRAG {
+				// Can't fall back to long context for unstructured content
+				slog.Error("RAG generation failed for unstructured content, no fallback available",
+					"error", genErr, "session_id", session.ID)
+				return nil, fmt.Errorf("failed to generate response: %w", genErr)
+			}
 			slog.Warn("RAG generation failed, falling back to long context",
 				"error", genErr, "session_id", session.ID)
 			response, genErr = s.generateResponse(ctx, config, session, classification, decision)
@@ -1972,16 +1998,36 @@ func (s *Service) buildRAGSystemPrompt(
 	var sb strings.Builder
 
 	// Compute validated phone number once
-	validatedPhone := GetValidatedReplacementPhone(config.Audience.EmergencyPhone, config.RawKB)
+	var validatedPhone string
+	if config.Audience != nil {
+		validatedPhone = GetValidatedReplacementPhone(config.Audience.EmergencyPhone, config.RawKB)
+	}
 
 	// =========================================================================
 	// SECTION 1: IDENTITY (Who you are)
 	// =========================================================================
 	sb.WriteString("=== IDENTITY ===\n")
-	sb.WriteString(fmt.Sprintf("You are a %s for %s.\n", config.Audience.Role, config.CompanyName))
-	sb.WriteString(fmt.Sprintf("Tone: %s\n", config.Audience.Tone))
-	if config.Audience.BrandVoice != "" {
-		sb.WriteString(fmt.Sprintf("Voice: \"%s\"\n", config.Audience.BrandVoice))
+
+	// For unstructured content (no structured Policy), use minimal identity
+	// or derive from SCRIPT.MD if available
+	hasStructuredIdentity := config.Audience != nil && (config.Audience.Role != "" || config.Audience.Tone != "")
+
+	if hasStructuredIdentity {
+		sb.WriteString(fmt.Sprintf("You are a %s for %s.\n", config.Audience.Role, config.CompanyName))
+		if config.Audience.Tone != "" {
+			sb.WriteString(fmt.Sprintf("Tone: %s\n", config.Audience.Tone))
+		}
+		if config.Audience.BrandVoice != "" {
+			sb.WriteString(fmt.Sprintf("Voice: \"%s\"\n", config.Audience.BrandVoice))
+		}
+	} else {
+		// Minimal identity for unstructured content
+		if config.CompanyName != "" {
+			sb.WriteString(fmt.Sprintf("You are a helpful assistant for %s.\n", config.CompanyName))
+		} else {
+			sb.WriteString("You are a helpful assistant.\n")
+		}
+		sb.WriteString("Tone: Professional and helpful\n")
 	}
 	sb.WriteString("\n")
 
@@ -2014,16 +2060,18 @@ func (s *Service) buildRAGSystemPrompt(
 	// SECTION 3: CONSTRAINTS & CONTACT (Combined for efficiency)
 	// =========================================================================
 	sb.WriteString("=== CONSTRAINTS ===\n")
-	sb.WriteString("- Only discuss services in RETRIEVED CONTEXT below\n")
-	sb.WriteString("- Never invent services, prices, phone numbers, or processes\n")
+	sb.WriteString("- Only discuss information in RETRIEVED CONTEXT below\n")
+	sb.WriteString("- Never invent information, facts, or details not in the context\n")
 	sb.WriteString("- If uncertain, acknowledge honestly\n")
 	if validatedPhone != "" {
 		sb.WriteString(fmt.Sprintf("- Phone: %s (ONLY this number)\n", validatedPhone))
 	}
-	if config.Audience.Email != "" {
+	if config.Audience != nil && config.Audience.Email != "" {
 		sb.WriteString(fmt.Sprintf("- Email: %s\n", config.Audience.Email))
 	}
-	sb.WriteString(fmt.Sprintf("- You assist with %s ONLY - decline other business queries\n", config.CompanyName))
+	if config.CompanyName != "" {
+		sb.WriteString(fmt.Sprintf("- You assist with %s topics ONLY - decline unrelated queries\n", config.CompanyName))
+	}
 	sb.WriteString("- If topic not in retrieved context, politely decline and offer relevant help\n")
 	sb.WriteString("\n")
 
@@ -2147,8 +2195,12 @@ func (s *Service) buildRAGSystemPrompt(
 		sb.WriteString("\n")
 	}
 
-	// Emergency flag
-	if classification.Urgency >= config.Audience.EmergencyUrgencyThreshold {
+	// Emergency flag (check urgency threshold if audience config exists)
+	emergencyThreshold := 4 // Default threshold
+	if config.Audience != nil && config.Audience.EmergencyUrgencyThreshold > 0 {
+		emergencyThreshold = config.Audience.EmergencyUrgencyThreshold
+	}
+	if classification.Urgency >= emergencyThreshold {
 		sb.WriteString("!!! EMERGENCY - Respond with urgency !!!\n")
 		if validatedPhone != "" {
 			sb.WriteString(fmt.Sprintf("Provide phone immediately: %s\n", validatedPhone))

@@ -324,7 +324,7 @@ const AgentAdmin = observer(() => {
             <SettingsIcon className="w-6 h-6 opacity-70" />
             <h1 className="text-xl font-semibold text-gray-800 dark:text-gray-200">
               {selectedTenant
-                ? `${selectedTenant.tenant.companyName}${selectedTenant.tenant.guid ? `-${selectedTenant.tenant.guid}` : ""}`
+                ? selectedTenant.tenant.companyName
                 : t("agent-admin.title")}
             </h1>
           </div>
@@ -359,7 +359,7 @@ const AgentAdmin = observer(() => {
                       <div>
                         <div className="flex items-center gap-2 mb-1">
                           <h3 className="font-semibold text-gray-800 dark:text-gray-200">
-                            {tenant.companyName}{tenant.guid ? `-${tenant.guid}` : ""}
+                            {tenant.companyName}
                           </h3>
                           <Chip size="sm" color={tenant.isActive ? "success" : "neutral"} variant="soft">
                             {tenant.isActive ? t("agent-admin.active") : t("agent-admin.inactive")}
@@ -914,9 +914,7 @@ const AgentAdmin = observer(() => {
                                 <path d="M12 2C6.48 2 2 6.48 2 12c0 1.85.5 3.58 1.36 5.07L2 22l4.93-1.36C8.42 21.5 10.15 22 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2zm0 18c-1.58 0-3.08-.38-4.4-1.06l-.31-.17-3.23.89.89-3.23-.17-.31C4.38 15.08 4 13.58 4 12c0-4.41 3.59-8 8-8s8 3.59 8 8-3.59 8-8 8z"/>
                               </svg>
                               <span className="font-semibold text-sm text-gray-800">
-                                {selectedTenant?.tenant.guid
-                                  ? `${selectedTenant?.tenant.companyName}-${selectedTenant?.tenant.guid}`
-                                  : selectedTenant?.tenant.companyName || "Company"}
+                                {selectedTenant?.tenant.companyName || "Company"}
                               </span>
                             </div>
                             <div className="flex gap-1">

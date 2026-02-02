@@ -49,6 +49,7 @@ git tag -a v0.5.19 -m "rebuild index fixes"
 git tag -a v0.5.20 -m "CHANGELOG.MD 2026-01-31 0320"
 git tag -a v0.5.21 -m "fixed chat widget"
 git tag -a v0.5.22 -m "CHANGELOG.MD 2026-02-01 1017"
+git tag -a v0.5.23 -m "CHANGELOG.MD 2026-02-01 2011"
 git push origin --tags
 ```
 

@@ -933,3 +933,199 @@ func mergeSmallChunks(chunks []DocumentChunk, minTokens, maxTokens int) []Docume
 
 	return result
 }
+
+// ============================================================================
+// RAW CONTENT CHUNKING (for unstructured files)
+// ============================================================================
+
+// ChunkRawContent chunks arbitrary unstructured text content for RAG indexing.
+// This is used when content doesn't have structured annotations (KB.MD/POLICY.MD format)
+// and should just be chunked for retrieval.
+//
+// Parameters:
+//   - content: The raw text content to chunk
+//   - contentType: A label for the content type (e.g., "raw_kb", "raw_policy", "document")
+//   - tenantID: The tenant this content belongs to
+//   - audience: The audience type
+//   - sourceVersion: Version number for the content
+//   - maxTokens: Maximum tokens per chunk (use GetMaxChunkTokens)
+func (c *Chunker) ChunkRawContent(
+	content string,
+	contentType string,
+	tenantID int32,
+	audience string,
+	sourceVersion int32,
+	maxTokens int,
+) []DocumentChunk {
+	if strings.TrimSpace(content) == "" {
+		return nil
+	}
+
+	// Use defaults if not specified
+	if maxTokens <= 0 {
+		maxTokens = MaxChunkTokens
+	}
+	minTokens := maxTokens / 5
+	if minTokens < 30 {
+		minTokens = 30
+	}
+
+	now := time.Now()
+	var chunks []DocumentChunk
+
+	// Try to detect document structure and use appropriate chunking
+	hasMarkdownHeaders := strings.Contains(content, "\n## ") || strings.HasPrefix(content, "## ") ||
+		strings.Contains(content, "\n# ") || strings.HasPrefix(content, "# ")
+
+	if hasMarkdownHeaders {
+		// Use heading-based chunking for markdown-like content
+		return c.ChunkMarkdownContent(content, tenantID, audience, contentType, sourceVersion, maxTokens)
+	}
+
+	// For plain text, use paragraph-based chunking
+	paragraphs := splitIntoParagraphs(content)
+
+	var currentContent strings.Builder
+	chunkIndex := 0
+
+	flushChunk := func(title string) {
+		if currentContent.Len() > 0 {
+			code := fmt.Sprintf("%s_chunk_%d", contentType, chunkIndex)
+			chunks = append(chunks, DocumentChunk{
+				ID:            ChunkID(tenantID, audience, contentType, code),
+				TenantID:      tenantID,
+				AudienceType:  audience,
+				ContentType:   contentType,
+				Title:         title,
+				Content:       strings.TrimSpace(currentContent.String()),
+				Code:          code,
+				IsActive:      true,
+				SourceVersion: sourceVersion,
+				IndexedAt:     now,
+			})
+			currentContent.Reset()
+			chunkIndex++
+		}
+	}
+
+	for _, para := range paragraphs {
+		para = strings.TrimSpace(para)
+		if para == "" {
+			continue
+		}
+
+		paraTokens := EstimateTokens(para)
+
+		// If single paragraph exceeds limit, split by sentences
+		if paraTokens > maxTokens {
+			// First flush any existing content
+			if currentContent.Len() > 0 {
+				flushChunk(fmt.Sprintf("Content Part %d", chunkIndex+1))
+			}
+
+			// Split large paragraph into sentence-based chunks
+			sentences := splitBySentences(para)
+			var sentenceBuffer strings.Builder
+
+			for _, sent := range sentences {
+				combined := sentenceBuffer.String()
+				if combined != "" {
+					combined += " "
+				}
+				combined += sent
+
+				if EstimateTokens(combined) > maxTokens && sentenceBuffer.Len() > 0 {
+					// Save current buffer
+					code := fmt.Sprintf("%s_chunk_%d", contentType, chunkIndex)
+					chunks = append(chunks, DocumentChunk{
+						ID:            ChunkID(tenantID, audience, contentType, code),
+						TenantID:      tenantID,
+						AudienceType:  audience,
+						ContentType:   contentType,
+						Title:         fmt.Sprintf("Content Part %d", chunkIndex+1),
+						Content:       strings.TrimSpace(sentenceBuffer.String()),
+						Code:          code,
+						IsActive:      true,
+						SourceVersion: sourceVersion,
+						IndexedAt:     now,
+					})
+					chunkIndex++
+					sentenceBuffer.Reset()
+					sentenceBuffer.WriteString(sent)
+				} else {
+					if sentenceBuffer.Len() > 0 {
+						sentenceBuffer.WriteString(" ")
+					}
+					sentenceBuffer.WriteString(sent)
+				}
+			}
+
+			// Flush remaining sentences
+			if sentenceBuffer.Len() > 0 {
+				code := fmt.Sprintf("%s_chunk_%d", contentType, chunkIndex)
+				chunks = append(chunks, DocumentChunk{
+					ID:            ChunkID(tenantID, audience, contentType, code),
+					TenantID:      tenantID,
+					AudienceType:  audience,
+					ContentType:   contentType,
+					Title:         fmt.Sprintf("Content Part %d", chunkIndex+1),
+					Content:       strings.TrimSpace(sentenceBuffer.String()),
+					Code:          code,
+					IsActive:      true,
+					SourceVersion: sourceVersion,
+					IndexedAt:     now,
+				})
+				chunkIndex++
+			}
+			continue
+		}
+
+		// Normal paragraph processing
+		combined := currentContent.String()
+		if combined != "" {
+			combined += "\n\n"
+		}
+		combined += para
+
+		if EstimateTokens(combined) > maxTokens && currentContent.Len() > 0 {
+			flushChunk(fmt.Sprintf("Content Part %d", chunkIndex+1))
+			currentContent.WriteString(para)
+		} else {
+			if currentContent.Len() > 0 {
+				currentContent.WriteString("\n\n")
+			}
+			currentContent.WriteString(para)
+		}
+	}
+
+	// Don't forget the last chunk
+	if currentContent.Len() > 0 {
+		flushChunk(fmt.Sprintf("Content Part %d", chunkIndex+1))
+	}
+
+	// Merge small chunks
+	chunks = mergeSmallChunks(chunks, minTokens, maxTokens)
+
+	return chunks
+}
+
+// splitIntoParagraphs splits text by blank lines (double newlines).
+func splitIntoParagraphs(content string) []string {
+	// Normalize line endings
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	content = strings.ReplaceAll(content, "\r", "\n")
+
+	// Split by double newlines (blank lines)
+	paragraphs := strings.Split(content, "\n\n")
+
+	// Filter empty paragraphs
+	var result []string
+	for _, p := range paragraphs {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+
+	return result
+}
