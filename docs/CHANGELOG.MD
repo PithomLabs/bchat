@@ -6,6 +6,32 @@ All notable changes to the bchat AI Agent System are documented in this file.
 
 ## 2026-02-03
 
+### Changed
+- **Simplified RAG Chunking** - Replaced complex structured parsing with markdown-based unstructured chunking
+  - Disabled KB/Policy parser entirely - no more structured table population
+  - `importFiles()` now uses simple markdown chunking instead of `ParseKBWithResult`/`ParsePolicyWithResult`
+  - `indexContentForRAG()` always uses `ChunkMarkdownContent()` regardless of content structure
+  - Let embeddings and hybrid search handle relevance instead of content type classification
+  - Files: `handlers.go`, `chunker.go`, `vectordb.go`
+
+- **Increased Chunk Size for OpenRouter** - Optimized for `openai/text-embedding-3-small` (8191 token limit)
+  - `GetMaxChunkTokens("openrouter")` increased from 2000 to 4000 tokens
+  - `GetMinChunkTokens("openrouter")` increased from 100 to 200 tokens
+  - Reduces chunk count for large KB files
+  - File: `chunker.go:496-519`
+
+### Fixed
+- **UTF-8 Sanitization for LanceDB** - Fixed "Invalid UTF8 sequence" errors during RAG indexing
+  - Added `sanitizeUTF8()` function using `strings.ToValidUTF8()` in `chunker.go`
+  - Sanitize all 6 string fields in `chunksToArrowRecord()` before Arrow serialization
+  - Prevents LanceDB IPC serialization failures from corrupted content
+  - Files: `chunker.go:537-545`, `vectordb_lance.go:627-635`
+
+- **LanceDB Table Recreation** - Fixed "Table not found" error when recreating table for dimension change
+  - `dropAndRecreateTable()` now handles missing table gracefully
+  - Allows switching embedding models without manual intervention
+  - File: `vectordb_lance.go:265-272`
+
 ### Added
 - **Unstructured File Upload Support** - Auto-detection for structured vs unstructured content
   - `ParseKBResult` and `ParsePolicyResult` structs now include `IsStructured` flag and `ParsedCount`

@@ -40,7 +40,7 @@ func NewEmbeddingConfigFromEnv() *EmbeddingConfig {
 	var model string
 
 	switch provider {
-	case "openrouter":
+	case "openrouter", "openai":
 		model = getEnvOrDefault("EMBEDDING_MODEL", "openai/text-embedding-3-small")
 		dimension = getOpenRouterDimension(model)
 	default:
@@ -82,7 +82,7 @@ func getOpenRouterDimension(modelName string) int {
 // NewEmbeddingService creates an embedding service based on the configuration.
 func NewEmbeddingService(config *EmbeddingConfig) (EmbeddingService, error) {
 	switch config.Provider {
-	case "openrouter":
+	case "openrouter", "openai":
 		return NewOpenRouterEmbedding(config)
 	case "mock":
 		return NewMockEmbedding(config), nil

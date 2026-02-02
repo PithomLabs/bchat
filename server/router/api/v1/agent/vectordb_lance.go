@@ -262,9 +262,13 @@ func (db *LanceVectorDB) dropAndRecreateTable(ctx context.Context) error {
 		db.table = nil
 	}
 
-	// Drop the table
+	// Drop the table (ignore "not found" error - table may not exist)
 	if err := db.conn.DropTable(ctx, lanceTableName); err != nil {
-		return fmt.Errorf("failed to drop table: %w", err)
+		// Ignore "table not found" errors - this is expected if table was already deleted
+		if !strings.Contains(err.Error(), "not found") && !strings.Contains(err.Error(), "was not found") {
+			return fmt.Errorf("failed to drop table: %w", err)
+		}
+		slog.Info("Table did not exist, creating fresh", "table", lanceTableName)
 	}
 
 	slog.Info("Dropped existing LanceDB table due to dimension mismatch", "table", lanceTableName)
@@ -621,13 +625,14 @@ func (db *LanceVectorDB) chunksToArrowRecord(chunks []DocumentChunk) (arrow.Reco
 	now := time.Now().Unix()
 
 	for _, chunk := range chunks {
-		idBuilder.Append(chunk.ID)
+		// Sanitize ALL string fields to prevent UTF-8 errors in Arrow serialization
+		idBuilder.Append(strings.ToValidUTF8(chunk.ID, ""))
 		tenantIDBuilder.Append(chunk.TenantID)
-		audienceTypeBuilder.Append(chunk.AudienceType)
-		contentTypeBuilder.Append(chunk.ContentType)
-		titleBuilder.Append(chunk.Title)
-		contentBuilder.Append(chunk.Content)
-		codeBuilder.Append(chunk.Code)
+		audienceTypeBuilder.Append(strings.ToValidUTF8(chunk.AudienceType, ""))
+		contentTypeBuilder.Append(strings.ToValidUTF8(chunk.ContentType, ""))
+		titleBuilder.Append(strings.ToValidUTF8(chunk.Title, ""))
+		contentBuilder.Append(strings.ToValidUTF8(chunk.Content, ""))
+		codeBuilder.Append(strings.ToValidUTF8(chunk.Code, ""))
 		isEmergencyBuilder.Append(chunk.IsEmergency)
 		isActiveBuilder.Append(chunk.IsActive)
 		priorityBuilder.Append(chunk.Priority)
@@ -1030,6 +1035,24 @@ func (db *LanceVectorDB) Stats(ctx context.Context) (*VectorDBStats, error) {
 	}
 
 	return stats, nil
+}
+
+// ListChunks returns all chunks for a given tenant using SelectWithFilter.
+func (db *LanceVectorDB) ListChunks(ctx context.Context, tenantID int32) ([]DocumentChunk, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	filter := fmt.Sprintf("tenant_id = %d", tenantID)
+	rows, err := db.table.SelectWithFilter(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list chunks: %w", err)
+	}
+
+	chunks := make([]DocumentChunk, 0, len(rows))
+	for _, row := range rows {
+		chunks = append(chunks, db.rowToDocumentChunk(row))
+	}
+	return chunks, nil
 }
 
 // ptr is a helper to create pointers to values.

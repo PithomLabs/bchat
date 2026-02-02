@@ -44,6 +44,9 @@ type VectorDB interface {
 
 	// Stats returns database statistics.
 	Stats(ctx context.Context) (*VectorDBStats, error)
+
+	// ListChunks returns all chunks for a given tenant (used for stats/counting).
+	ListChunks(ctx context.Context, tenantID int32) ([]DocumentChunk, error)
 }
 
 // VectorDBConfig holds configuration for the vector database.
@@ -449,6 +452,20 @@ func (db *MemoryVectorDB) Stats(ctx context.Context) (*VectorDBStats, error) {
 	return stats, nil
 }
 
+// ListChunks returns all chunks for a given tenant.
+func (db *MemoryVectorDB) ListChunks(ctx context.Context, tenantID int32) ([]DocumentChunk, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	var result []DocumentChunk
+	for _, chunk := range db.chunks {
+		if chunk.TenantID == tenantID {
+			result = append(result, chunk)
+		}
+	}
+	return result, nil
+}
+
 // ============================================================================
 // NO-OP VECTOR DATABASE (When RAG is disabled)
 // ============================================================================
@@ -498,6 +515,11 @@ func (db *NoOpVectorDB) Stats(ctx context.Context) (*VectorDBStats, error) {
 		TenantCounts:  make(map[int32]int64),
 		ContentCounts: make(map[string]int64),
 	}, nil
+}
+
+// ListChunks returns empty results.
+func (db *NoOpVectorDB) ListChunks(ctx context.Context, tenantID int32) ([]DocumentChunk, error) {
+	return []DocumentChunk{}, nil
 }
 
 // ============================================================================
@@ -667,51 +689,30 @@ type HybridSearchOptions struct {
 	TextWeight   float64 // Weight for BM25/text match (0-1)
 }
 
-// RetrieveContextForQuery performs retrieval based on user query and intent.
+// RetrieveContextForQuery performs retrieval based on user query.
+// This simplified version searches all content types and lets embeddings rank relevance.
+// The intent parameter is kept for backward compatibility but is no longer used for filtering.
 func RetrieveContextForQuery(
 	ctx context.Context,
 	db VectorDB,
 	query string,
-	intent string,
+	intent string, // Kept for API compatibility, no longer used for filtering
 	tenantID int32,
 	audienceType string,
 	hybridOpts *HybridSearchOptions,
 ) (*RetrievedContext, error) {
-	// Determine content types and topK based on intent
-	var contentTypes []string
-	var topK int
+	// Simplified: search all content types, let embeddings handle relevance
+	// No longer filter by intent - embeddings are good at finding relevant content
+	_ = intent // Unused, kept for backward compatibility
 
-	switch strings.ToLower(intent) {
-	case "service_inquiry", "booking_request":
-		contentTypes = []string{"service", "faq"}
-		topK = 5
-	case "coverage_question":
-		contentTypes = []string{"coverage", "service"}
-		topK = 5
-	case "pricing_question":
-		contentTypes = []string{"faq", "service"}
-		topK = 3
-	case "emergency":
-		contentTypes = []string{"service", "safety"}
-		topK = 3
-	case "complaint", "escalation":
-		contentTypes = []string{"rule", "faq"}
-		topK = 3
-	default:
-		// General query - search all relevant types
-		contentTypes = []string{"faq", "service", "kb_section"}
-		topK = 5
-	}
-
-	// Build search query with optional hybrid search
 	searchQuery := SearchQuery{
 		QueryText:    query,
 		TenantID:     tenantID,
 		AudienceType: audienceType,
-		ContentTypes: contentTypes,
+		ContentTypes: []string{}, // Empty = search all types
 		ActiveOnly:   true,
-		TopK:         topK,
-		MinScore:     0.3, // Minimum relevance threshold
+		TopK:         10,   // Fetch more results, let ranking sort them
+		MinScore:     0.25, // Lower threshold, trust embeddings
 	}
 
 	// Apply hybrid search options if provided
@@ -727,26 +728,8 @@ func RetrieveContextForQuery(
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
 
-	// Organize results by type
-	retrieved := &RetrievedContext{}
-	for _, chunk := range result.Chunks {
-		switch chunk.ContentType {
-		case "service":
-			retrieved.Services = append(retrieved.Services, chunk)
-		case "faq":
-			retrieved.FAQs = append(retrieved.FAQs, chunk)
-		case "exclusion":
-			retrieved.Exclusions = append(retrieved.Exclusions, chunk)
-		case "coverage":
-			retrieved.Coverage = append(retrieved.Coverage, chunk)
-		case "rule":
-			retrieved.Rules = append(retrieved.Rules, chunk)
-		case "safety":
-			retrieved.Safety = append(retrieved.Safety, chunk)
-		case "kb_section":
-			retrieved.KBSections = append(retrieved.KBSections, chunk)
-		}
-	}
-
-	return retrieved, nil
+	// Return all results as KBSections (simplified, no type-based bucketing)
+	return &RetrievedContext{
+		KBSections: result.Chunks,
+	}, nil
 }

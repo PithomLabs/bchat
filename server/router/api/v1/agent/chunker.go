@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/usememos/memos/store"
 )
@@ -61,6 +62,10 @@ func NewChunker() *Chunker {
 }
 
 // ChunkKBContent extracts chunks from parsed KB content.
+//
+// Deprecated: Use ChunkMarkdownContent instead. This function uses structured
+// annotation parsing which can produce false positives. RAG retrieval now relies
+// on embeddings and hybrid search for relevance ranking, not content type classification.
 func (c *Chunker) ChunkKBContent(
 	kb *ParsedKB,
 	tenantID int32,
@@ -193,6 +198,10 @@ func (c *Chunker) ChunkKBContent(
 }
 
 // ChunkPolicyContent extracts chunks from parsed Policy content.
+//
+// Deprecated: Use ChunkMarkdownContent instead. This function uses structured
+// annotation parsing which can produce false positives. RAG retrieval now relies
+// on embeddings and hybrid search for relevance ranking, not content type classification.
 func (c *Chunker) ChunkPolicyContent(
 	policy *ParsedPolicy,
 	tenantID int32,
@@ -242,6 +251,9 @@ func (c *Chunker) ChunkPolicyContent(
 }
 
 // ChunkFromStoreTypes creates chunks from store types (for existing data).
+//
+// Deprecated: Direct database chunking is no longer used. Content should be
+// chunked from source files using ChunkMarkdownContent instead.
 func (c *Chunker) ChunkFromStoreTypes(
 	services []*store.AgentService,
 	exclusions []*store.AgentExclusion,
@@ -475,7 +487,7 @@ const (
 	DefaultTokenThreshold = 30000 // Threshold for switching to RAG mode
 	MinChunkTokens        = 30    // Minimum tokens per chunk
 	MaxChunkTokens        = 150   // Default max tokens (for local)
-	ChunkOverlapTokens    = 15    // Overlap between chunks
+	ChunkOverlapTokens    = 50    // Overlap between chunks for context continuity
 )
 
 // GetMaxChunkTokens returns the maximum chunk size based on embedding provider.
@@ -485,7 +497,7 @@ const (
 func GetMaxChunkTokens(embeddingProvider string) int {
 	switch embeddingProvider {
 	case "openrouter":
-		return 2000 // text-embedding-3-small supports 8191 tokens, use 2000 for safety
+		return 4000 // text-embedding-3-small supports 8191 tokens, use 4000 (50% of max)
 	case "local":
 		return 150 // 512 token limit with aggressive subword tokenization
 	case "mock":
@@ -499,7 +511,7 @@ func GetMaxChunkTokens(embeddingProvider string) int {
 func GetMinChunkTokens(embeddingProvider string) int {
 	switch embeddingProvider {
 	case "openrouter":
-		return 100 // Larger min for larger chunks
+		return 200 // Larger min for larger chunks (scaled with 4000 max)
 	case "local":
 		return 30 // Small min for small chunks
 	default:
@@ -522,6 +534,16 @@ func ShouldUseRAG(kbContent, policyContent string) bool {
 	return totalTokens >= DefaultTokenThreshold
 }
 
+// sanitizeUTF8 removes invalid UTF-8 sequences from content.
+// This prevents LanceDB serialization errors when content contains corrupted bytes.
+func sanitizeUTF8(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	// Replace invalid sequences with empty string
+	return strings.ToValidUTF8(s, "")
+}
+
 // ChunkMarkdownContent chunks raw markdown using heading-based splitting.
 // This is the main entry point for the new chunking strategy.
 // maxTokens controls chunk size - use GetMaxChunkTokens(provider) to get appropriate value.
@@ -533,6 +555,9 @@ func (c *Chunker) ChunkMarkdownContent(
 	sourceVersion int32,
 	maxTokens int, // Use GetMaxChunkTokens(embeddingProvider) for this value
 ) []DocumentChunk {
+	// Sanitize UTF-8: remove invalid sequences to prevent LanceDB errors
+	content = sanitizeUTF8(content)
+
 	if strings.TrimSpace(content) == "" {
 		return nil
 	}
@@ -648,6 +673,9 @@ func (c *Chunker) ChunkMarkdownContent(
 
 	// Apply minimum size filter - merge tiny chunks
 	chunks = mergeSmallChunks(chunks, minTokens, maxTokens)
+
+	// Add overlap between consecutive chunks for context continuity
+	chunks = addChunkOverlap(chunks, ChunkOverlapTokens)
 
 	return chunks
 }
@@ -934,6 +962,30 @@ func mergeSmallChunks(chunks []DocumentChunk, minTokens, maxTokens int) []Docume
 	return result
 }
 
+// addChunkOverlap prepends context from the previous chunk to each chunk.
+// This improves retrieval when a query spans chunk boundaries.
+func addChunkOverlap(chunks []DocumentChunk, overlapTokens int) []DocumentChunk {
+	if len(chunks) <= 1 || overlapTokens <= 0 {
+		return chunks
+	}
+
+	for i := 1; i < len(chunks); i++ {
+		prevContent := chunks[i-1].Content
+		overlapChars := overlapTokens * 4 // Token approximation (4 chars/token)
+
+		if len(prevContent) > overlapChars {
+			// Take the last N characters from the previous chunk
+			overlap := prevContent[len(prevContent)-overlapChars:]
+			// Find a sentence boundary to avoid cutting mid-sentence
+			if idx := strings.Index(overlap, ". "); idx > 0 {
+				overlap = overlap[idx+2:]
+			}
+			chunks[i].Content = "[...] " + overlap + "\n\n" + chunks[i].Content
+		}
+	}
+	return chunks
+}
+
 // ============================================================================
 // RAW CONTENT CHUNKING (for unstructured files)
 // ============================================================================
@@ -941,6 +993,10 @@ func mergeSmallChunks(chunks []DocumentChunk, minTokens, maxTokens int) []Docume
 // ChunkRawContent chunks arbitrary unstructured text content for RAG indexing.
 // This is used when content doesn't have structured annotations (KB.MD/POLICY.MD format)
 // and should just be chunked for retrieval.
+//
+// Deprecated: Use ChunkMarkdownContent directly instead. This function auto-detects
+// markdown headers and delegates to ChunkMarkdownContent anyway. For plain text,
+// it falls back to paragraph-based chunking which is less reliable.
 //
 // Parameters:
 //   - content: The raw text content to chunk

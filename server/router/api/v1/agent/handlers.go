@@ -951,33 +951,10 @@ func (h *Handler) HandleImport(c echo.Context) error {
 }
 
 // importFiles imports KB and Policy files for a tenant/audience.
+// This simplified version skips structured parsing and uses markdown-based
+// unstructured chunking for RAG. Let embeddings handle relevance ranking.
 func (h *Handler) importFiles(ctx context.Context, tenantID int32, audienceType, kbContent, policyContent string) (*AudienceInfo, error) {
-	parser := h.service.parser
-
-	// Parse KB with metadata about structured content
-	kbResult, err := parser.ParseKBWithResult(kbContent, tenantID, audienceType)
-	if err != nil {
-		return nil, err
-	}
-	parsedKB := kbResult.KB
-
-	// Parse Policy with metadata about structured content
-	policyResult, err := parser.ParsePolicyWithResult(policyContent, tenantID, audienceType)
-	if err != nil {
-		return nil, err
-	}
-	parsedPolicy := policyResult.Policy
-
-	// Log content structure detection
-	slog.Info("parsed content structure",
-		"tenantID", tenantID,
-		"audience", audienceType,
-		"kb_structured", kbResult.IsStructured,
-		"kb_items", kbResult.ParsedCount,
-		"policy_structured", policyResult.IsStructured,
-		"policy_items", policyResult.ParsedCount)
-
-	// Clear existing data for this audience
+	// Clear existing structured data for this audience (cleanup from previous imports)
 	h.store.DeleteAgentServices(ctx, tenantID, audienceType)
 	h.store.DeleteAgentExclusions(ctx, tenantID, audienceType)
 	h.store.DeleteAgentFAQs(ctx, tenantID, audienceType)
@@ -986,85 +963,29 @@ func (h *Handler) importFiles(ctx context.Context, tenantID int32, audienceType,
 	h.store.DeleteAgentIntents(ctx, tenantID, &audienceType)
 	h.store.DeleteAgentRules(ctx, tenantID, audienceType)
 	h.store.DeleteAgentAudience(ctx, tenantID, audienceType)
-
-	// Insert services
-	for _, s := range parsedKB.Services {
-		h.store.CreateAgentService(ctx, s)
-	}
-
-	// Insert exclusions
-	for _, e := range parsedKB.Exclusions {
-		h.store.CreateAgentExclusion(ctx, e)
-	}
-
-	// Insert coverage (shared, so only insert if not exists)
 	if audienceType == "external" {
 		h.store.DeleteAgentCoverage(ctx, tenantID)
-		for _, c := range parsedKB.Coverage {
-			h.store.CreateAgentCoverage(ctx, c)
-		}
 	}
 
-	// Insert FAQs
-	for _, f := range parsedKB.FAQs {
-		h.store.CreateAgentFAQ(ctx, f)
+	// Extract emergency phone from KB content (uses regex, not parser)
+	emergencyPhone := ExtractPhoneFromKB(kbContent)
+	if emergencyPhone != "" {
+		slog.Info("extracted emergency phone from KB", "phone", emergencyPhone)
 	}
 
-	// Insert safety protocols
-	for _, s := range parsedKB.Safety {
-		h.store.CreateAgentSafetyProtocol(ctx, s)
-	}
-
-	// Insert KB sections
-	for _, s := range parsedKB.Sections {
-		h.store.CreateAgentKBSection(ctx, s)
-	}
-
-	// Insert intents
-	for _, i := range parsedPolicy.Intents {
-		h.store.CreateAgentIntent(ctx, i)
-	}
-
-	// Insert rules
-	for _, r := range parsedPolicy.Rules {
-		h.store.CreateAgentRule(ctx, r)
-	}
-
-	// Create audience config
-	// FIX: Extract emergency phone from KB content instead of using placeholder
-	// This prevents the situation where DB has (555) 000-0000 but KB.MD has real phone
-	emergencyPhoneFromKB := ExtractPhoneFromKB(kbContent)
-	if emergencyPhoneFromKB != "" {
-		slog.Info("extracted emergency phone from KB", "phone", emergencyPhoneFromKB)
-	}
-
-	if parsedPolicy.Audience != nil {
-		audience := parsedPolicy.Audience
-		// Prioritize phone from KB, then policy, then leave empty (no placeholder!)
-		if audience.EmergencyPhone == "" || !IsValidReplacementPhone(audience.EmergencyPhone) {
-			if emergencyPhoneFromKB != "" {
-				audience.EmergencyPhone = emergencyPhoneFromKB
-			}
-			// If still no valid phone, leave empty - do NOT set placeholder
-			// The sanitizer will handle missing phones by using [phone number] placeholder
-		}
-		h.store.CreateAgentAudience(ctx, audience)
-	} else {
-		// Create default audience config
-		// Use extracted phone from KB, or leave empty (no placeholder!)
-		h.store.CreateAgentAudience(ctx, &store.AgentAudience{
-			TenantID:                      tenantID,
-			AudienceType:                  audienceType,
-			Role:                          parsedPolicy.Identity.Role,
-			Tone:                          parsedPolicy.Identity.Tone,
-			BrandVoice:                    parsedPolicy.Identity.BrandVoice,
-			Guidelines:                    parsedPolicy.Identity.Guidelines,
-			EmergencyPhone:                emergencyPhoneFromKB, // Use KB phone or empty, never placeholder
-			EmergencyUrgencyThreshold:     4,
-			EscalationConfidenceThreshold: 0.85,
-			RateLimitRPM:                  60,
-		})
-	}
+	// Create audience with defaults (no parsing needed)
+	h.store.CreateAgentAudience(ctx, &store.AgentAudience{
+		TenantID:                      tenantID,
+		AudienceType:                  audienceType,
+		Role:                          "assistant",
+		Tone:                          "professional",
+		BrandVoice:                    "",
+		Guidelines:                    nil,
+		EmergencyPhone:                emergencyPhone,
+		EmergencyUrgencyThreshold:     4,
+		EscalationConfidenceThreshold: 0.85,
+		RateLimitRPM:                  60,
+	})
 
 	// Store source files
 	if kbContent != "" {
@@ -1092,30 +1013,27 @@ func (h *Handler) importFiles(ctx context.Context, tenantID int32, audienceType,
 		}
 	}
 
-	// Index content for RAG pipeline
-	// For unstructured content, RAG is the primary retrieval mechanism
-	if err := h.indexContentForRAG(ctx, tenantID, audienceType, parsedKB, parsedPolicy, kbContent, policyContent); err != nil {
+	// Index content for RAG pipeline (unstructured markdown chunking)
+	if err := h.indexContentForRAG(ctx, tenantID, audienceType, kbContent, policyContent); err != nil {
 		slog.Warn("Failed to index content for RAG", "error", err, "tenantID", tenantID, "audience", audienceType)
 		// Don't fail the import if indexing fails - RAG is an enhancement
 	}
 
-	// Determine if this tenant has structured content
-	hasStructuredContent := kbResult.IsStructured || policyResult.IsStructured
-
+	// Return simplified AudienceInfo (no counts since we don't parse structured content)
 	return &AudienceInfo{
-		ServicesCount:        len(parsedKB.Services),
-		IntentsCount:         len(parsedPolicy.Intents),
-		FAQsCount:            len(parsedKB.FAQs),
-		RulesCount:           len(parsedPolicy.Rules),
-		KBIsStructured:       kbResult.IsStructured,
-		PolicyIsStructured:   policyResult.IsStructured,
-		HasStructuredContent: hasStructuredContent,
+		ServicesCount:        0,
+		IntentsCount:         0,
+		FAQsCount:            0,
+		RulesCount:           0,
+		KBIsStructured:       false,
+		PolicyIsStructured:   false,
+		HasStructuredContent: false,
 	}, nil
 }
 
-// indexContentForRAG indexes parsed KB and Policy content into the vector database.
-// Falls back to heading-based chunking when no annotations are found in the raw content.
-func (h *Handler) indexContentForRAG(ctx context.Context, tenantID int32, audienceType string, kb *ParsedKB, policy *ParsedPolicy, rawKBContent, rawPolicyContent string) error {
+// indexContentForRAG indexes raw KB and Policy content into the vector database.
+// Uses markdown-based unstructured chunking and lets embeddings handle relevance ranking.
+func (h *Handler) indexContentForRAG(ctx context.Context, tenantID int32, audienceType string, rawKBContent, rawPolicyContent string) error {
 	chunker := h.service.chunker
 	vectorDB := h.service.vectorDB
 
@@ -1128,18 +1046,6 @@ func (h *Handler) indexContentForRAG(ctx context.Context, tenantID int32, audien
 		return fmt.Errorf("failed to delete existing chunks: %w", err)
 	}
 
-	// Helper function to check if ParsedKB has any content
-	hasKBContent := func(k *ParsedKB) bool {
-		return k != nil && (len(k.Services) > 0 || len(k.FAQs) > 0 ||
-			len(k.Safety) > 0 || len(k.Sections) > 0 ||
-			len(k.Exclusions) > 0 || len(k.Coverage) > 0)
-	}
-
-	// Helper function to check if ParsedPolicy has any content
-	hasPolicyContent := func(p *ParsedPolicy) bool {
-		return p != nil && (len(p.Rules) > 0 || len(p.Intents) > 0)
-	}
-
 	// Get embedding provider for chunk size calculation
 	embeddingProvider := ""
 	if h.service.vectorDBConfig != nil && h.service.vectorDBConfig.EmbeddingConfig != nil {
@@ -1149,33 +1055,15 @@ func (h *Handler) indexContentForRAG(ctx context.Context, tenantID int32, audien
 
 	var allChunks []DocumentChunk
 
-	// Chunk KB content
-	if kb != nil && hasKBContent(kb) {
-		// Use structured annotation-based chunking
-		kbChunks := chunker.ChunkKBContent(kb, tenantID, audienceType, 1)
-		allChunks = append(allChunks, kbChunks...)
-	} else if rawKBContent != "" {
-		// Fallback: chunk raw content when no annotations found
-		// ChunkRawContent auto-detects markdown vs plain text
-		slog.Info("No KB annotations found, using raw content chunking",
-			"tenantID", tenantID,
-			"audience", audienceType)
-		kbChunks := chunker.ChunkRawContent(rawKBContent, "kb", tenantID, audienceType, 1, maxChunkTokens)
+	// Use markdown-based unstructured chunking
+	// Let embeddings + hybrid search handle relevance ranking
+	if rawKBContent != "" {
+		kbChunks := chunker.ChunkMarkdownContent(rawKBContent, tenantID, audienceType, "kb", 1, maxChunkTokens)
 		allChunks = append(allChunks, kbChunks...)
 	}
 
-	// Chunk Policy content
-	if policy != nil && hasPolicyContent(policy) {
-		// Use structured annotation-based chunking
-		policyChunks := chunker.ChunkPolicyContent(policy, tenantID, audienceType, 1)
-		allChunks = append(allChunks, policyChunks...)
-	} else if rawPolicyContent != "" {
-		// Fallback: chunk raw content when no annotations found
-		// ChunkRawContent auto-detects markdown vs plain text
-		slog.Info("No Policy annotations found, using raw content chunking",
-			"tenantID", tenantID,
-			"audience", audienceType)
-		policyChunks := chunker.ChunkRawContent(rawPolicyContent, "policy", tenantID, audienceType, 1, maxChunkTokens)
+	if rawPolicyContent != "" {
+		policyChunks := chunker.ChunkMarkdownContent(rawPolicyContent, tenantID, audienceType, "policy", 1, maxChunkTokens)
 		allChunks = append(allChunks, policyChunks...)
 	}
 
@@ -1188,7 +1076,7 @@ func (h *Handler) indexContentForRAG(ctx context.Context, tenantID int32, audien
 		return fmt.Errorf("failed to insert chunks: %w", err)
 	}
 
-	slog.Info("Indexed content for RAG",
+	slog.Info("Indexed content for RAG (unstructured)",
 		"tenantID", tenantID,
 		"audience", audienceType,
 		"chunks", len(allChunks))
@@ -3693,20 +3581,50 @@ func (h *Handler) HandleGetRAGStats(c echo.Context) error {
 		tenants = []*store.AgentTenant{}
 	}
 
-	// Build tenant info list
+	// Build tenant info list with actual chunk counts using ListChunks
+	// LanceDB Stats() doesn't populate per-tenant counts, so we compute them here
 	tenantInfos := make([]TenantRAGInfo, 0, len(tenants))
+	var totalChunksComputed int64 = 0
+
+	// Initialize content counts if not already populated
+	if stats.ContentCounts == nil {
+		stats.ContentCounts = make(map[string]int64)
+	}
+
 	for _, t := range tenants {
-		chunkCount := int64(0)
-		if stats.TenantCounts != nil {
-			chunkCount = stats.TenantCounts[t.ID]
+		// Use ListChunks to get all chunks for this tenant
+		chunks, err := h.service.vectorDB.ListChunks(ctx, t.ID)
+		if err != nil {
+			slog.Warn("failed to list chunks for tenant", "tenantID", t.ID, "error", err)
+			chunks = []DocumentChunk{}
 		}
+
+		tenantChunkCount := int64(len(chunks))
+
+		// Count by content type
+		for _, chunk := range chunks {
+			stats.ContentCounts[chunk.ContentType]++
+		}
+
+		// Update tenant counts map
+		if stats.TenantCounts == nil {
+			stats.TenantCounts = make(map[int32]int64)
+		}
+		stats.TenantCounts[t.ID] = tenantChunkCount
+		totalChunksComputed += tenantChunkCount
+
 		tenantInfos = append(tenantInfos, TenantRAGInfo{
 			ID:          t.ID,
 			Slug:        t.Slug,
 			CompanyName: t.CompanyName,
-			ChunkCount:  chunkCount,
+			ChunkCount:  tenantChunkCount,
 			LastIndexed: t.UpdatedAt.Format(time.RFC3339),
 		})
+	}
+
+	// Use computed total if the Stats() returned 0 (which happens with LanceDB)
+	if stats.TotalChunks == 0 {
+		stats.TotalChunks = totalChunksComputed
 	}
 
 	// Get embedding config
@@ -3766,48 +3684,39 @@ func (h *Handler) HandleGetTenantRAGDetails(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
 
-	// Get chunks for this tenant by searching with empty query to get all
-	// We'll search both audiences
+	// Get all chunks for this tenant using ListChunks
+	chunks, err := h.service.vectorDB.ListChunks(ctx, tenantID)
+	if err != nil {
+		slog.Warn("failed to list chunks for tenant RAG details", "tenantID", tenantID, "error", err)
+		chunks = []DocumentChunk{}
+	}
+
 	chunksByType := make(map[string]int64)
 	chunksByAudience := make(map[string]int64)
-	var sampleChunks []ChunkInfo
+	sampleChunks := make([]ChunkInfo, 0) // Initialize as empty slice, not nil, to serialize as [] instead of null
 
-	for _, audience := range []string{"external", "internal"} {
-		result, err := h.service.vectorDB.Search(ctx, SearchQuery{
-			TenantID:     tenantID,
-			AudienceType: audience,
-			TopK:         100, // Get up to 100 for counting
-			MinScore:     0,   // Accept all
-		})
-		if err != nil {
-			slog.Warn("search failed for tenant RAG details", "tenantID", tenantID, "audience", audience, "error", err)
-			continue
-		}
+	for _, chunk := range chunks {
+		chunksByType[chunk.ContentType]++
+		chunksByAudience[chunk.AudienceType]++
 
-		chunksByAudience[audience] = int64(len(result.Chunks))
-
-		for _, chunk := range result.Chunks {
-			chunksByType[chunk.ContentType]++
-
-			// Collect sample chunks (up to 5 total)
-			if len(sampleChunks) < 5 {
-				indexedAt := ""
-				if !chunk.IndexedAt.IsZero() {
-					indexedAt = chunk.IndexedAt.Format(time.RFC3339)
-				}
-				sampleChunks = append(sampleChunks, ChunkInfo{
-					ID:           chunk.ID,
-					ContentType:  chunk.ContentType,
-					AudienceType: chunk.AudienceType,
-					Title:        chunk.Title,
-					Content:      truncateString(chunk.Content, 200),
-					Code:         chunk.Code,
-					IsActive:     chunk.IsActive,
-					IsEmergency:  chunk.IsEmergency,
-					Priority:     chunk.Priority,
-					IndexedAt:    indexedAt,
-				})
+		// Collect sample chunks (up to 5 total)
+		if len(sampleChunks) < 5 {
+			indexedAt := ""
+			if !chunk.IndexedAt.IsZero() {
+				indexedAt = chunk.IndexedAt.Format(time.RFC3339)
 			}
+			sampleChunks = append(sampleChunks, ChunkInfo{
+				ID:           chunk.ID,
+				ContentType:  chunk.ContentType,
+				AudienceType: chunk.AudienceType,
+				Title:        chunk.Title,
+				Content:      truncateString(chunk.Content, 200),
+				Code:         chunk.Code,
+				IsActive:     chunk.IsActive,
+				IsEmergency:  chunk.IsEmergency,
+				Priority:     chunk.Priority,
+				IndexedAt:    indexedAt,
+			})
 		}
 	}
 
