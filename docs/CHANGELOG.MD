@@ -15,10 +15,22 @@ All notable changes to the bchat AI Agent System are documented in this file.
   - Files: `handlers.go`, `chunker.go`, `vectordb.go`
 
 - **Increased Chunk Size for OpenRouter** - Optimized for `openai/text-embedding-3-small` (8191 token limit)
-  - `GetMaxChunkTokens("openrouter")` increased from 2000 to 4000 tokens
-  - `GetMinChunkTokens("openrouter")` increased from 100 to 200 tokens
-  - Reduces chunk count for large KB files
-  - File: `chunker.go:496-519`
+  - `GetMaxChunkTokens("openrouter")` increased from 4000 to 7000 tokens (85% of 8191 limit)
+  - Reduces chunk count by ~43% for large KB files (from ~11000 to ~6500 chunks)
+  - File: `chunker.go:78`
+
+### Removed
+- **Deprecated Chunker Functions** - Removed ~620 lines of unused structured chunking code
+  - Deleted `ChunkKBContent()` - used structured annotation parsing
+  - Deleted `ChunkPolicyContent()` - used structured annotation parsing
+  - Deleted `ChunkFromStoreTypes()` - direct database chunking
+  - Deleted `ChunkRawContent()` - redundant wrapper around `ChunkMarkdownContent()`
+  - Deleted `splitIntoParagraphs()` - helper only used by `ChunkRawContent`
+  - Deleted 8 `build*Content()` helper functions (Service, FAQ, Exclusion, Coverage, Safety, KBSection, Rule, Intent)
+  - Deleted `GetTextsForEmbedding()` - unused utility function
+  - Removed unused `store` import from chunker.go
+  - File reduced from ~1188 lines to 569 lines (~52% reduction)
+  - File: `chunker.go`
 
 ### Fixed
 - **UTF-8 Sanitization for LanceDB** - Fixed "Invalid UTF8 sequence" errors during RAG indexing
