@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -45,7 +46,23 @@ func NewEmbeddingConfigFromEnv() *EmbeddingConfig {
 		dimension = getOpenRouterDimension(model)
 	default:
 		model = getEnvOrDefault("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
-		dimension = 384 // Default for MiniLM
+		// Try to detect dimension from model name
+		detectedDim := getOpenRouterDimension(model)
+		// If getOpenRouterDimension returns 1536 (default/unknown) but it's not an OpenAI model,
+		// and we are in the default provider case (likely local/MiniLM), default to 384.
+		// This preserves backward compatibility for "all-MiniLM-L6-v2" while supporting known models like Qwen.
+		if detectedDim == 1536 && !strings.Contains(model, "openai") && !strings.Contains(model, "text-embedding") && !strings.Contains(model, "ada-002") {
+			dimension = 384
+		} else {
+			dimension = detectedDim
+		}
+	}
+
+	// Allow explicit override via environment variable
+	if v := os.Getenv("EMBEDDING_DIMENSION"); v != "" {
+		if d, err := strconv.Atoi(v); err == nil && d > 0 {
+			dimension = d
+		}
 	}
 
 	return &EmbeddingConfig{
@@ -67,6 +84,9 @@ func getOpenRouterDimension(modelName string) int {
 		return 3072
 	case "openai/text-embedding-ada-002", "openai/text-embedding-3-small":
 		return 1536
+	// Qwen models
+	case "qwen/qwen3-embedding-8b":
+		return 4096
 	// Sentence-transformers models
 	case "sentence-transformers/all-MiniLM-L6-v2",
 		"sentence-transformers/all-MiniLM-L12-v2",
@@ -450,4 +470,16 @@ func getEnvDuration(key string, defaultVal time.Duration) time.Duration {
 		slog.Warn("Invalid duration format for env var, using default", "key", key, "value", v, "default", defaultVal)
 	}
 	return defaultVal
+}
+
+// GetEmbeddingBatchSize returns the embedding batch size from env or default.
+// Controls how many chunks are sent to embedding API per request.
+// Default is 25. For Qwen3 (32K context), up to 40 is safe with 800-token chunks.
+func GetEmbeddingBatchSize() int {
+	if v := os.Getenv("EMBEDDING_BATCH_SIZE"); v != "" {
+		if size, err := strconv.Atoi(v); err == nil && size > 0 && size <= 200 {
+			return size
+		}
+	}
+	return 25
 }

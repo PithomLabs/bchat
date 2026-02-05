@@ -19,10 +19,15 @@ import (
 	"github.com/lancedb/lancedb-go/pkg/lancedb"
 )
 
-const (
-	lanceTableName     = "kb_documents"
-	embeddingDimension = 384 // Default for all-MiniLM-L6-v2
-)
+// legacyTableName is the old fixed table name used before dimension-based naming.
+// This is kept for migration purposes only.
+const legacyTableName = "kb_documents"
+
+// getTableNameForDimension returns the table name for a given embedding dimension.
+// Format: kb_documents_<dimension> (e.g., kb_documents_1536, kb_documents_384)
+func getTableNameForDimension(dim int) string {
+	return fmt.Sprintf("kb_documents_%d", dim)
+}
 
 // LanceVectorDB is a LanceDB-backed implementation of VectorDB.
 type LanceVectorDB struct {
@@ -31,7 +36,8 @@ type LanceVectorDB struct {
 	embedSvc       EmbeddingService
 	config         *VectorDBConfig
 	mu             sync.RWMutex
-	hasVectorIndex bool // Track if IVF-PQ index has been created (requires data)
+	hasVectorIndex bool   // Track if IVF-PQ index has been created (requires data)
+	tableName      string // Computed from embedding dimension (e.g., kb_documents_1536)
 }
 
 // newLanceVectorDB creates a new LanceDB-backed vector database.
@@ -79,10 +85,20 @@ func newLanceVectorDB(config *VectorDBConfig, embedSvc EmbeddingService) (Vector
 		return nil, fmt.Errorf("failed to connect to LanceDB at %s: %w", uri, err)
 	}
 
+	// Compute table name from embedding dimension
+	tableName := getTableNameForDimension(embedSvc.Dimension())
+
 	db := &LanceVectorDB{
-		conn:     conn,
-		embedSvc: embedSvc,
-		config:   config,
+		conn:      conn,
+		embedSvc:  embedSvc,
+		config:    config,
+		tableName: tableName,
+	}
+
+	// Migrate legacy table if it exists
+	if err := db.migrateLegacyTable(ctx); err != nil {
+		slog.Warn("Legacy table migration warning", "error", err)
+		// Non-fatal: continue with dimension-based table
 	}
 
 	// Open or create the table
@@ -91,7 +107,11 @@ func newLanceVectorDB(config *VectorDBConfig, embedSvc EmbeddingService) (Vector
 		return nil, fmt.Errorf("failed to ensure table: %w", err)
 	}
 
-	slog.Info("LanceDB vector database initialized", "uri", uri, "provider", config.StorageProvider)
+	slog.Info("LanceDB vector database initialized",
+		"uri", uri,
+		"provider", config.StorageProvider,
+		"tableName", tableName,
+		"dimension", embedSvc.Dimension())
 	return db, nil
 }
 
@@ -108,19 +128,19 @@ func (db *LanceVectorDB) ensureTable(ctx context.Context) error {
 
 	tableExists := false
 	for _, name := range tableNames {
-		if name == lanceTableName {
+		if name == db.tableName {
 			tableExists = true
 			break
 		}
 	}
 
 	if tableExists {
-		table, err := db.conn.OpenTable(ctx, lanceTableName)
+		table, err := db.conn.OpenTable(ctx, db.tableName)
 		if err != nil {
 			return fmt.Errorf("failed to open table: %w", err)
 		}
 		db.table = table
-		slog.Debug("Opened existing LanceDB table", "name", lanceTableName)
+		slog.Debug("Opened existing LanceDB table", "name", db.tableName)
 	} else {
 		// Create schema
 		schema, err := db.buildSchema()
@@ -128,7 +148,7 @@ func (db *LanceVectorDB) ensureTable(ctx context.Context) error {
 			return fmt.Errorf("failed to build schema: %w", err)
 		}
 
-		table, err := db.conn.CreateTable(ctx, lanceTableName, schema)
+		table, err := db.conn.CreateTable(ctx, db.tableName, schema)
 		if err != nil {
 			return fmt.Errorf("failed to create table: %w", err)
 		}
@@ -139,7 +159,7 @@ func (db *LanceVectorDB) ensureTable(ctx context.Context) error {
 			slog.Warn("Failed to create indexes", "error", err)
 		}
 
-		slog.Info("Created new LanceDB table", "name", lanceTableName)
+		slog.Info("Created new LanceDB table", "name", db.tableName)
 	}
 
 	return nil
@@ -147,10 +167,10 @@ func (db *LanceVectorDB) ensureTable(ctx context.Context) error {
 
 // buildSchema creates the Arrow schema for the documents table.
 func (db *LanceVectorDB) buildSchema() (contracts.ISchema, error) {
-	dim := embeddingDimension
-	if db.embedSvc != nil {
-		dim = db.embedSvc.Dimension()
+	if db.embedSvc == nil {
+		return nil, fmt.Errorf("embedding service is required to build schema")
 	}
+	dim := db.embedSvc.Dimension()
 
 	schema, err := lancedb.NewSchemaBuilder().
 		AddStringField("id", false).
@@ -219,8 +239,55 @@ func (db *LanceVectorDB) ensureVectorIndex(ctx context.Context) error {
 	}
 
 	db.hasVectorIndex = true
-	slog.Info("Created IVF-PQ vector index", "table", lanceTableName)
+	slog.Info("Created IVF-PQ vector index", "table", db.tableName)
 	return nil
+}
+
+// migrateLegacyTable checks for the old "kb_documents" table and drops it if found.
+// With dimension-based table naming, the legacy table is no longer used.
+// Data must be reindexed after migration.
+func (db *LanceVectorDB) migrateLegacyTable(ctx context.Context) error {
+	// Check if legacy table exists
+	tableNames, err := db.conn.TableNames(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list tables: %w", err)
+	}
+
+	legacyExists := false
+	for _, name := range tableNames {
+		if name == legacyTableName {
+			legacyExists = true
+			break
+		}
+	}
+
+	if !legacyExists {
+		return nil // No migration needed
+	}
+
+	slog.Warn("Found legacy 'kb_documents' table - this data will be dropped",
+		"reason", "migrating to dimension-based table naming",
+		"newTable", db.tableName,
+		"action", "Please rebuild indexes for all tenants after restart")
+
+	// Drop the legacy table
+	if err := db.conn.DropTable(ctx, legacyTableName); err != nil {
+		// Ignore "not found" errors
+		if !strings.Contains(err.Error(), "not found") && !strings.Contains(err.Error(), "was not found") {
+			return fmt.Errorf("failed to drop legacy table: %w", err)
+		}
+	}
+
+	slog.Info("Dropped legacy 'kb_documents' table - please rebuild indexes for all tenants")
+	return nil
+}
+
+// Dimension returns the embedding dimension for this VectorDB instance.
+func (db *LanceVectorDB) Dimension() int {
+	if db.embedSvc == nil {
+		return 0
+	}
+	return db.embedSvc.Dimension()
 }
 
 // getTableEmbeddingDimension returns the embedding dimension from the table schema.
@@ -263,15 +330,15 @@ func (db *LanceVectorDB) dropAndRecreateTable(ctx context.Context) error {
 	}
 
 	// Drop the table (ignore "not found" error - table may not exist)
-	if err := db.conn.DropTable(ctx, lanceTableName); err != nil {
+	if err := db.conn.DropTable(ctx, db.tableName); err != nil {
 		// Ignore "table not found" errors - this is expected if table was already deleted
 		if !strings.Contains(err.Error(), "not found") && !strings.Contains(err.Error(), "was not found") {
 			return fmt.Errorf("failed to drop table: %w", err)
 		}
-		slog.Info("Table did not exist, creating fresh", "table", lanceTableName)
+		slog.Info("Table did not exist, creating fresh", "table", db.tableName)
 	}
 
-	slog.Info("Dropped existing LanceDB table due to dimension mismatch", "table", lanceTableName)
+	slog.Info("Dropped existing LanceDB table due to dimension mismatch", "table", db.tableName)
 
 	// Create new table with current schema
 	schema, err := db.buildSchema()
@@ -279,7 +346,7 @@ func (db *LanceVectorDB) dropAndRecreateTable(ctx context.Context) error {
 		return fmt.Errorf("failed to build schema: %w", err)
 	}
 
-	table, err := db.conn.CreateTable(ctx, lanceTableName, schema)
+	table, err := db.conn.CreateTable(ctx, db.tableName, schema)
 	if err != nil {
 		return fmt.Errorf("failed to create new table: %w", err)
 	}
@@ -293,7 +360,7 @@ func (db *LanceVectorDB) dropAndRecreateTable(ctx context.Context) error {
 		slog.Warn("Failed to create indexes on new table", "error", err)
 	}
 
-	slog.Info("Created new LanceDB table with updated schema", "table", lanceTableName)
+	slog.Info("Created new LanceDB table with updated schema", "table", db.tableName)
 	return nil
 }
 
@@ -307,37 +374,15 @@ func (db *LanceVectorDB) Insert(ctx context.Context, chunks []DocumentChunk) err
 	defer db.mu.Unlock()
 
 	// Batch size for embedding and insertion (handles large files)
-	// Smaller batches (25) reduce individual request time and timeout risk
-	const batchSize = 25
+	// Configurable via EMBEDDING_BATCH_SIZE env var (default: 25, max: 200)
+	batchSize := GetEmbeddingBatchSize()
 
 	totalChunks := len(chunks)
-	slog.Info("Starting batched insert", "totalChunks", totalChunks, "batchSize", batchSize)
+	slog.Info("Starting batched insert", "totalChunks", totalChunks, "batchSize", batchSize, "table", db.tableName)
 
-	// Check for dimension mismatch before processing (use first chunk as sample)
-	// We need to embed at least one chunk to check dimensions
-	if len(chunks) > 0 && len(chunks[0].Embedding) == 0 {
-		sampleText := fmt.Sprintf("%s: %s", chunks[0].Title, chunks[0].Content)
-		sampleEmbeddings, err := db.embedSvc.Embed(ctx, []string{sampleText})
-		if err != nil {
-			return fmt.Errorf("failed to generate sample embedding: %w", err)
-		}
-		chunks[0].Embedding = sampleEmbeddings[0]
-
-		existingDim := db.getTableEmbeddingDimension(ctx)
-		newDim := len(chunks[0].Embedding)
-
-		if existingDim > 0 && existingDim != newDim {
-			slog.Warn("Embedding dimension mismatch detected, recreating table",
-				"table", lanceTableName,
-				"existingDimension", existingDim,
-				"newDimension", newDim,
-				"reason", "embedding provider likely changed")
-
-			if err := db.dropAndRecreateTable(ctx); err != nil {
-				return fmt.Errorf("failed to recreate table for dimension change: %w", err)
-			}
-		}
-	}
+	// NOTE: Dimension mismatch check removed - with dimension-based table naming,
+	// each dimension gets its own table (e.g., kb_documents_1536, kb_documents_384).
+	// This ensures different embedding providers can coexist without data loss.
 
 	// Process chunks in batches
 	for batchStart := 0; batchStart < totalChunks; batchStart += batchSize {
@@ -421,7 +466,8 @@ func (db *LanceVectorDB) InsertWithCheckpoint(ctx context.Context, chunks []Docu
 		opts.RetryDelay = 5 * time.Second
 	}
 
-	const batchSize = 25
+	// Batch size configurable via EMBEDDING_BATCH_SIZE env var (default: 25, max: 200)
+	batchSize := GetEmbeddingBatchSize()
 	totalChunks := len(chunks)
 	totalBatches := (totalChunks + batchSize - 1) / batchSize
 	startBatch := opts.StartBatch
@@ -430,31 +476,11 @@ func (db *LanceVectorDB) InsertWithCheckpoint(ctx context.Context, chunks []Docu
 		"totalChunks", totalChunks,
 		"batchSize", batchSize,
 		"startBatch", startBatch,
-		"totalBatches", totalBatches)
+		"totalBatches", totalBatches,
+		"table", db.tableName)
 
-	// Check for dimension mismatch before processing (only if starting fresh)
-	if startBatch == 0 && len(chunks) > 0 && len(chunks[0].Embedding) == 0 {
-		sampleText := fmt.Sprintf("%s: %s", chunks[0].Title, chunks[0].Content)
-		sampleEmbeddings, err := db.embedSvc.Embed(ctx, []string{sampleText})
-		if err != nil {
-			return fmt.Errorf("failed to generate sample embedding: %w", err)
-		}
-		chunks[0].Embedding = sampleEmbeddings[0]
-
-		existingDim := db.getTableEmbeddingDimension(ctx)
-		newDim := len(chunks[0].Embedding)
-
-		if existingDim > 0 && existingDim != newDim {
-			slog.Warn("Embedding dimension mismatch detected, recreating table",
-				"table", lanceTableName,
-				"existingDimension", existingDim,
-				"newDimension", newDim)
-
-			if err := db.dropAndRecreateTable(ctx); err != nil {
-				return fmt.Errorf("failed to recreate table for dimension change: %w", err)
-			}
-		}
-	}
+	// NOTE: Dimension mismatch check removed - with dimension-based table naming,
+	// each dimension gets its own table (e.g., kb_documents_1536, kb_documents_384).
 
 	// Process chunks in batches starting from startBatch
 	for batchNum := startBatch; batchNum < totalBatches; batchNum++ {
@@ -569,12 +595,11 @@ func (db *LanceVectorDB) processSingleBatch(ctx context.Context, batch []Documen
 
 // chunksToArrowRecord converts DocumentChunks to an Arrow Record.
 func (db *LanceVectorDB) chunksToArrowRecord(chunks []DocumentChunk) (arrow.Record, error) {
-	pool := memory.NewGoAllocator()
-
-	dim := embeddingDimension
-	if db.embedSvc != nil {
-		dim = db.embedSvc.Dimension()
+	if db.embedSvc == nil {
+		return nil, fmt.Errorf("embedding service is required")
 	}
+	pool := memory.NewGoAllocator()
+	dim := db.embedSvc.Dimension()
 
 	// Build schema
 	schema := arrow.NewSchema([]arrow.Field{
@@ -705,6 +730,12 @@ func (db *LanceVectorDB) Delete(ctx context.Context, tenantID int32, audienceTyp
 	return nil
 }
 
+// TableName returns the table name for this VectorDB instance.
+// Useful for debugging dimension mismatch issues.
+func (db *LanceVectorDB) TableName() string {
+	return db.tableName
+}
+
 // Search performs vector or hybrid search based on query parameters.
 func (db *LanceVectorDB) Search(ctx context.Context, query SearchQuery) (*SearchResult, error) {
 	start := time.Now()
@@ -724,6 +755,25 @@ func (db *LanceVectorDB) Search(ctx context.Context, query SearchQuery) (*Search
 		queryEmbedding = embeddings[0]
 	} else {
 		return nil, fmt.Errorf("query must have either QueryText or QueryEmbedding")
+	}
+
+	// Validate query embedding dimension matches table dimension
+	// This catches edge cases where the embedding model changed without server restart
+	expectedDim := db.embedSvc.Dimension()
+	actualDim := len(queryEmbedding)
+	if actualDim != expectedDim {
+		return nil, fmt.Errorf("embedding dimension mismatch: query has %d dims but embedding service expects %d dims. "+
+			"This may indicate the embedding model changed. Please restart server or rebuild index",
+			actualDim, expectedDim)
+	}
+
+	// Check table dimension matches embedding service dimension
+	// This is a safety check for when embedding provider changed between runs
+	tableDim := db.getTableEmbeddingDimension(ctx)
+	if tableDim > 0 && tableDim != expectedDim {
+		return nil, fmt.Errorf("embedding dimension mismatch: table '%s' has %d dims but current embedding service uses %d dims. "+
+			"The embedding model may have changed since content was indexed. Please rebuild the index with 'Rebuild Index' button in Agent Admin",
+			db.tableName, tableDim, expectedDim)
 	}
 
 	// Build filter

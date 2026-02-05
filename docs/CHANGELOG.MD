@@ -4,6 +4,32 @@ All notable changes to the bchat AI Agent System are documented in this file.
 
 ---
 
+## 2026-02-06
+
+### Fixed
+- **Dimension Mismatch Error Messages** - Clear, actionable error messages when embedding model changes
+  - Previous: Cryptic LanceDB error `query dim(4096) doesn't match column dim(384)`
+  - Now: Clear message explaining dimension mismatch and directing user to rebuild index
+  - Added dimension validation in `Search()` method before querying LanceDB
+  - Checks both query embedding dimension and table schema dimension
+  - Files: `server/router/api/v1/agent/vectordb_lance.go`
+
+### Added
+- **TableName() Method** - Returns LanceDB table name for debugging dimension issues
+  - Useful for troubleshooting which dimension-specific table is being queried
+  - File: `server/router/api/v1/agent/vectordb_lance.go:735`
+
+- **GetEmbeddingDimension() Method** - Returns current VectorDB embedding dimension
+  - Thread-safe accessor for debugging embedding configuration
+  - File: `server/router/api/v1/agent/service.go:126`
+
+- **RefreshVectorDB() Method** - Recreates VectorDB with current environment configuration
+  - Useful for development when switching embedding providers without restart
+  - Closes old VectorDB and creates new one from current env vars
+  - File: `server/router/api/v1/agent/service.go:138`
+
+---
+
 ## 2026-02-03
 
 ### Changed

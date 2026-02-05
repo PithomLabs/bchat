@@ -848,28 +848,31 @@ func (h *Handler) HandleOnboard(c echo.Context) error {
 
 	// Process files for each audience
 	for _, audienceType := range []string{"external", "internal"} {
-		kbFile, err := c.FormFile(audienceType + "_kb_file")
-		policyFile, err2 := c.FormFile(audienceType + "_policy_file")
+		kbFile, _ := c.FormFile(audienceType + "_kb_file")
+		policyFile, _ := c.FormFile(audienceType + "_policy_file")
 
-		if err != nil || err2 != nil || kbFile == nil || policyFile == nil {
-			continue // Skip if files not provided
+		// Skip if no KB file provided (KB is required, Policy is optional)
+		if kbFile == nil {
+			continue
 		}
 
-		// Read KB file
+		// Read KB file (required)
 		kbSrc, err := kbFile.Open()
 		if err != nil {
+			slog.Warn("failed to open KB file", "audience", audienceType, "error", err)
 			continue
 		}
 		kbContent, _ := io.ReadAll(kbSrc)
 		kbSrc.Close()
 
-		// Read Policy file
-		policySrc, err := policyFile.Open()
-		if err != nil {
-			continue
+		// Read Policy file (optional)
+		var policyContent []byte
+		if policyFile != nil {
+			if policySrc, err := policyFile.Open(); err == nil {
+				policyContent, _ = io.ReadAll(policySrc)
+				policySrc.Close()
+			}
 		}
-		policyContent, _ := io.ReadAll(policySrc)
-		policySrc.Close()
 
 		// Import files
 		audienceInfo, err := h.importFiles(ctx, tenant.ID, audienceType, string(kbContent), string(policyContent))
@@ -1035,9 +1038,9 @@ func (h *Handler) importFiles(ctx context.Context, tenantID int32, audienceType,
 // Uses markdown-based unstructured chunking and lets embeddings handle relevance ranking.
 func (h *Handler) indexContentForRAG(ctx context.Context, tenantID int32, audienceType string, rawKBContent, rawPolicyContent string) error {
 	chunker := h.service.chunker
-	vectorDB := h.service.vectorDB
+	vectorDB := h.service.GetVectorDB()
 
-	if chunker == nil || vectorDB == nil {
+	if chunker == nil || vectorDB == nil || !h.service.IsRAGEnabled() {
 		return nil // RAG not enabled
 	}
 

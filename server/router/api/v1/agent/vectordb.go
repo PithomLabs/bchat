@@ -47,6 +47,10 @@ type VectorDB interface {
 
 	// ListChunks returns all chunks for a given tenant (used for stats/counting).
 	ListChunks(ctx context.Context, tenantID int32) ([]DocumentChunk, error)
+
+	// Dimension returns the embedding dimension this VectorDB handles.
+	// Returns 0 if not applicable (e.g., NoOpVectorDB).
+	Dimension() int
 }
 
 // VectorDBConfig holds configuration for the vector database.
@@ -466,6 +470,14 @@ func (db *MemoryVectorDB) ListChunks(ctx context.Context, tenantID int32) ([]Doc
 	return result, nil
 }
 
+// Dimension returns the embedding dimension for this VectorDB instance.
+func (db *MemoryVectorDB) Dimension() int {
+	if db.embedSvc == nil {
+		return 0
+	}
+	return db.embedSvc.Dimension()
+}
+
 // ============================================================================
 // NO-OP VECTOR DATABASE (When RAG is disabled)
 // ============================================================================
@@ -520,6 +532,11 @@ func (db *NoOpVectorDB) Stats(ctx context.Context) (*VectorDBStats, error) {
 // ListChunks returns empty results.
 func (db *NoOpVectorDB) ListChunks(ctx context.Context, tenantID int32) ([]DocumentChunk, error) {
 	return []DocumentChunk{}, nil
+}
+
+// Dimension returns 0 (not applicable for no-op).
+func (db *NoOpVectorDB) Dimension() int {
+	return 0
 }
 
 // ============================================================================

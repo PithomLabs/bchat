@@ -32,6 +32,7 @@ type Service struct {
 	vectorDB            VectorDB
 	vectorDBConfig      *VectorDBConfig
 	chunker             *Chunker
+	vectorDBMu          sync.RWMutex // Protects vectorDB access
 }
 
 // NewService creates a new agent service.
@@ -98,6 +99,68 @@ func NewService(s *store.Store, p *profile.Profile) *Service {
 	}
 
 	return svc
+}
+
+// GetVectorDB returns the current VectorDB instance.
+// Thread-safe accessor for the VectorDB.
+func (s *Service) GetVectorDB() VectorDB {
+	s.vectorDBMu.RLock()
+	defer s.vectorDBMu.RUnlock()
+	return s.vectorDB
+}
+
+// IsRAGEnabled returns true if RAG pipeline is enabled (not using NoOpVectorDB).
+func (s *Service) IsRAGEnabled() bool {
+	s.vectorDBMu.RLock()
+	defer s.vectorDBMu.RUnlock()
+	if s.vectorDB == nil {
+		return false
+	}
+	_, isNoOp := s.vectorDB.(*NoOpVectorDB)
+	return !isNoOp
+}
+
+// GetEmbeddingDimension returns the embedding dimension for the current VectorDB.
+// Returns 0 if VectorDB is not initialized or is a no-op implementation.
+// Useful for debugging dimension mismatch issues.
+func (s *Service) GetEmbeddingDimension() int {
+	s.vectorDBMu.RLock()
+	defer s.vectorDBMu.RUnlock()
+	if s.vectorDB == nil {
+		return 0
+	}
+	return s.vectorDB.Dimension()
+}
+
+// RefreshVectorDB recreates the VectorDB with current embedding configuration.
+// Call this after changing embedding model env vars and restarting.
+// This is typically only needed for development/debugging purposes.
+func (s *Service) RefreshVectorDB() error {
+	s.vectorDBMu.Lock()
+	defer s.vectorDBMu.Unlock()
+
+	// Close old VectorDB
+	if s.vectorDB != nil {
+		if err := s.vectorDB.Close(); err != nil {
+			slog.Warn("Failed to close old VectorDB during refresh", "error", err)
+		}
+	}
+
+	// Create new VectorDB with current config from environment
+	vectorDBConfig := NewVectorDBConfigFromEnv()
+	vectorDB, err := NewVectorDB(vectorDBConfig)
+	if err != nil {
+		return fmt.Errorf("failed to refresh VectorDB: %w", err)
+	}
+
+	s.vectorDB = vectorDB
+	s.vectorDBConfig = vectorDBConfig
+
+	slog.Info("VectorDB refreshed",
+		"dimension", vectorDB.Dimension(),
+		"provider", vectorDBConfig.StorageProvider,
+		"enabled", vectorDBConfig.Enabled)
+	return nil
 }
 
 // ReindexAllContent re-indexes all existing KB and Policy content from the database.
@@ -475,7 +538,8 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 	}
 
 	totalChunks := len(allChunks)
-	const batchSize = 25
+	// Batch size configurable via EMBEDDING_BATCH_SIZE env var (default: 25, max: 200)
+	batchSize := GetEmbeddingBatchSize()
 	totalBatches := (totalChunks + batchSize - 1) / batchSize
 	startBatch := 0
 
@@ -491,7 +555,7 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 			Audience:     audienceType,
 			TotalChunks:  int32(totalChunks),
 			TotalBatches: int32(totalBatches),
-			BatchSize:    batchSize,
+			BatchSize:    int32(batchSize),
 			Status:       "in_progress",
 			StartedAt:    time.Now(),
 		}
@@ -520,7 +584,7 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 			ProcessedChunks: int32(processedChunks),
 			CurrentBatch:    int32(currentBatch),
 			TotalBatches:    int32(totalBatches),
-			BatchSize:       batchSize,
+			BatchSize:       int32(batchSize),
 			Status:          "in_progress",
 		}
 		_, err := s.store.UpsertReindexCheckpoint(ctx, checkpoint)
@@ -543,7 +607,7 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 			Audience:     audienceType,
 			TotalChunks:  int32(totalChunks),
 			TotalBatches: int32(totalBatches),
-			BatchSize:    batchSize,
+			BatchSize:    int32(batchSize),
 			Status:       "failed",
 			ErrorMessage: err.Error(),
 			ErrorBatch:   errBatch,
@@ -560,7 +624,7 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 		ProcessedChunks: int32(totalChunks),
 		CurrentBatch:    int32(totalBatches),
 		TotalBatches:    int32(totalBatches),
-		BatchSize:       batchSize,
+		BatchSize:       int32(batchSize),
 		Status:          "completed",
 	}
 	s.store.UpsertReindexCheckpoint(ctx, completedCheckpoint)

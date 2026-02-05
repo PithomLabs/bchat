@@ -830,4 +830,120 @@ Simplified the widget system to use just the slug:
 
 ---
 
+## 2026-02-06 - Fix Dimension Mismatch Bug in Multi-Dimension LanceDB
+
+**Status:** Implemented
+**Priority:** High
+**Reason:** After implementing dimension-based table naming, search errors were cryptic when embedding model changed without rebuilding the index.
+
+### Problem
+
+With dimension-based table naming (e.g., `kb_documents_384`, `kb_documents_1536`), changing the embedding model caused confusing errors:
+
+1. Content indexed with mock embeddings (384 dim) into `kb_documents_384`
+2. Embedding model changed to Qwen3 (4096 dim) via env var
+3. Search generates query embeddings with new model (4096)
+4. Search queries old table (384) → cryptic LanceDB error
+
+**Before fix:**
+```
+error: query dim(4096) doesn't match the column embedding vector dim(384)
+```
+
+**After fix:**
+```
+embedding dimension mismatch: table 'kb_documents_384' has 384 dims but current
+embedding service uses 4096 dims. The embedding model may have changed since
+content was indexed. Please rebuild the index with 'Rebuild Index' button in Agent Admin
+```
+
+### Root Cause
+
+The VectorDB instance was created at startup with a specific embedding service. If the embedding model changed (via env var) without server restart, the Service's `vectorDB` still pointed to the old table with the old dimension. Searches generated query embeddings with the new model but searched in the old table.
+
+### Solution
+
+Added dimension validation in `Search()` method to catch mismatches early with clear error messages.
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `server/router/api/v1/agent/vectordb_lance.go` | Added `TableName()` method for debugging |
+| `server/router/api/v1/agent/vectordb_lance.go` | Added dimension validation in `Search()` method |
+| `server/router/api/v1/agent/service.go` | Added `GetEmbeddingDimension()` helper method |
+| `server/router/api/v1/agent/service.go` | Added `RefreshVectorDB()` method for config changes |
+
+### Key Code Changes
+
+#### vectordb_lance.go - TableName() method
+```go
+// TableName returns the table name for this VectorDB instance.
+// Useful for debugging dimension mismatch issues.
+func (db *LanceVectorDB) TableName() string {
+    return db.tableName
+}
+```
+
+#### vectordb_lance.go - Search() dimension validation
+```go
+// Validate query embedding dimension matches table dimension
+expectedDim := db.embedSvc.Dimension()
+actualDim := len(queryEmbedding)
+if actualDim != expectedDim {
+    return nil, fmt.Errorf("embedding dimension mismatch: query has %d dims but embedding service expects %d dims. "+
+        "This may indicate the embedding model changed. Please restart server or rebuild index",
+        actualDim, expectedDim)
+}
+
+// Check table dimension matches embedding service dimension
+tableDim := db.getTableEmbeddingDimension(ctx)
+if tableDim > 0 && tableDim != expectedDim {
+    return nil, fmt.Errorf("embedding dimension mismatch: table '%s' has %d dims but current embedding service uses %d dims. "+
+        "The embedding model may have changed since content was indexed. Please rebuild the index with 'Rebuild Index' button in Agent Admin",
+        db.tableName, tableDim, expectedDim)
+}
+```
+
+#### service.go - Helper methods
+```go
+// GetEmbeddingDimension returns the embedding dimension for the current VectorDB.
+func (s *Service) GetEmbeddingDimension() int {
+    s.vectorDBMu.RLock()
+    defer s.vectorDBMu.RUnlock()
+    if s.vectorDB == nil {
+        return 0
+    }
+    return s.vectorDB.Dimension()
+}
+
+// RefreshVectorDB recreates the VectorDB with current embedding configuration.
+func (s *Service) RefreshVectorDB() error {
+    // Close old, create new with current env config
+}
+```
+
+### Benefits
+
+1. **Clear error messages** - User knows exactly what happened and how to fix it
+2. **Actionable guidance** - Error tells user to use "Rebuild Index" button
+3. **Early detection** - Catches mismatch before sending to LanceDB
+4. **Debug helpers** - `TableName()` and `GetEmbeddingDimension()` for troubleshooting
+
+### Verification
+
+1. Build: `task build:backend`
+2. Start with mock embeddings: `task run:rag:mock` (384 dim)
+3. Rebuild index for a tenant
+4. Stop server
+5. Change to different embedding model (e.g., OpenAI 1536 dim)
+6. Start server: `task run:rag`
+7. Test RAG search:
+   - **Before fix:** Cryptic "query dim doesn't match column dim" error
+   - **After fix:** Clear message telling user to rebuild index
+8. Rebuild index with new embeddings
+9. Search works correctly
+
+---
+
 *Add new changes below with timestamp*
