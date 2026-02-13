@@ -590,6 +590,7 @@ type FindAgentTranscript struct {
 type ObservationLog struct {
 	SessionID            string    `json:"session_id"`
 	TenantID             int32     `json:"tenant_id"`
+	ResourceID           string    `json:"resource_id"` // NEW: For resource-scoped memory (user_id)
 	ObservationLog       string    `json:"observation_log"`
 	LastObservedMsgIndex int       `json:"last_observed_msg_index"`
 	TokensInLog          int       `json:"tokens_in_log"`
@@ -720,6 +721,7 @@ type AgentStore interface {
 	// Observation Log operations (Observational Memory)
 	UpsertObservationLog(ctx context.Context, log *ObservationLog) (*ObservationLog, error)
 	GetObservationLog(ctx context.Context, sessionID string) (*ObservationLog, error)
+	GetObservationLogByResource(ctx context.Context, resourceID string) (*ObservationLog, error)
 }
 
 // Store methods that delegate to the driver
@@ -1064,4 +1066,8 @@ func (s *Store) UpsertObservationLog(ctx context.Context, log *ObservationLog) (
 
 func (s *Store) GetObservationLog(ctx context.Context, sessionID string) (*ObservationLog, error) {
 	return s.driver.GetObservationLog(ctx, sessionID)
+}
+
+func (s *Store) GetObservationLogByResource(ctx context.Context, resourceID string) (*ObservationLog, error) {
+	return s.driver.GetObservationLogByResource(ctx, resourceID)
 }

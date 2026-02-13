@@ -84,15 +84,36 @@ func (s *Service) RunObserver(ctx context.Context, sessionID string) error {
 		}
 	}
 
-	// 2. Retrieve Existing Observations
-	obsLog, err := s.store.GetObservationLog(ctx, sessionID)
-	if err != nil {
-		return fmt.Errorf("failed to get observation log: %w", err)
+	// 2. Retrieve Existing Observations (with scope support)
+	var obsLog *store.ObservationLog
+	var err error
+
+	// Determine resource_id for resource-scoped memory
+	resourceID := ""
+	if config.Scope == OMScopeResource && session.UserID != nil {
+		resourceID = fmt.Sprintf("user_%d", *session.UserID)
 	}
+
+	// Query based on scope
+	if config.Scope == OMScopeResource && resourceID != "" {
+		// Resource scope: Get observations by resource_id (cross-conversation)
+		obsLog, err = s.store.GetObservationLogByResource(ctx, resourceID)
+		if err != nil {
+			return fmt.Errorf("failed to get observation log by resource: %w", err)
+		}
+	} else {
+		// Thread scope (default): Get observations by session_id
+		obsLog, err = s.store.GetObservationLog(ctx, sessionID)
+		if err != nil {
+			return fmt.Errorf("failed to get observation log: %w", err)
+		}
+	}
+
 	if obsLog == nil {
 		obsLog = &store.ObservationLog{
 			SessionID:            sessionID,
 			TenantID:             session.TenantID,
+			ResourceID:           resourceID,
 			ObservationLog:       "",
 			LastObservedMsgIndex: -1,
 			TokensInLog:          0,
@@ -217,6 +238,10 @@ func (s *Service) RunObserver(ctx context.Context, sessionID string) error {
 	obsLog.TokensInLog = tokenCount
 	obsLog.CurrentTask = currentTask
 	obsLog.SuggestedResponse = suggestedResponse
+	// Ensure resource_id is set for resource-scoped memory
+	if config.Scope == OMScopeResource && obsLog.ResourceID == "" && resourceID != "" {
+		obsLog.ResourceID = resourceID
+	}
 
 	_, err = s.store.UpsertObservationLog(ctx, obsLog)
 	if err != nil {
@@ -227,6 +252,8 @@ func (s *Service) RunObserver(ctx context.Context, sessionID string) error {
 	durationMs := time.Since(startTime).Milliseconds()
 	slog.Info("Observer completed successfully",
 		"session_id", sessionID,
+		"resource_id", resourceID,
+		"scope", config.Scope,
 		"new_messages", len(filteredMessages),
 		"skipped_trivial", len(newMessages)-len(filteredMessages),
 		"total_tokens", tokenCount,
@@ -237,9 +264,18 @@ func (s *Service) RunObserver(ctx context.Context, sessionID string) error {
 }
 
 // callObserverLLM makes the actual LLM call for observation
+// Uses prompt caching for the system prompt and existing observations
 func (s *Service) callObserverLLM(ctx context.Context, client *openrouter.Client, model string, existingObservations string, messagesToObserve string) (openrouter.ChatCompletionResponse, error) {
-	// Create proper messages
+	// Create proper messages with caching structure:
+	// [System Prompt] <- Cacheable (stable)
+	// [Previous Observations] <- Cacheable (semi-stable, changes after reflection)
+	// [New Messages] <- Dynamic (changes every call)
+
+	// System message with cache control for prompt caching
 	systemMsg := openrouter.SystemMessage(observerSystemPrompt)
+
+	// Build user content with cacheable sections
+	// We structure it so the previous observations can be cached
 	userContent := fmt.Sprintf("## Previous Observations\n\n%s\n\n## New Message History to Observe\n\n%s",
 		existingObservations, messagesToObserve)
 	userMsg := openrouter.UserMessage(userContent)
@@ -254,6 +290,68 @@ func (s *Service) callObserverLLM(ctx context.Context, client *openrouter.Client
 	if len(resp.Choices) == 0 {
 		return openrouter.ChatCompletionResponse{}, fmt.Errorf("no response from LLM")
 	}
+	return resp, nil
+}
+
+// callObserverLLMWithCache makes the LLM call with explicit prompt caching
+// This uses OpenRouter/Anthropic-style cache control for 4-10x cost reduction
+func (s *Service) callObserverLLMWithCache(ctx context.Context, client *openrouter.Client, model string, existingObservations string, messagesToObserve string) (openrouter.ChatCompletionResponse, error) {
+	// Create messages with cache control for prompt caching
+	// Structure: [System Prompt (cached)] -> [Observations (cached)] -> [New Messages (dynamic)]
+
+	// System message with cache control using MultiContent
+	systemMsg := openrouter.ChatCompletionMessage{
+		Role: openrouter.ChatMessageRoleSystem,
+		Content: openrouter.Content{
+			Multi: []openrouter.ChatMessagePart{
+				{
+					Type: openrouter.ChatMessagePartTypeText,
+					Text: observerSystemPrompt,
+					CacheControl: &openrouter.CacheControl{
+						Type: "ephemeral",
+					},
+				},
+			},
+		},
+	}
+
+	// Previous observations as a separate message with cache control
+	obsMsg := openrouter.ChatCompletionMessage{
+		Role: openrouter.ChatMessageRoleUser,
+		Content: openrouter.Content{
+			Multi: []openrouter.ChatMessagePart{
+				{
+					Type: openrouter.ChatMessagePartTypeText,
+					Text: fmt.Sprintf("## Previous Observations\n\n%s", existingObservations),
+					CacheControl: &openrouter.CacheControl{
+						Type: "ephemeral",
+					},
+				},
+			},
+		},
+	}
+
+	// New messages to observe (dynamic, no caching)
+	newMsgsContent := fmt.Sprintf("## New Message History to Observe\n\n%s", messagesToObserve)
+	newMsgsMsg := openrouter.UserMessage(newMsgsContent)
+
+	resp, err := client.CreateChatCompletion(ctx, openrouter.ChatCompletionRequest{
+		Model:    model,
+		Messages: []openrouter.ChatCompletionMessage{systemMsg, obsMsg, newMsgsMsg},
+	})
+	if err != nil {
+		return openrouter.ChatCompletionResponse{}, fmt.Errorf("LLM call failed: %w", err)
+	}
+	if len(resp.Choices) == 0 {
+		return openrouter.ChatCompletionResponse{}, fmt.Errorf("no response from LLM")
+	}
+
+	// Log cache usage if available (OpenRouter provides these fields)
+	slog.Debug("Observer LLM call completed",
+		"total_tokens", resp.Usage.TotalTokens,
+		"prompt_tokens", resp.Usage.PromptTokens,
+		"completion_tokens", resp.Usage.CompletionTokens)
+
 	return resp, nil
 }
 
@@ -369,4 +467,67 @@ func isTrivialMessage(content string) bool {
 
 	// Use pre-compiled regex for efficiency
 	return trivialRegex.MatchString(trimmed)
+}
+
+// storeObservationFromBuffer stores a pre-computed observation from the buffer
+// This is used when the buffer is activated at the threshold
+func (s *Service) storeObservationFromBuffer(ctx context.Context, sessionID string, observations string, currentTask string, suggestedResponse string, lastMsgIndex int, resourceID string) error {
+	// Get the session to retrieve tenant ID
+	session := s.memorySessions.Get(sessionID)
+	if session == nil {
+		var err error
+		session, err = s.store.GetAgentSession(ctx, &store.FindAgentSession{ID: &sessionID})
+		if err != nil || session == nil {
+			return fmt.Errorf("session %s not found", sessionID)
+		}
+	}
+
+	// Get config to check scope
+	config := GetOMConfig().GetConfig()
+
+	// Get existing observation log (with scope support)
+	var obsLog *store.ObservationLog
+	var err error
+	if config.Scope == OMScopeResource && resourceID != "" {
+		obsLog, err = s.store.GetObservationLogByResource(ctx, resourceID)
+	} else {
+		obsLog, err = s.store.GetObservationLog(ctx, sessionID)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to get observation log: %w", err)
+	}
+	if obsLog == nil {
+		obsLog = &store.ObservationLog{
+			SessionID:      sessionID,
+			TenantID:       session.TenantID,
+			ResourceID:     resourceID,
+			ObservationLog: "",
+		}
+	}
+
+	// Merge with existing observations
+	updatedLog := obsLog.ObservationLog
+	if updatedLog != "" {
+		updatedLog += "\n"
+	}
+	updatedLog += observations
+
+	// Update the log
+	obsLog.ObservationLog = updatedLog
+	obsLog.LastObservedMsgIndex = lastMsgIndex
+	obsLog.TokensInLog = estimateTokens(updatedLog)
+	obsLog.CurrentTask = currentTask
+	obsLog.SuggestedResponse = suggestedResponse
+
+	_, err = s.store.UpsertObservationLog(ctx, obsLog)
+	if err != nil {
+		return fmt.Errorf("failed to persist buffered observation: %w", err)
+	}
+
+	slog.Info("Buffered observation stored successfully",
+		"session_id", sessionID,
+		"tokens", obsLog.TokensInLog,
+		"last_msg_index", lastMsgIndex)
+
+	return nil
 }

@@ -7,6 +7,19 @@ All notable changes to the bchat AI Agent System are documented in this file.
 ## 2026-02-13
 
 ### Added
+- **Observer Buffer** - Async pre-computation of observations before threshold is reached
+  - New config options: `OM_BUFFER_TOKENS` (0.2), `OM_BUFFER_ACTIVATION` (0.8), `OM_BLOCK_AFTER` (1.2)
+  - Reduces latency by buffering observations at 80% of threshold
+  - Background worker processes buffer triggers asynchronously
+  - Files: `observer_buffer.go`, `service.go`, `om_config.go`
+
+- **Resource-Scoped Observational Memory** - Share observations across sessions for same user
+  - New config option `OM_SCOPE` (`thread` or `resource`)
+  - When set to `resource`, observations are shared across all sessions for a user (via `resource_id`)
+  - Resource ID format: `user_{user_id}`
+  - Migration: `27__om_resource_scope.sql`
+  - Files: `observer.go`, `om_config.go`, `store/agent.go`, `agent_observations.go` (all drivers)
+
 - **Token-Based Observer Trigger** - Observer now triggers based on token count instead of message count
   - New config option `OM_OBSERVER_TOKEN_THRESHOLD` (default: 30,000 tokens, matching Mastra specification)
   - Consistent triggering regardless of message verbosity (verbose vs terse conversations)
@@ -34,17 +47,35 @@ All notable changes to the bchat AI Agent System are documented in this file.
 - **DOCS_OM_ENHANCEMENT_PLAN.md** - Detailed implementation plan for OM enhancements
   - Phase 1: Token-based trigger (completed)
   - Phase 2: Task/response extraction (completed)
-  - Phase 3: Async buffering (planned)
-  - Phase 4: Resource scope (planned)
+  - Phase 3: Async buffering (completed)
+  - Phase 4: Resource scope (completed)
   - Phase 5: Prompt caching (planned)
 
 ### Changed
 - **LATEST.sql** - Updated agent_observations table schema
+  - Added `resource_id TEXT DEFAULT ''` column for resource-scoped memory
   - Added `current_task TEXT` column
   - Added `suggested_response TEXT` column
-  - Updated table comment to reflect migration 26 enhancement
+  - Added index `idx_agent_observations_resource` on `resource_id`
+  - Updated table comment to reflect migration 27 enhancement
 
 ### Fixed
+- **Race Condition in ObserverBuffer** - Fixed concurrent access issue in `GetAndActivateBuffer`
+  - Changed buffer mutex from read lock to write lock for atomic check-and-set of `IsActive`
+  - Prevents potential duplicate observations from concurrent goroutines
+  - File: `observer_buffer.go:215-227`
+
+- **Input Validation in getEnvScope** - Added validation for invalid OM_SCOPE values
+  - Now validates both `thread` and `resource` values
+  - Logs warning for invalid values instead of silently defaulting
+  - File: `om_config.go:124-139`
+
+- **Memory Leak in ObserverBuffer** - Added automatic cleanup of stale buffers
+  - New cleanup worker runs every 5 minutes
+  - Removes buffers older than 30 minutes
+  - Prevents unbounded memory growth for inactive sessions
+  - File: `observer_buffer.go:68-100`
+
 - **Unused PromptCache Code** - Removed dead code from observer.go
   - Deleted unused `PromptCache` struct, `promptCache` variable, `hashString()` function
   - Removed unused `sync` import

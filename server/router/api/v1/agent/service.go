@@ -33,6 +33,7 @@ type Service struct {
 	vectorDBConfig      *VectorDBConfig
 	chunker             *Chunker
 	vectorDBMu          sync.RWMutex // Protects vectorDB access
+	observerBuffer      *ObserverBuffer
 }
 
 // NewService creates a new agent service.
@@ -85,6 +86,16 @@ func NewService(s *store.Store, p *profile.Profile) *Service {
 		slog.Info("Hybrid search enabled",
 			"vector_weight", vectorDBConfig.HybridVectorWeight,
 			"text_weight", vectorDBConfig.HybridTextWeight)
+	}
+
+	// Initialize observer buffer for async observation pre-computation
+	omConfig := GetOMConfig()
+	if omConfig.Enabled && omConfig.BufferTokens > 0 {
+		svc.observerBuffer = NewObserverBuffer(svc, omConfig)
+		slog.Info("Observer buffer initialized",
+			"buffer_tokens_fraction", omConfig.BufferTokens,
+			"activation_fraction", omConfig.BufferActivation,
+			"block_after_fraction", omConfig.BlockAfter)
 	}
 
 	// Check if we should reindex all content on startup
@@ -1701,11 +1712,45 @@ func (s *Service) generateResponse(ctx context.Context, config *AudienceConfig, 
 			unobservedTokens += estimateTokens(session.Messages[i].Content)
 		}
 
-		if unobservedTokens < omConfig.ObserverTokenThreshold {
+		threshold := omConfig.ObserverTokenThreshold
+
+		// Check if we should trigger buffer pre-computation
+		if s.observerBuffer != nil && s.observerBuffer.ShouldTriggerBuffer(unobservedTokens, threshold) {
+			// Check if we already have a buffer for this session
+			if !s.observerBuffer.HasBuffer(session.ID) {
+				slog.Debug("Triggering buffer observation", "session_id", session.ID, "unobserved_tokens", unobservedTokens)
+				s.observerBuffer.TriggerBuffer(session.ID)
+			}
+		}
+
+		// Check if we should activate the buffer (threshold reached)
+		if s.observerBuffer != nil && s.observerBuffer.ShouldActivateBuffer(unobservedTokens, threshold) {
+			// Try to get buffered observations
+			observations, currentTask, suggestedResp, tokenCount, lastMsgIdx, resourceID, ok := s.observerBuffer.GetAndActivateBuffer(session.ID)
+			if ok {
+				slog.Debug("Activating buffered observation", "session_id", session.ID, "tokens", tokenCount)
+				// Store the buffered observation
+				if err := s.storeObservationFromBuffer(context.Background(), session.ID, observations, currentTask, suggestedResp, lastMsgIdx, resourceID); err != nil {
+					slog.Error("Failed to store buffered observation", "session_id", session.ID, "error", err)
+				}
+				s.observerBuffer.ClearBuffer(session.ID)
+				return
+			}
+		}
+
+		// Check if we're past the block threshold - force synchronous observation
+		if s.observerBuffer != nil && s.observerBuffer.ShouldBlock(unobservedTokens, threshold) {
+			slog.Warn("Observer buffer can't keep up, forcing synchronous observation",
+				"session_id", session.ID,
+				"unobserved_tokens", unobservedTokens,
+				"threshold", threshold)
+		}
+
+		if unobservedTokens < threshold {
 			slog.Debug("Token threshold not reached, skipping observer",
 				"session_id", session.ID,
 				"unobserved_tokens", unobservedTokens,
-				"threshold", omConfig.ObserverTokenThreshold)
+				"threshold", threshold)
 			return
 		}
 

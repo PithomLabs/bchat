@@ -14,3 +14,7 @@ func (d *DB) UpsertObservationLog(ctx context.Context, log *store.ObservationLog
 func (d *DB) GetObservationLog(ctx context.Context, sessionID string) (*store.ObservationLog, error) {
 	return nil, fmt.Errorf("GetObservationLog not implemented for Postgres")
 }
+
+func (d *DB) GetObservationLogByResource(ctx context.Context, resourceID string) (*store.ObservationLog, error) {
+	return nil, fmt.Errorf("GetObservationLogByResource not implemented for Postgres")
+}
