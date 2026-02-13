@@ -1,9 +1,20 @@
 package agent
 
 import (
+	"log/slog"
 	"os"
 	"strconv"
 	"sync"
+)
+
+// OMScope defines the scope for Observational Memory
+type OMScope string
+
+const (
+	// OMScopeThread limits observations to the current session (default)
+	OMScopeThread OMScope = "thread"
+	// OMScopeResource shares observations across all sessions for a user
+	OMScopeResource OMScope = "resource"
 )
 
 // OMConfig holds configuration for Observational Memory
@@ -14,6 +25,10 @@ type OMConfig struct {
 	ObserverTokenThreshold int // Observer trigger threshold (token-based)
 	RetryAttempts          int
 	RetryDelayMs           int
+	BufferTokens           float64 // Fraction of threshold to trigger buffer (0.2 = 20%)
+	BufferActivation       float64 // Activation point (0.8 = 80%)
+	BlockAfter             float64 // Safety threshold multiplier (1.2 = 120%)
+	Scope                  OMScope // Memory scope: thread or resource
 
 	mu          sync.RWMutex
 	initialized bool
@@ -38,6 +53,10 @@ func loadOMConfig() *OMConfig {
 		ObserverTokenThreshold: getEnvInt("OM_OBSERVER_TOKEN_THRESHOLD", 30000), // Mastra default
 		RetryAttempts:          getEnvInt("OM_RETRY_ATTEMPTS", 3),
 		RetryDelayMs:           getEnvInt("OM_RETRY_DELAY_MS", 1000),
+		BufferTokens:           getEnvFloat("OM_BUFFER_TOKENS", 0.2),     // 20% of threshold
+		BufferActivation:       getEnvFloat("OM_BUFFER_ACTIVATION", 0.8), // 80% of threshold
+		BlockAfter:             getEnvFloat("OM_BLOCK_AFTER", 1.2),       // 120% of threshold
+		Scope:                  getEnvScope("OM_SCOPE", OMScopeThread),   // Default to thread scope
 	}
 }
 
@@ -59,6 +78,10 @@ func (c *OMConfig) GetConfig() OMConfig {
 		ObserverTokenThreshold: c.ObserverTokenThreshold,
 		RetryAttempts:          c.RetryAttempts,
 		RetryDelayMs:           c.RetryDelayMs,
+		BufferTokens:           c.BufferTokens,
+		BufferActivation:       c.BufferActivation,
+		BlockAfter:             c.BlockAfter,
+		Scope:                  c.Scope,
 	}
 }
 
@@ -85,6 +108,31 @@ func getEnvInt(key string, defaultValue int) int {
 		if intVal, err := strconv.Atoi(value); err == nil {
 			return intVal
 		}
+	}
+	return defaultValue
+}
+
+// getEnvFloat returns a float64 from environment variable or default
+func getEnvFloat(key string, defaultValue float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		if floatVal, err := strconv.ParseFloat(value, 64); err == nil {
+			return floatVal
+		}
+	}
+	return defaultValue
+}
+
+// getEnvScope returns an OMScope from environment variable or default
+func getEnvScope(key string, defaultValue OMScope) OMScope {
+	if value := os.Getenv(key); value != "" {
+		if value == string(OMScopeResource) {
+			return OMScopeResource
+		}
+		if value == string(OMScopeThread) {
+			return OMScopeThread
+		}
+		// Warn on invalid value but don't fail - use default
+		slog.Warn("Invalid OM_SCOPE value, using default", "value", value, "expected", []string{string(OMScopeThread), string(OMScopeResource)}, "default", defaultValue)
 	}
 	return defaultValue
 }

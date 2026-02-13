@@ -693,7 +693,7 @@ CREATE UNIQUE INDEX idx_reindex_checkpoint_tenant_audience
 ON agent_reindex_checkpoints(tenant_id, audience);
 
 -- ============================================================================
--- AGENT OBSERVATIONS TABLE (migration 24, enhanced in migration 26)
+-- AGENT OBSERVATIONS TABLE (migration 24, enhanced in migration 26, 27)
 -- ============================================================================
 
 CREATE TABLE agent_observations (
@@ -711,9 +711,13 @@ CREATE TABLE agent_observations (
     current_task TEXT,
     suggested_response TEXT,
     
+    -- Resource Scope (migration 27)
+    resource_id TEXT DEFAULT '',
+    
     -- Timestamps
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_observations_tenant ON agent_observations(tenant_id);
+CREATE INDEX idx_agent_observations_resource ON agent_observations(resource_id);

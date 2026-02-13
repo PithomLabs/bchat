@@ -218,4 +218,5 @@ type Driver interface {
 	// Observation Log model related methods.
 	UpsertObservationLog(ctx context.Context, log *ObservationLog) (*ObservationLog, error)
 	GetObservationLog(ctx context.Context, sessionID string) (*ObservationLog, error)
+	GetObservationLogByResource(ctx context.Context, resourceID string) (*ObservationLog, error)
 }
