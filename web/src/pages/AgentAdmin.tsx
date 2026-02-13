@@ -1881,7 +1881,7 @@ const AudienceSection = ({ title, audienceType, tenant, onViewVersions, isSaving
           hint={audienceType === "external" ? t("agent-admin.external-kb-hint") : t("agent-admin.internal-kb-hint")}
           fileRef={kbFileRef}
           onUpload={(e) => handleFileUpload("kb", e)}
-          onViewVersions={() => onViewVersions(tenant.tenant.slug, audienceType, "kb")}
+          onViewVersions={() => onViewVersions(audienceType, "kb")}
           onPreview={() => handlePreview("kb")}
           isSaving={isSaving}
           t={t}
@@ -1893,7 +1893,7 @@ const AudienceSection = ({ title, audienceType, tenant, onViewVersions, isSaving
           hint={audienceType === "external" ? t("agent-admin.external-policy-hint") : t("agent-admin.internal-policy-hint")}
           fileRef={policyFileRef}
           onUpload={(e) => handleFileUpload("policy", e)}
-          onViewVersions={() => onViewVersions(tenant.tenant.slug, audienceType, "policy")}
+          onViewVersions={() => onViewVersions(audienceType, "policy")}
           onPreview={() => handlePreview("policy")}
           isSaving={isSaving}
           t={t}

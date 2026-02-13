@@ -434,10 +434,13 @@ func (h *Handler) HandleGetFileVersions(c echo.Context) error {
 	versions := make([]map[string]interface{}, len(files))
 	for i, f := range files {
 		versions[i] = map[string]interface{}{
-			"id":          f.ID,
-			"contentHash": f.ContentHash,
-			"importedAt":  f.ImportedAt,
-			"version":     len(files) - i, // Latest first
+			"id":           f.ID,
+			"tenantId":     f.TenantID,
+			"audienceType": f.AudienceType,
+			"fileType":     f.FileType,
+			"contentHash":  f.ContentHash,
+			"importedAt":   f.ImportedAt,
+			"version":      f.Version,
 		}
 	}
 
