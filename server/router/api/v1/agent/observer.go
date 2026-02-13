@@ -137,8 +137,12 @@ func (s *Service) RunObserver(ctx context.Context, sessionID string) error {
 
 	client := openrouter.NewClient(apiKey)
 
-	// Call Observer LLM
-	resp, err := s.callObserverLLM(ctx, client, model, obsLog.ObservationLog, msgBuilder.String())
+	// Call Observer LLM with retry logic
+	var resp openrouter.ChatCompletionResponse
+	err = withRetry(ctx, config.RetryAttempts, config.RetryDelayMs, func() error {
+		resp, err = s.callObserverLLM(ctx, client, model, obsLog.ObservationLog, msgBuilder.String())
+		return err
+	})
 	if err != nil {
 		slog.Error("Observer LLM call failed",
 			"session_id", sessionID,
@@ -177,7 +181,11 @@ func (s *Service) RunObserver(ctx context.Context, sessionID string) error {
 			"threshold", config.TokenThreshold)
 
 		tokenCountBefore := tokenCount
-		reflectedLog, err := s.runReflector(ctx, client, model, updatedLog, config)
+		var reflectedLog string
+		err = withRetry(ctx, config.RetryAttempts, config.RetryDelayMs, func() error {
+			reflectedLog, err = s.runReflector(ctx, client, model, updatedLog, config)
+			return err
+		})
 		if err == nil {
 			updatedLog = reflectedLog
 			tokenCount = estimateTokens(updatedLog)
