@@ -506,7 +506,7 @@ func (db *LanceVectorDB) InsertWithCheckpoint(ctx context.Context, chunks []Docu
 
 		// Call checkpoint callback after successful batch
 		if opts.CheckpointFunc != nil {
-			if err := opts.CheckpointFunc(batchNum+1, batchEnd, totalBatches, totalChunks); err != nil {
+			if err := opts.CheckpointFunc(batchNum+1, batchEnd, totalBatches, totalChunks, len(batch)); err != nil {
 				slog.Warn("Checkpoint callback failed", "batch", batchNum+1, "error", err)
 				// Non-fatal: continue processing
 			}

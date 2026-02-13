@@ -709,8 +709,11 @@ func (h *Handler) HandleReindexTenant(c echo.Context) error {
 		})
 	}
 
-	// Always index internal-only (external audience is never indexed)
-	audienceType := "internal"
+	// Get audience type from query (default to all)
+	audienceType := c.QueryParam("audience_type")
+	if audienceType == "" {
+		audienceType = "all"
+	}
 
 	// Check for resume parameter
 	resume := c.QueryParam("resume") == "true"
@@ -749,8 +752,14 @@ func (h *Handler) HandleReindexStatus(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or api:config permission")
 	}
 
+	// Get audience type from query (default to internal for backward compatibility)
+	audienceType := c.QueryParam("audience_type")
+	if audienceType == "" {
+		audienceType = "all"
+	}
+
 	// Get reindex status
-	status, err := h.service.GetReindexStatus(ctx, tenant.ID, "internal")
+	status, err := h.service.GetReindexStatus(ctx, tenant.ID, audienceType)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get reindex status: "+err.Error())
 	}
@@ -786,12 +795,12 @@ type TenantInfo struct {
 
 // AudienceInfo contains audience import statistics.
 type AudienceInfo struct {
-	ServicesCount       int  `json:"services_count"`
-	IntentsCount        int  `json:"intents_count"`
-	FAQsCount           int  `json:"faqs_count"`
-	RulesCount          int  `json:"rules_count"`
-	KBIsStructured      bool `json:"kb_is_structured"`      // true if KB has meaningful structured annotations
-	PolicyIsStructured  bool `json:"policy_is_structured"` // true if Policy has meaningful structured annotations
+	ServicesCount        int  `json:"services_count"`
+	IntentsCount         int  `json:"intents_count"`
+	FAQsCount            int  `json:"faqs_count"`
+	RulesCount           int  `json:"rules_count"`
+	KBIsStructured       bool `json:"kb_is_structured"`       // true if KB has meaningful structured annotations
+	PolicyIsStructured   bool `json:"policy_is_structured"`   // true if Policy has meaningful structured annotations
 	HasStructuredContent bool `json:"has_structured_content"` // true if either KB or Policy has structured content
 }
 
@@ -1074,10 +1083,61 @@ func (h *Handler) indexContentForRAG(ctx context.Context, tenantID int32, audien
 		return nil
 	}
 
-	// Insert chunks (embeddings will be generated automatically)
-	if err := vectorDB.Insert(ctx, allChunks); err != nil {
+	// Set initial status to in_progress
+	now := time.Now()
+	_, _ = h.store.UpsertReindexCheckpoint(ctx, &store.ReindexCheckpoint{
+		TenantID:    tenantID,
+		Audience:    audienceType,
+		Status:      "in_progress",
+		TotalChunks: int32(len(allChunks)),
+		StartedAt:   now,
+		UpdatedAt:   now,
+		LastMessage: fmt.Sprintf("$ Synchronous reindexing started for %s audience", audienceType),
+	})
+
+	// Define checkpoint callback
+	checkpointFunc := func(currentBatch, processedChunks, totalBatches, totalChunks, chunksInBatch int) error {
+		msg := fmt.Sprintf("$ Indexing batch %d/%d (%d/%d chunks)...", currentBatch+1, totalBatches, processedChunks, totalChunks)
+		_, err := h.store.UpsertReindexCheckpoint(ctx, &store.ReindexCheckpoint{
+			TenantID:        tenantID,
+			Audience:        audienceType,
+			Status:          "in_progress",
+			CurrentBatch:    int32(currentBatch),
+			TotalBatches:    int32(totalBatches),
+			ProcessedChunks: int32(processedChunks),
+			TotalChunks:     int32(totalChunks),
+			UpdatedAt:       time.Now(),
+			LastMessage:     msg,
+		})
+		return err
+	}
+
+	// Insert chunks with checkpoint
+	if err := vectorDB.InsertWithCheckpoint(ctx, allChunks, InsertOptions{
+		CheckpointFunc: checkpointFunc,
+	}); err != nil {
+		_, _ = h.store.UpsertReindexCheckpoint(ctx, &store.ReindexCheckpoint{
+			TenantID:     tenantID,
+			Audience:     audienceType,
+			Status:       "failed",
+			ErrorMessage: err.Error(),
+			UpdatedAt:    time.Now(),
+		})
 		return fmt.Errorf("failed to insert chunks: %w", err)
 	}
+
+	// Mark as completed
+	now = time.Now()
+	_, _ = h.store.UpsertReindexCheckpoint(ctx, &store.ReindexCheckpoint{
+		TenantID:        tenantID,
+		Audience:        audienceType,
+		Status:          "completed",
+		ProcessedChunks: int32(len(allChunks)),
+		TotalChunks:     int32(len(allChunks)),
+		UpdatedAt:       now,
+		CompletedAt:     &now,
+		LastMessage:     fmt.Sprintf("✓ Upload reindexing completed: %d chunks", len(allChunks)),
+	})
 
 	slog.Info("Indexed content for RAG (unstructured)",
 		"tenantID", tenantID,
@@ -1123,7 +1183,7 @@ func (h *Handler) HandleExport(c echo.Context) error {
 	result := make(map[string]interface{})
 	for _, f := range files {
 		result[f.FileType] = map[string]string{
-			"content":     f.Content,
+			"content":      f.Content,
 			"content_hash": f.ContentHash,
 		}
 	}
@@ -2898,14 +2958,14 @@ func (h *Handler) HandleGetConversation(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"id":           session.ID,
-		"type":         "chat",
-		"audienceType": session.AudienceType,
-		"customerName": session.CustomerName,
-		"phase":        session.Phase,
+		"id":            session.ID,
+		"type":          "chat",
+		"audienceType":  session.AudienceType,
+		"customerName":  session.CustomerName,
+		"phase":         session.Phase,
 		"currentIntent": session.CurrentIntent,
-		"messages":     messages,
-		"createdAt":    session.CreatedAt,
+		"messages":      messages,
+		"createdAt":     session.CreatedAt,
 	})
 }
 
@@ -3475,15 +3535,15 @@ func (h *Handler) HandleApplyLearnings(c echo.Context) error {
 
 // RAGStatsResponse represents the global RAG statistics response.
 type RAGStatsResponse struct {
-	Enabled             bool                   `json:"enabled"`
-	StorageProvider     string                 `json:"storageProvider"`
-	EmbeddingProvider   string                 `json:"embeddingProvider"`
-	EmbeddingModel      string                 `json:"embeddingModel"`
-	HybridSearchEnabled bool                   `json:"hybridSearchEnabled"`
-	HybridVectorWeight  float64                `json:"hybridVectorWeight"`
-	HybridTextWeight    float64                `json:"hybridTextWeight"`
-	Stats               RAGStatsData           `json:"stats"`
-	Tenants             []TenantRAGInfo        `json:"tenants"`
+	Enabled             bool            `json:"enabled"`
+	StorageProvider     string          `json:"storageProvider"`
+	EmbeddingProvider   string          `json:"embeddingProvider"`
+	EmbeddingModel      string          `json:"embeddingModel"`
+	HybridSearchEnabled bool            `json:"hybridSearchEnabled"`
+	HybridVectorWeight  float64         `json:"hybridVectorWeight"`
+	HybridTextWeight    float64         `json:"hybridTextWeight"`
+	Stats               RAGStatsData    `json:"stats"`
+	Tenants             []TenantRAGInfo `json:"tenants"`
 }
 
 // RAGStatsData holds the core statistics.
@@ -3542,10 +3602,10 @@ type RAGSearchRequest struct {
 
 // RAGSearchResponse holds the search test results.
 type RAGSearchResponse struct {
-	SearchMode   string             `json:"searchMode"`
-	LatencyMs    int64              `json:"latencyMs"`
-	TotalResults int                `json:"totalResults"`
-	Results      []RAGSearchResult  `json:"results"`
+	SearchMode   string            `json:"searchMode"`
+	LatencyMs    int64             `json:"latencyMs"`
+	TotalResults int               `json:"totalResults"`
+	Results      []RAGSearchResult `json:"results"`
 }
 
 // RAGSearchResult holds a single search result.

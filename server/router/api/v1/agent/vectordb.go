@@ -13,15 +13,15 @@ import (
 	"time"
 )
 
-// CheckpointCallback is called after each successful batch to update progress.
-type CheckpointCallback func(currentBatch, processedChunks, totalBatches, totalChunks int) error
+// CheckpointFunc is a callback called after each successful batch.
+type CheckpointFunc func(currentBatch, processedChunks, totalBatches, totalChunks, chunksInBatch int) error
 
 // InsertOptions configures the InsertWithCheckpoint operation.
 type InsertOptions struct {
-	StartBatch     int                // Resume from this batch (0-indexed)
-	CheckpointFunc CheckpointCallback // Called after each batch
-	MaxRetries     int                // Max retries per batch (default: 3)
-	RetryDelay     time.Duration      // Initial delay between retries (default: 5s)
+	StartBatch     int            // Resume from this batch (0-indexed)
+	CheckpointFunc CheckpointFunc // Called after each batch
+	MaxRetries     int            // Max retries per batch (default: 3)
+	RetryDelay     time.Duration  // Initial delay between retries (default: 5s)
 }
 
 // VectorDB defines the interface for vector database operations.
@@ -145,11 +145,11 @@ type SearchResult struct {
 
 // VectorDBStats holds database statistics.
 type VectorDBStats struct {
-	TotalChunks    int64
-	TenantCounts   map[int32]int64
-	ContentCounts  map[string]int64
-	IndexSize      int64 // in bytes
-	LastOptimized  time.Time
+	TotalChunks   int64
+	TenantCounts  map[int32]int64
+	ContentCounts map[string]int64
+	IndexSize     int64 // in bytes
+	LastOptimized time.Time
 }
 
 // NewVectorDB creates a vector database based on configuration.
@@ -248,7 +248,7 @@ func (db *MemoryVectorDB) InsertWithCheckpoint(ctx context.Context, chunks []Doc
 
 	// Call checkpoint with final state if callback provided
 	if opts.CheckpointFunc != nil {
-		return opts.CheckpointFunc(1, len(chunks), 1, len(chunks))
+		return opts.CheckpointFunc(1, len(chunks), 1, len(chunks), len(chunks))
 	}
 	return nil
 }
@@ -571,12 +571,12 @@ func cosineSimilarity(a, b []float32) float64 {
 // BM25Scorer implements BM25 scoring for in-memory search.
 // BM25 (Best Matching 25) is a ranking function used in information retrieval.
 type BM25Scorer struct {
-	k1        float64            // Term frequency saturation parameter (default: 1.2)
-	b         float64            // Length normalization parameter (default: 0.75)
+	k1        float64             // Term frequency saturation parameter (default: 1.2)
+	b         float64             // Length normalization parameter (default: 0.75)
 	docs      map[string][]string // Document ID -> tokenized words
-	docFreq   map[string]int     // Term -> number of documents containing term
-	avgLen    float64            // Average document length
-	totalDocs int                // Total number of documents
+	docFreq   map[string]int      // Term -> number of documents containing term
+	avgLen    float64             // Average document length
+	totalDocs int                 // Total number of documents
 }
 
 // NewBM25Scorer creates a new BM25 scorer with standard parameters.
@@ -722,10 +722,16 @@ func RetrieveContextForQuery(
 	// No longer filter by intent - embeddings are good at finding relevant content
 	_ = intent // Unused, kept for backward compatibility
 
+	// If audience is internal, also consider external content (production chat uses internal audience)
+	searchAudience := audienceType
+	if audienceType == "internal" {
+		searchAudience = "" // Search both to find any production-ready content
+	}
+
 	searchQuery := SearchQuery{
 		QueryText:    query,
 		TenantID:     tenantID,
-		AudienceType: audienceType,
+		AudienceType: searchAudience,
 		ContentTypes: []string{}, // Empty = search all types
 		ActiveOnly:   true,
 		TopK:         10,   // Fetch more results, let ranking sort them

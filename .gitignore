@@ -8,7 +8,6 @@ mastra-main/
 *.db-shm
 node_modules/
 dist/
-bin/
 lib/
 linux_amd64/
 

@@ -307,8 +307,8 @@ type FindAgentSourceFile struct {
 	TenantID     *int32
 	AudienceType *string
 	FileType     *string
-	Version      *int32  // Specific version to retrieve
-	LatestOnly   bool    // If true, only return the latest version
+	Version      *int32 // Specific version to retrieve
+	LatestOnly   bool   // If true, only return the latest version
 }
 
 // AgentRateLimit tracks rate limiting per client.
@@ -343,11 +343,11 @@ type AgentSimulationTranscript struct {
 
 // SimulationMessage represents a single message in a simulation.
 type SimulationMessage struct {
-	Role      string                 `json:"role"`       // "human_sim" or "agent"
-	Content   string                 `json:"content"`
-	TurnNum   int                    `json:"turn_num"`
-	Timestamp time.Time              `json:"timestamp"`
-	Metadata  *SimulationMetadata    `json:"metadata,omitempty"`
+	Role      string              `json:"role"` // "human_sim" or "agent"
+	Content   string              `json:"content"`
+	TurnNum   int                 `json:"turn_num"`
+	Timestamp time.Time           `json:"timestamp"`
+	Metadata  *SimulationMetadata `json:"metadata,omitempty"`
 }
 
 // SimulationMetadata contains agent response metadata.
@@ -448,10 +448,10 @@ type AgentLearningMemory struct {
 
 // CommonIssue represents a frequently occurring issue from analysis.
 type CommonIssue struct {
-	Category    string `json:"category"`     // e.g., "information_gathering", "tone_resolution"
-	Description string `json:"description"`  // What the issue is
-	Occurrences int    `json:"occurrences"`  // How many times it appeared
-	LastSeen    string `json:"last_seen"`    // Date of last occurrence
+	Category    string `json:"category"`    // e.g., "information_gathering", "tone_resolution"
+	Description string `json:"description"` // What the issue is
+	Occurrences int    `json:"occurrences"` // How many times it appeared
+	LastSeen    string `json:"last_seen"`   // Date of last occurrence
 }
 
 // LearnedBehavior represents a specific behavioral improvement to apply.
@@ -586,6 +586,17 @@ type FindAgentTranscript struct {
 	Offset       int
 }
 
+// ObservationLog represents the compressed memory state for a session.
+type ObservationLog struct {
+	SessionID            string    `json:"session_id"`
+	TenantID             int32     `json:"tenant_id"`
+	ObservationLog       string    `json:"observation_log"`
+	LastObservedMsgIndex int       `json:"last_observed_msg_index"`
+	TokensInLog          int       `json:"tokens_in_log"`
+	CreatedAt            time.Time `json:"created_at"`
+	LastUpdatedAt        time.Time `json:"last_updated_at"`
+}
+
 // AgentStore interface defines all agent-related database operations.
 type AgentStore interface {
 	// Tenant operations
@@ -703,6 +714,10 @@ type AgentStore interface {
 	ListAgentTranscripts(ctx context.Context, find *FindAgentTranscript) ([]*AgentTranscript, error)
 	UpdateAgentTranscript(ctx context.Context, transcript *AgentTranscript) error
 	DeleteAgentTranscript(ctx context.Context, id string) error
+
+	// Observation Log operations (Observational Memory)
+	UpsertObservationLog(ctx context.Context, log *ObservationLog) (*ObservationLog, error)
+	GetObservationLog(ctx context.Context, sessionID string) (*ObservationLog, error)
 }
 
 // Store methods that delegate to the driver
@@ -1015,6 +1030,7 @@ type ReindexCheckpoint struct {
 	BatchSize       int32
 	Status          string // "in_progress", "completed", "failed"
 	ErrorMessage    string
+	LastMessage     string // Detailed progress message (e.g. "Processing batch 12/29...")
 	ErrorBatch      *int32
 	StartedAt       time.Time
 	UpdatedAt       time.Time
@@ -1038,4 +1054,12 @@ func (s *Store) GetReindexCheckpoint(ctx context.Context, find *FindReindexCheck
 
 func (s *Store) DeleteReindexCheckpoint(ctx context.Context, tenantID int32, audience string) error {
 	return s.driver.DeleteReindexCheckpoint(ctx, tenantID, audience)
+}
+
+func (s *Store) UpsertObservationLog(ctx context.Context, log *ObservationLog) (*ObservationLog, error) {
+	return s.driver.UpsertObservationLog(ctx, log)
+}
+
+func (s *Store) GetObservationLog(ctx context.Context, sessionID string) (*ObservationLog, error) {
+	return s.driver.GetObservationLog(ctx, sessionID)
 }

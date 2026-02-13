@@ -221,6 +221,17 @@ export interface RAGSearchResponse {
   results: RAGSearchResult[];
 }
 
+export interface ReindexStatus {
+  status: "idle" | "in_progress" | "completed" | "failed";
+  current_batch: number;
+  total_batches: number;
+  processed_chunks: number;
+  total_chunks: number;
+  error?: string;
+  last_message?: string;
+  can_resume: boolean;
+}
+
 // Chat Transcript types
 export interface TranscriptMessage {
   role: string;
@@ -434,6 +445,8 @@ class LocalState {
   transcripts: AgentTranscript[] = [];
   isLoadingTranscripts: boolean = false;
   tenantSettings: TenantSettings | null = null;
+  reindexStatus: ReindexStatus | null = null;
+  isPollingReindex: boolean = false;
 
   constructor() {
     makeAutoObservable(this);
@@ -866,12 +879,14 @@ const agentAdminStore = (() => {
     }
   };
 
-  const reindexTenant = async (slug: string): Promise<{ success: boolean; chunks?: number; error?: string }> => {
+  const reindexTenant = async (slug: string, audienceType: string = "all"): Promise<{ success: boolean; chunks?: number; error?: string }> => {
     state.setPartial({ isSaving: true, error: null });
 
     try {
       const response = await axios.post<{ success: boolean; chunks: number; message: string }>(
-        `/api/v1/agent/${slug}/reindex`
+        `/api/v1/agent/${slug}/reindex`, null, {
+        params: { audience_type: audienceType }
+      }
       );
 
       runInAction(() => {
@@ -885,6 +900,21 @@ const agentAdminStore = (() => {
         state.error = error.response?.data?.message || "Failed to rebuild index";
       });
       return { success: false, error: error.response?.data?.message || "Failed to rebuild index" };
+    }
+  };
+
+  const fetchReindexStatus = async (slug: string, audienceType: string = "all") => {
+    try {
+      const response = await axios.get<ReindexStatus>(`/api/v1/agent/${slug}/reindex/status`, {
+        params: { audience_type: audienceType }
+      });
+      runInAction(() => {
+        state.reindexStatus = response.data;
+      });
+      return response.data;
+    } catch (error: any) {
+      console.error("Failed to fetch reindex status:", error);
+      return null;
     }
   };
 
@@ -1338,6 +1368,7 @@ const agentAdminStore = (() => {
     restoreFileVersion,
     deleteTenant,
     reindexTenant,
+    fetchReindexStatus,
     toggleTenantActive,
     updateAllowedDomains,
     clearSelectedTenant,
