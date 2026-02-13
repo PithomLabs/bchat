@@ -273,9 +273,9 @@ func (s *Service) ReindexTenantContent(ctx context.Context, tenantID int32, audi
 		return 0, fmt.Errorf("RAG pipeline disabled (using NoOpVectorDB)")
 	}
 
-	// Force internal-only indexing - external audience is never indexed
-	if audienceType == "" || audienceType == "external" {
-		audienceType = "internal"
+	// If audienceType is "all", we treat it as empty to get all source files
+	if audienceType == "all" {
+		audienceType = ""
 	}
 
 	// Get tenant info for logging
@@ -406,6 +406,7 @@ type ReindexStatus struct {
 	ProcessedChunks int    `json:"processed_chunks,omitempty"`
 	TotalChunks     int    `json:"total_chunks,omitempty"`
 	ErrorMessage    string `json:"error,omitempty"`
+	LastMessage     string `json:"last_message,omitempty"`
 	ErrorBatch      *int   `json:"error_batch,omitempty"`
 	CanResume       bool   `json:"can_resume"`
 }
@@ -431,6 +432,7 @@ func (s *Service) GetReindexStatus(ctx context.Context, tenantID int32, audience
 		ProcessedChunks: int(checkpoint.ProcessedChunks),
 		TotalChunks:     int(checkpoint.TotalChunks),
 		ErrorMessage:    checkpoint.ErrorMessage,
+		LastMessage:     checkpoint.LastMessage,
 		CanResume:       checkpoint.Status == "failed",
 	}
 
@@ -453,8 +455,10 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 		return 0, fmt.Errorf("RAG pipeline disabled (using NoOpVectorDB)")
 	}
 
-	// Force internal-only indexing
-	if audienceType == "" || audienceType == "external" {
+	// If audienceType is "all", we process all audiences
+	if audienceType == "all" {
+		// Keep audienceType as "all" for checkpointing purposes
+	} else if audienceType == "" {
 		audienceType = "internal"
 	}
 
@@ -499,9 +503,11 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 
 	// Get latest version of source files
 	findParams := &store.FindAgentSourceFile{
-		TenantID:     &tenantID,
-		AudienceType: &audienceType,
-		LatestOnly:   true,
+		TenantID:   &tenantID,
+		LatestOnly: true,
+	}
+	if audienceType != "all" {
+		findParams.AudienceType = &audienceType
 	}
 
 	files, err := s.store.ListAgentSourceFiles(ctx, findParams)
@@ -509,28 +515,28 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 		return 0, fmt.Errorf("failed to list source files: %w", err)
 	}
 
-	// Build chunks
-	var kbContent, policyContent string
+	// Group files by audience for correct chunking
+	audienceFiles := make(map[string]map[string]string) // audience -> fileType -> content
 	for _, f := range files {
-		if f.FileType == "kb" {
-			kbContent = f.Content
-		} else if f.FileType == "policy" {
-			policyContent = f.Content
+		if _, ok := audienceFiles[f.AudienceType]; !ok {
+			audienceFiles[f.AudienceType] = make(map[string]string)
 		}
-	}
-
-	if kbContent == "" && policyContent == "" {
-		return 0, nil
+		audienceFiles[f.AudienceType][f.FileType] = f.Content
 	}
 
 	var allChunks []DocumentChunk
-	if kbContent != "" {
-		kbChunks := s.chunker.ChunkMarkdownContent(kbContent, tenantID, audienceType, "kb", 1, maxChunkTokens)
-		allChunks = append(allChunks, kbChunks...)
-	}
-	if policyContent != "" {
-		policyChunks := s.chunker.ChunkMarkdownContent(policyContent, tenantID, audienceType, "policy", 1, maxChunkTokens)
-		allChunks = append(allChunks, policyChunks...)
+	for audience, fileMap := range audienceFiles {
+		kbContent := fileMap["kb"]
+		policyContent := fileMap["policy"]
+
+		if kbContent != "" {
+			kbChunks := s.chunker.ChunkMarkdownContent(kbContent, tenantID, audience, "kb", 1, maxChunkTokens)
+			allChunks = append(allChunks, kbChunks...)
+		}
+		if policyContent != "" {
+			policyChunks := s.chunker.ChunkMarkdownContent(policyContent, tenantID, audience, "policy", 1, maxChunkTokens)
+			allChunks = append(allChunks, policyChunks...)
+		}
 	}
 
 	if len(allChunks) == 0 {
@@ -576,7 +582,7 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 	}
 
 	// Create checkpoint callback
-	checkpointFunc := func(currentBatch, processedChunks, totalBatches, totalChunks int) error {
+	checkpointFunc := func(currentBatch, processedChunks, totalBatches, totalChunks, chunksInBatch int) error {
 		checkpoint := &store.ReindexCheckpoint{
 			TenantID:        tenantID,
 			Audience:        audienceType,
@@ -586,6 +592,8 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 			TotalBatches:    int32(totalBatches),
 			BatchSize:       int32(batchSize),
 			Status:          "in_progress",
+			LastMessage: fmt.Sprintf("Processing batch batch=%d totalBatches=%d chunksInBatch=%d progress=%d/%d...",
+				currentBatch, totalBatches, chunksInBatch, processedChunks, totalChunks),
 		}
 		_, err := s.store.UpsertReindexCheckpoint(ctx, checkpoint)
 		return err
@@ -797,10 +805,10 @@ type AudienceConfig struct {
 // VerificationRule represents a custom verification rule from POLICY.MD.
 type VerificationRule struct {
 	ID          string   `json:"id"`
-	Type        string   `json:"type"`        // "exact_match", "blocklist", "conditional"
+	Type        string   `json:"type"` // "exact_match", "blocklist", "conditional"
 	Description string   `json:"description"`
-	Sources     []string `json:"sources"`     // KB sections to check against
-	Fallback    string   `json:"fallback"`    // Fallback text if rule cannot be satisfied
+	Sources     []string `json:"sources"`  // KB sections to check against
+	Fallback    string   `json:"fallback"` // Fallback text if rule cannot be satisfied
 }
 
 // NewConfigCache creates a new config cache.
@@ -1115,10 +1123,10 @@ type ChatRequest struct {
 
 // ChatResponse represents a chat response.
 type ChatResponse struct {
-	SessionID        string        `json:"session_id"`
+	SessionID        string          `json:"session_id"`
 	Message          ResponseMessage `json:"message"`
-	Metadata         ChatMetadata  `json:"metadata"`
-	SessionPersisted bool          `json:"session_persisted,omitempty"`
+	Metadata         ChatMetadata    `json:"metadata"`
+	SessionPersisted bool            `json:"session_persisted,omitempty"`
 }
 
 // ResponseMessage represents the assistant's response.
@@ -1631,7 +1639,7 @@ func (s *Service) generateResponse(ctx context.Context, config *AudienceConfig, 
 	}
 
 	// Build system prompt (passing session for context retention)
-	systemPrompt := s.buildSystemPrompt(config, session, classification, decision)
+	systemPrompt := s.buildSystemPrompt(ctx, config, session, classification, decision)
 
 	// Build conversation history
 	messages := []openrouter.ChatCompletionMessage{
@@ -1665,12 +1673,20 @@ func (s *Service) generateResponse(ctx context.Context, config *AudienceConfig, 
 		return "", fmt.Errorf("no response from LLM")
 	}
 
+	// Trigger Observational Memory update asynchronously
+	// We use a background context to ensure the observer runs even if the request context is cancelled
+	go func() {
+		if err := s.RunObserver(context.Background(), session.ID); err != nil {
+			slog.Error("Failed to run observer", "session_id", session.ID, "error", err)
+		}
+	}()
+
 	return resp.Choices[0].Message.Content.Text, nil
 }
 
 // buildSystemPrompt constructs the system prompt for the LLM.
 // Structure optimized for compliance: constraints first, then context.
-func (s *Service) buildSystemPrompt(config *AudienceConfig, session *store.AgentSession, classification *Classification, decision *PolicyDecision) string {
+func (s *Service) buildSystemPrompt(ctx context.Context, config *AudienceConfig, session *store.AgentSession, classification *Classification, decision *PolicyDecision) string {
 	var sb strings.Builder
 
 	// Compute validated phone number once for use throughout prompt
@@ -1707,6 +1723,19 @@ func (s *Service) buildSystemPrompt(config *AudienceConfig, session *store.Agent
 				sb.WriteString("This is the CUSTOMER's phone - do NOT replace it with the company phone number!\n")
 			}
 			sb.WriteString("\n")
+		}
+	}
+
+	// =========================================================================
+	// SECTION 0.5: OBSERVATIONAL MEMORY (Long-term Context)
+	// =========================================================================
+	if session != nil {
+		obsLog, _ := s.store.GetObservationLog(ctx, session.ID)
+		if obsLog != nil && obsLog.ObservationLog != "" {
+			sb.WriteString("=== OBSERVATIONAL MEMORY (Historical Context) ===\n\n")
+			sb.WriteString("The following are observations from previous interactions with this user. Use this context to personalize your responses.\n\n")
+			sb.WriteString(obsLog.ObservationLog)
+			sb.WriteString("\n\n")
 		}
 	}
 

@@ -9,7 +9,7 @@ import { agentAdminStore, userStore } from "@/store/v2";
 import type { AgentTenant, AgentTranscript, CreateTenantRequest, LLMConfig, SetLLMConfigRequest, UserPermission, GrantPermissionRequest, ProcessingOptions, FormatForRAGResponse } from "@/store/v2/agentAdmin";
 import { LLM_MODEL_OPTIONS, PERMISSION_PRESETS, DEFAULT_PROCESSING_OPTIONS } from "@/store/v2/agentAdmin";
 import { cn } from "@/utils";
-import { useTranslate } from "@/utils/i18n";
+import { useTranslate, Translations } from "@/utils/i18n";
 import { User_Role } from "@/types/proto/api/v1/user_service";
 
 const AgentAdmin = observer(() => {
@@ -50,6 +50,7 @@ const AgentAdmin = observer(() => {
   // Domain allowlisting state
   const [domainAllowlistEnabled, setDomainAllowlistEnabled] = useState(false);
   const [allowedDomainsText, setAllowedDomainsText] = useState("");
+  const [reindexAudience, setReindexAudience] = useState<string>("all");
   const [isSavingDomains, setIsSavingDomains] = useState(false);
 
   const { tenants, selectedTenant, isLoading, isSaving, error, fileVersions, llmConfig, tenantPermissions, myPermissions, script, isLoadingScript, qaPairs, qaTestResults, isGeneratingQA, isTestingQA, ragSearchResults, isSearchingRAG, transcripts, isLoadingTranscripts, tenantSettings } = agentAdminStore.state;
@@ -97,7 +98,9 @@ const AgentAdmin = observer(() => {
         agentAdminStore.loadProcessingOptions(selectedTenant.tenant.slug).then((result) => {
           if (!result.error) {
             setProcessingOptions(result.options);
-            setHasCustomOptions(result.hasCustom);
+            if (result && "hasCustom" in result) {
+              setHasCustomOptions(result.hasCustom as boolean);
+            }
           }
         });
         // Fetch Q&A pairs for this tenant
@@ -108,6 +111,17 @@ const AgentAdmin = observer(() => {
       }
     }
   }, [selectedTenant?.tenant.slug, selectedTenant?.tenant.id, isAdmin]);
+
+  // Polling for reindex status
+  useEffect(() => {
+    let interval: any;
+    if (selectedTenant && (isRebuilding || isSaving || agentAdminStore.state.reindexStatus?.status === "in_progress")) {
+      interval = setInterval(() => {
+        agentAdminStore.fetchReindexStatus(selectedTenant.tenant.slug, reindexAudience);
+      }, 3000);
+    }
+    return () => clearInterval(interval);
+  }, [selectedTenant?.tenant.slug, isRebuilding, isSaving, agentAdminStore.state.reindexStatus?.status, reindexAudience]);
 
   useEffect(() => {
     if (error) {
@@ -149,11 +163,12 @@ const AgentAdmin = observer(() => {
   const handleRebuildIndex = async () => {
     if (!selectedTenant) return;
     setIsRebuilding(true);
-    const result = await agentAdminStore.reindexTenant(selectedTenant.tenant.slug);
-    setIsRebuilding(false);
+    const result = await agentAdminStore.reindexTenant(selectedTenant.tenant.slug, reindexAudience);
     if (result.success) {
-      toast.success(t("agent-admin.rebuild-index-success", { chunks: result.chunks || 0 }));
+      toast.success(t("agent-admin.rebuild-index-started"));
+      // The polling useEffect will pick up the progress
     } else {
+      setIsRebuilding(false);
       toast.error(result.error || t("agent-admin.rebuild-index-failed"));
     }
   };
@@ -197,7 +212,7 @@ const AgentAdmin = observer(() => {
       "internal",
       searchTopK
     );
-    if (!result.success) {
+    if (result && !result.success) {
       toast.error(result.error || "Search failed");
     }
   };
@@ -456,7 +471,7 @@ const AgentAdmin = observer(() => {
               title={t("agent-admin.external")}
               audienceType="external"
               tenant={selectedTenant}
-              onViewVersions={handleViewVersions}
+              onViewVersions={(audienceType, fileType) => handleViewVersions(selectedTenant.tenant.slug, audienceType, fileType)}
               isSaving={isSaving}
               t={t}
               canUpload={canUpload}
@@ -793,7 +808,7 @@ const AgentAdmin = observer(() => {
               title={t("agent-admin.internal")}
               audienceType="internal"
               tenant={selectedTenant}
-              onViewVersions={handleViewVersions}
+              onViewVersions={(audienceType, fileType) => handleViewVersions(selectedTenant.tenant.slug, audienceType, fileType)}
               isSaving={isSaving}
               t={t}
               canUpload={canUpload}
@@ -803,15 +818,70 @@ const AgentAdmin = observer(() => {
             {/* Rebuild Index - Admin or api:config permission */}
             {(isAdmin || canConfigApi) && (
               <div className="bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800 p-4">
-                <div className="flex justify-between items-center">
-                  <div>
-                    <h3 className="font-medium text-blue-700 dark:text-blue-300">{t("agent-admin.rebuild-index")}</h3>
-                    <p className="text-sm text-blue-600 dark:text-blue-400">{t("agent-admin.rebuild-index-desc")}</p>
+                <div className="flex flex-col gap-4">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <h3 className="font-medium text-blue-700 dark:text-blue-300">{t("agent-admin.rebuild-index")}</h3>
+                      <p className="text-sm text-blue-600 dark:text-blue-400">{t("agent-admin.rebuild-index-desc")}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Select
+                        size="sm"
+                        value={reindexAudience}
+                        onChange={(_, v) => v && setReindexAudience(v)}
+                        sx={{ width: 120 }}
+                      >
+                        <Option value="all">All</Option>
+                        <Option value="internal">Internal</Option>
+                        <Option value="external">External</Option>
+                      </Select>
+                      <Button color="primary" onClick={handleRebuildIndex} loading={isRebuilding || agentAdminStore.state.reindexStatus?.status === "in_progress"}>
+                        <RefreshCwIcon className="w-4 h-4 mr-2" />
+                        {t("agent-admin.rebuild-index")}
+                      </Button>
+                    </div>
                   </div>
-                  <Button color="primary" onClick={handleRebuildIndex} loading={isRebuilding}>
-                    <RefreshCwIcon className="w-4 h-4 mr-2" />
-                    {t("agent-admin.rebuild-index")}
-                  </Button>
+
+                  {agentAdminStore.state.reindexStatus && agentAdminStore.state.reindexStatus.status !== "idle" && (
+                    <div className="bg-white dark:bg-zinc-800 rounded-lg p-3 border border-blue-100 dark:border-blue-900/40">
+                      <div className="flex justify-between text-xs font-medium mb-1">
+                        <span className={cn(
+                          agentAdminStore.state.reindexStatus.status === "failed" ? "text-red-500" :
+                            agentAdminStore.state.reindexStatus.status === "completed" ? "text-green-500" : "text-blue-500"
+                        )}>
+                          {agentAdminStore.state.reindexStatus.status.toUpperCase()}
+                        </span>
+                        <span>
+                          {agentAdminStore.state.reindexStatus.processed_chunks} / {agentAdminStore.state.reindexStatus.total_chunks} chunks
+                        </span>
+                      </div>
+                      <div className="w-full bg-gray-200 dark:bg-zinc-700 rounded-full h-1.5 mb-2">
+                        <div
+                          className={cn(
+                            "h-1.5 rounded-full transition-all duration-500",
+                            agentAdminStore.state.reindexStatus.status === "failed" ? "bg-red-500" :
+                              agentAdminStore.state.reindexStatus.status === "completed" ? "bg-green-500" : "bg-blue-500"
+                          )}
+                          style={{ width: `${Math.min(100, (agentAdminStore.state.reindexStatus.processed_chunks / (agentAdminStore.state.reindexStatus.total_chunks || 1)) * 100)}%` }}
+                        ></div>
+                      </div>
+                      {agentAdminStore.state.reindexStatus.last_message && (
+                        <div className="text-[10px] font-mono text-gray-500 dark:text-gray-400 break-all bg-gray-50 dark:bg-zinc-900/50 p-1 rounded">
+                          $ {agentAdminStore.state.reindexStatus.last_message}
+                        </div>
+                      )}
+                      {agentAdminStore.state.reindexStatus.error && (
+                        <div className="text-[10px] text-red-500 mt-1">
+                          Error: {agentAdminStore.state.reindexStatus.error}
+                        </div>
+                      )}
+                      {agentAdminStore.state.reindexStatus.status === "completed" && (
+                        <div className="text-[10px] text-green-500 mt-1">
+                          ✓ Reindexing completed successfully
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -911,7 +981,7 @@ const AgentAdmin = observer(() => {
                           >
                             <div className="flex items-center gap-2">
                               <svg viewBox="0 0 24 24" className="w-5 h-5" style={{ fill: widgetColor }}>
-                                <path d="M12 2C6.48 2 2 6.48 2 12c0 1.85.5 3.58 1.36 5.07L2 22l4.93-1.36C8.42 21.5 10.15 22 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2zm0 18c-1.58 0-3.08-.38-4.4-1.06l-.31-.17-3.23.89.89-3.23-.17-.31C4.38 15.08 4 13.58 4 12c0-4.41 3.59-8 8-8s8 3.59 8 8-3.59 8-8 8z"/>
+                                <path d="M12 2C6.48 2 2 6.48 2 12c0 1.85.5 3.58 1.36 5.07L2 22l4.93-1.36C8.42 21.5 10.15 22 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2zm0 18c-1.58 0-3.08-.38-4.4-1.06l-.31-.17-3.23.89.89-3.23-.17-.31C4.38 15.08 4 13.58 4 12c0-4.41 3.59-8 8-8s8 3.59 8 8-3.59 8-8 8z" />
                               </svg>
                               <span className="font-semibold text-sm text-gray-800">
                                 {selectedTenant?.tenant.companyName || "Company"}
@@ -930,7 +1000,7 @@ const AgentAdmin = observer(() => {
                           <div className="p-4 bg-gray-50 h-32 flex items-center justify-center">
                             <div className="text-center text-gray-400">
                               <svg viewBox="0 0 24 24" className="w-8 h-8 mx-auto mb-2 fill-gray-300">
-                                <path d="M12 2C6.48 2 2 6.48 2 12c0 1.85.5 3.58 1.36 5.07L2 22l4.93-1.36C8.42 21.5 10.15 22 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2zm0 18c-1.58 0-3.08-.38-4.4-1.06l-.31-.17-3.23.89.89-3.23-.17-.31C4.38 15.08 4 13.58 4 12c0-4.41 3.59-8 8-8s8 3.59 8 8-3.59 8-8 8z"/>
+                                <path d="M12 2C6.48 2 2 6.48 2 12c0 1.85.5 3.58 1.36 5.07L2 22l4.93-1.36C8.42 21.5 10.15 22 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2zm0 18c-1.58 0-3.08-.38-4.4-1.06l-.31-.17-3.23.89.89-3.23-.17-.31C4.38 15.08 4 13.58 4 12c0-4.41 3.59-8 8-8s8 3.59 8 8-3.59 8-8 8z" />
                               </svg>
                               <p className="text-xs">{widgetWelcome}</p>
                             </div>
@@ -945,7 +1015,7 @@ const AgentAdmin = observer(() => {
                               style={{ background: widgetColor }}
                             >
                               <svg viewBox="0 0 24 24" className="w-4 h-4 fill-white">
-                                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
                               </svg>
                             </div>
                           </div>
@@ -961,7 +1031,7 @@ const AgentAdmin = observer(() => {
                           }}
                         >
                           <svg viewBox="0 0 24 24" className="w-6 h-6 fill-white">
-                            <path d="M12 2C6.48 2 2 6.48 2 12c0 1.85.5 3.58 1.36 5.07L2 22l4.93-1.36C8.42 21.5 10.15 22 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2zm0 18c-1.58 0-3.08-.38-4.4-1.06l-.31-.17-3.23.89.89-3.23-.17-.31C4.38 15.08 4 13.58 4 12c0-4.41 3.59-8 8-8s8 3.59 8 8-3.59 8-8 8z"/>
+                            <path d="M12 2C6.48 2 2 6.48 2 12c0 1.85.5 3.58 1.36 5.07L2 22l4.93-1.36C8.42 21.5 10.15 22 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2zm0 18c-1.58 0-3.08-.38-4.4-1.06l-.31-.17-3.23.89.89-3.23-.17-.31C4.38 15.08 4 13.58 4 12c0-4.41 3.59-8 8-8s8 3.59 8 8-3.59 8-8 8z" />
                           </svg>
                         </div>
                       </div>
@@ -999,7 +1069,7 @@ const AgentAdmin = observer(() => {
                     </Button>
                   </div>
                   <pre className="bg-gray-900 text-gray-100 rounded-lg p-4 text-xs overflow-x-auto font-mono">
-{`<script src="${window.location.origin}/widget/${selectedTenant?.tenant.slug}/embed.js"></script>
+                    {`<script src="${window.location.origin}/widget/${selectedTenant?.tenant.slug}/embed.js"></script>
 <script>
   AgentChatWidget.init({
     tenant: "${selectedTenant?.tenant.slug}",
@@ -1230,8 +1300,8 @@ const AgentAdmin = observer(() => {
                                   className={cn(
                                     "h-full rounded-full transition-all",
                                     result.score_percent >= 80 ? "bg-green-500" :
-                                    result.score_percent >= 60 ? "bg-yellow-500" :
-                                    result.score_percent >= 40 ? "bg-orange-500" : "bg-red-500"
+                                      result.score_percent >= 60 ? "bg-yellow-500" :
+                                        result.score_percent >= 40 ? "bg-orange-500" : "bg-red-500"
                                   )}
                                   style={{ width: `${result.score_percent}%` }}
                                 />
@@ -1239,15 +1309,15 @@ const AgentAdmin = observer(() => {
                               <span className={cn(
                                 "font-bold min-w-[3rem] text-right",
                                 result.score_percent >= 80 ? "text-green-600" :
-                                result.score_percent >= 60 ? "text-yellow-600" :
-                                result.score_percent >= 40 ? "text-orange-600" : "text-red-600"
+                                  result.score_percent >= 60 ? "text-yellow-600" :
+                                    result.score_percent >= 40 ? "text-orange-600" : "text-red-600"
                               )}>
                                 {result.score_percent}%
                               </span>
                             </div>
 
                             {/* Title */}
-                            <div className="font-medium text-gray-800 dark:text-gray-200 mb-1">
+                            <div className="font-medium text-gray-80:text-gray-200 mb-1">
                               {result.title || "Untitled Section"}
                             </div>
 
@@ -1737,10 +1807,14 @@ const EndpointRow = ({ label, value, onCopy }: EndpointRowProps) => (
 interface AudienceSectionProps {
   title: string;
   audienceType: "external" | "internal";
-  tenant: any;
-  onViewVersions: (slug: string, audienceType: string, fileType: string) => void;
+  tenant: {
+    tenant: AgentTenant;
+    external: any;
+    internal: any;
+  };
+  onViewVersions: (audienceType: string, fileType: string) => void;
   isSaving: boolean;
-  t: (key: string) => string;
+  t: (key: any, params?: any) => string;
   canUpload?: boolean;
   canRestore?: boolean;
 }
@@ -1856,7 +1930,7 @@ interface FileUploadRowProps {
   onViewVersions: () => void;
   onPreview: () => void;
   isSaving: boolean;
-  t: (key: string) => string;
+  t: (key: any, params?: any) => string;
   canUpload?: boolean;
   canRestore?: boolean;
 }
@@ -1916,7 +1990,7 @@ const FileUploadRow = ({ label, hint, fileRef, onUpload, onViewVersions, onPrevi
 interface CreateTenantModalProps {
   open: boolean;
   onClose: () => void;
-  t: (key: string) => string;
+  t: (key: any, params?: any) => string;
 }
 
 const CreateTenantModal = ({ open, onClose, t }: CreateTenantModalProps) => {
@@ -2104,7 +2178,7 @@ interface VersionHistoryListProps {
   versions: any[];
   onRestore: (versionId: number) => void;
   isSaving: boolean;
-  t: (key: string) => string;
+  t: (key: any, params?: any) => string;
 }
 
 const VersionHistoryList = ({ versions, onRestore, isSaving, t }: VersionHistoryListProps) => {
@@ -2157,7 +2231,7 @@ interface ScriptSectionProps {
   isLoading: boolean;
   isSaving: boolean;
   canUpload?: boolean;
-  t: (key: string) => string;
+  t: (key: any, params?: any) => string;
 }
 
 const ScriptSection = ({ tenantSlug, script, isLoading, isSaving, canUpload = false, t }: ScriptSectionProps) => {
@@ -2309,7 +2383,7 @@ interface LLMConfigSectionProps {
   config: LLMConfig | null;
   isSaving: boolean;
   canEdit?: boolean;
-  t: (key: string) => string;
+  t: (key: any, params?: any) => string;
 }
 
 const LLMConfigSection = ({ tenantSlug, config, isSaving, canEdit = false, t }: LLMConfigSectionProps) => {
@@ -2465,7 +2539,7 @@ interface ReasoningModelInputProps {
   tenantSlug: string;
   config: LLMConfig | null;
   isSaving: boolean;
-  t: (key: string) => string;
+  t: (key: any, params?: any) => string;
 }
 
 const ReasoningModelInput = ({ tenantSlug, config, isSaving, t }: ReasoningModelInputProps) => {

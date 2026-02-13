@@ -335,6 +335,9 @@ func (e *OpenRouterEmbedding) doEmbed(ctx context.Context, texts []string) ([][]
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusUnauthorized {
+			return nil, fmt.Errorf("OpenRouter embedding error: 401 Unauthorized. Please check your OPENROUTER_API_KEY and account status (ensure you have credits if using paid models).")
+		}
 		return nil, fmt.Errorf("OpenRouter embedding error (status %d): %s", resp.StatusCode, string(body))
 	}
 

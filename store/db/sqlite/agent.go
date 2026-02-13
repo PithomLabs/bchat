@@ -2167,9 +2167,9 @@ func (d *DB) UpsertReindexCheckpoint(ctx context.Context, checkpoint *store.Rein
 	stmt := `
 		INSERT INTO agent_reindex_checkpoints (
 			tenant_id, audience, total_chunks, processed_chunks, current_batch,
-			total_batches, batch_size, status, error_message, error_batch,
+			total_batches, batch_size, status, error_message, last_message, error_batch,
 			started_at, updated_at, completed_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(tenant_id, audience) DO UPDATE SET
 			total_chunks = excluded.total_chunks,
 			processed_chunks = excluded.processed_chunks,
@@ -2178,6 +2178,7 @@ func (d *DB) UpsertReindexCheckpoint(ctx context.Context, checkpoint *store.Rein
 			batch_size = excluded.batch_size,
 			status = excluded.status,
 			error_message = excluded.error_message,
+			last_message = excluded.last_message,
 			error_batch = excluded.error_batch,
 			updated_at = excluded.updated_at,
 			completed_at = excluded.completed_at
@@ -2187,8 +2188,8 @@ func (d *DB) UpsertReindexCheckpoint(ctx context.Context, checkpoint *store.Rein
 		checkpoint.TenantID, checkpoint.Audience, checkpoint.TotalChunks,
 		checkpoint.ProcessedChunks, checkpoint.CurrentBatch, checkpoint.TotalBatches,
 		checkpoint.BatchSize, checkpoint.Status, checkpoint.ErrorMessage,
-		checkpoint.ErrorBatch, checkpoint.StartedAt, checkpoint.UpdatedAt,
-		checkpoint.CompletedAt,
+		checkpoint.LastMessage, checkpoint.ErrorBatch, checkpoint.StartedAt,
+		checkpoint.UpdatedAt, checkpoint.CompletedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to upsert reindex checkpoint: %w", err)
@@ -2224,7 +2225,7 @@ func (d *DB) GetReindexCheckpoint(ctx context.Context, find *store.FindReindexCh
 
 	query := fmt.Sprintf(`
 		SELECT id, tenant_id, audience, total_chunks, processed_chunks, current_batch,
-			total_batches, batch_size, status, error_message, error_batch,
+			total_batches, batch_size, status, error_message, last_message, error_batch,
 			started_at, updated_at, completed_at
 		FROM agent_reindex_checkpoints
 		WHERE %s
@@ -2239,7 +2240,7 @@ func (d *DB) GetReindexCheckpoint(ctx context.Context, find *store.FindReindexCh
 	err := d.db.QueryRowContext(ctx, query, args...).Scan(
 		&c.ID, &c.TenantID, &c.Audience, &c.TotalChunks, &c.ProcessedChunks,
 		&c.CurrentBatch, &c.TotalBatches, &c.BatchSize, &c.Status,
-		&errorMessage, &errorBatch, &c.StartedAt, &c.UpdatedAt, &completedAt,
+		&errorMessage, &c.LastMessage, &errorBatch, &c.StartedAt, &c.UpdatedAt, &completedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil

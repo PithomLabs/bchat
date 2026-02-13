@@ -214,4 +214,8 @@ type Driver interface {
 	UpsertReindexCheckpoint(ctx context.Context, checkpoint *ReindexCheckpoint) (*ReindexCheckpoint, error)
 	GetReindexCheckpoint(ctx context.Context, find *FindReindexCheckpoint) (*ReindexCheckpoint, error)
 	DeleteReindexCheckpoint(ctx context.Context, tenantID int32, audience string) error
+
+	// Observation Log model related methods.
+	UpsertObservationLog(ctx context.Context, log *ObservationLog) (*ObservationLog, error)
+	GetObservationLog(ctx context.Context, sessionID string) (*ObservationLog, error)
 }

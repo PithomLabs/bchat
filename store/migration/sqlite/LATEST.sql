@@ -681,6 +681,7 @@ CREATE TABLE agent_reindex_checkpoints (
     batch_size INTEGER NOT NULL DEFAULT 25,
     status TEXT NOT NULL DEFAULT 'in_progress',
     error_message TEXT,
+    last_message TEXT NOT NULL DEFAULT '',
     error_batch INTEGER,
     started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -690,3 +691,25 @@ CREATE TABLE agent_reindex_checkpoints (
 
 CREATE UNIQUE INDEX idx_reindex_checkpoint_tenant_audience
 ON agent_reindex_checkpoints(tenant_id, audience);
+
+-- ============================================================================
+-- AGENT OBSERVATIONS TABLE (migration 24)
+-- ============================================================================
+
+CREATE TABLE agent_observations (
+    session_id TEXT PRIMARY KEY REFERENCES agent_sessions(id) ON DELETE CASCADE,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    
+    -- The Observation State
+    observation_log TEXT DEFAULT '',
+    last_observed_msg_index INTEGER DEFAULT 0,
+    
+    -- Metrics
+    tokens_in_log INTEGER DEFAULT 0,
+    
+    -- Timestamps
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_observations_tenant ON agent_observations(tenant_id);
