@@ -1673,9 +1673,44 @@ func (s *Service) generateResponse(ctx context.Context, config *AudienceConfig, 
 		return "", fmt.Errorf("no response from LLM")
 	}
 
-	// Trigger Observational Memory update asynchronously
+	// Trigger Observational Memory update asynchronously with threshold check and debouncing
 	// We use a background context to ensure the observer runs even if the request context is cancelled
 	go func() {
+		// Check if OM is enabled
+		omConfig := GetOMConfig()
+		if !omConfig.Enabled {
+			return
+		}
+
+		// Check message threshold before running observer
+		obsLog, err := s.store.GetObservationLog(context.Background(), session.ID)
+		if err != nil {
+			slog.Debug("Failed to get observation log for threshold check", "session_id", session.ID, "error", err)
+			return
+		}
+
+		lastObservedIdx := -1
+		if obsLog != nil {
+			lastObservedIdx = obsLog.LastObservedMsgIndex
+		}
+
+		// Calculate unobserved message count
+		unobservedCount := len(session.Messages) - (lastObservedIdx + 1)
+		if unobservedCount < omConfig.MessageThreshold {
+			slog.Debug("Message threshold not reached, skipping observer",
+				"session_id", session.ID,
+				"unobserved_count", unobservedCount,
+				"threshold", omConfig.MessageThreshold)
+			return
+		}
+
+		// Try to acquire lock for debouncing
+		if !GetObserverMutex().TryLock(session.ID) {
+			slog.Debug("Observer already running, skipping", "session_id", session.ID)
+			return
+		}
+		defer GetObserverMutex().Unlock(session.ID)
+
 		if err := s.RunObserver(context.Background(), session.ID); err != nil {
 			slog.Error("Failed to run observer", "session_id", session.ID, "error", err)
 		}
