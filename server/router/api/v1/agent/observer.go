@@ -163,6 +163,10 @@ func (s *Service) RunObserver(ctx context.Context, sessionID string) error {
 		newObservations = output
 	}
 
+	// 6.5. Extract current task and suggested response for continuity
+	currentTask := parseXMLTag(output, "current-task")
+	suggestedResponse := parseXMLTag(output, "suggested-response")
+
 	// 7. Merge and Check Token Count
 	updatedLog := obsLog.ObservationLog
 	if updatedLog != "" {
@@ -211,6 +215,8 @@ func (s *Service) RunObserver(ctx context.Context, sessionID string) error {
 	obsLog.ObservationLog = updatedLog
 	obsLog.LastObservedMsgIndex = lastIdx + len(newMessages)
 	obsLog.TokensInLog = tokenCount
+	obsLog.CurrentTask = currentTask
+	obsLog.SuggestedResponse = suggestedResponse
 
 	_, err = s.store.UpsertObservationLog(ctx, obsLog)
 	if err != nil {

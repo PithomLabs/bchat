@@ -22,7 +22,7 @@ This document provides a comprehensive reference for all environment variables u
 | **Core** | `OPENROUTER_API_KEY`, `LLM_MODEL` |
 | **Embedding** | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_TIMEOUT` |
 | **RAG** | `RAG_PIPELINE_ENABLED`, `REINDEX_RAG`, `HYBRID_SEARCH_ENABLED` |
-| **Observational Memory** | `OM_ENABLED`, `OM_MESSAGE_THRESHOLD`, `OM_TOKEN_THRESHOLD` |
+| **Observational Memory** | `OM_ENABLED`, `OM_OBSERVER_TOKEN_THRESHOLD`, `OM_TOKEN_THRESHOLD` |
 | **Storage** | `LANCEDB_STORAGE_PROVIDER`, `LANCEDB_LOCAL_PATH` |
 
 ---
@@ -421,6 +421,8 @@ export OM_ENABLED=true
 
 ### OM_MESSAGE_THRESHOLD
 
+> **Deprecated:** Use `OM_OBSERVER_TOKEN_THRESHOLD` instead for token-based triggering.
+
 Number of new messages required before triggering the Observer. Helps reduce API calls by only observing after a batch of messages.
 
 | Property | Value |
@@ -430,6 +432,19 @@ Number of new messages required before triggering the Observer. Helps reduce API
 
 ```bash
 export OM_MESSAGE_THRESHOLD=10
+```
+
+### OM_OBSERVER_TOKEN_THRESHOLD
+
+Token count threshold for triggering the Observer. When unobserved messages exceed this token count, the Observer runs to compress them into observations. This aligns with Mastra's OM specification for consistent triggering regardless of message verbosity.
+
+| Property | Value |
+|----------|-------|
+| Type | Integer |
+| Default | `30000` |
+
+```bash
+export OM_OBSERVER_TOKEN_THRESHOLD=30000
 ```
 
 ### OM_TOKEN_THRESHOLD

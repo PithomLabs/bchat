@@ -693,7 +693,7 @@ CREATE UNIQUE INDEX idx_reindex_checkpoint_tenant_audience
 ON agent_reindex_checkpoints(tenant_id, audience);
 
 -- ============================================================================
--- AGENT OBSERVATIONS TABLE (migration 24)
+-- AGENT OBSERVATIONS TABLE (migration 24, enhanced in migration 26)
 -- ============================================================================
 
 CREATE TABLE agent_observations (
@@ -706,6 +706,10 @@ CREATE TABLE agent_observations (
     
     -- Metrics
     tokens_in_log INTEGER DEFAULT 0,
+    
+    -- Task Tracking (migration 26)
+    current_task TEXT,
+    suggested_response TEXT,
     
     -- Timestamps
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

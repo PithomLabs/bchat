@@ -130,6 +130,10 @@ func TestOMConfig_Defaults(t *testing.T) {
 		t.Errorf("Expected TokenThreshold=2000 by default, got %d", config.TokenThreshold)
 	}
 
+	if config.ObserverTokenThreshold != 30000 {
+		t.Errorf("Expected ObserverTokenThreshold=30000 by default, got %d", config.ObserverTokenThreshold)
+	}
+
 	if config.RetryAttempts != 3 {
 		t.Errorf("Expected RetryAttempts=3 by default, got %d", config.RetryAttempts)
 	}
