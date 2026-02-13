@@ -1694,13 +1694,18 @@ func (s *Service) generateResponse(ctx context.Context, config *AudienceConfig, 
 			lastObservedIdx = obsLog.LastObservedMsgIndex
 		}
 
-		// Calculate unobserved message count
-		unobservedCount := len(session.Messages) - (lastObservedIdx + 1)
-		if unobservedCount < omConfig.MessageThreshold {
-			slog.Debug("Message threshold not reached, skipping observer",
+		// Calculate unobserved token count (token-based trigger)
+		// This aligns with Mastra's OM specification for consistent triggering
+		unobservedTokens := 0
+		for i := lastObservedIdx + 1; i < len(session.Messages); i++ {
+			unobservedTokens += estimateTokens(session.Messages[i].Content)
+		}
+
+		if unobservedTokens < omConfig.ObserverTokenThreshold {
+			slog.Debug("Token threshold not reached, skipping observer",
 				"session_id", session.ID,
-				"unobserved_count", unobservedCount,
-				"threshold", omConfig.MessageThreshold)
+				"unobserved_tokens", unobservedTokens,
+				"threshold", omConfig.ObserverTokenThreshold)
 			return
 		}
 
@@ -1766,11 +1771,26 @@ func (s *Service) buildSystemPrompt(ctx context.Context, config *AudienceConfig,
 	// =========================================================================
 	if session != nil {
 		obsLog, _ := s.store.GetObservationLog(ctx, session.ID)
-		if obsLog != nil && obsLog.ObservationLog != "" {
-			sb.WriteString("=== OBSERVATIONAL MEMORY (Historical Context) ===\n\n")
-			sb.WriteString("The following are observations from previous interactions with this user. Use this context to personalize your responses.\n\n")
-			sb.WriteString(obsLog.ObservationLog)
-			sb.WriteString("\n\n")
+		if obsLog != nil {
+			// Inject observation log
+			if obsLog.ObservationLog != "" {
+				sb.WriteString("=== OBSERVATIONAL MEMORY (Historical Context) ===\n\n")
+				sb.WriteString("The following are observations from previous interactions with this user. Use this context to personalize your responses.\n\n")
+				sb.WriteString(obsLog.ObservationLog)
+				sb.WriteString("\n\n")
+			}
+			// Inject current task for continuity
+			if obsLog.CurrentTask != "" {
+				sb.WriteString("=== CURRENT TASK ===\n\n")
+				sb.WriteString(obsLog.CurrentTask)
+				sb.WriteString("\n\n")
+			}
+			// Inject suggested response hint
+			if obsLog.SuggestedResponse != "" {
+				sb.WriteString("=== SUGGESTED NEXT ACTION ===\n\n")
+				sb.WriteString(obsLog.SuggestedResponse)
+				sb.WriteString("\n\n")
+			}
 		}
 	}
 

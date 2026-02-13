@@ -8,11 +8,12 @@ import (
 
 // OMConfig holds configuration for Observational Memory
 type OMConfig struct {
-	Enabled          bool
-	MessageThreshold int
-	TokenThreshold   int
-	RetryAttempts    int
-	RetryDelayMs     int
+	Enabled                bool
+	MessageThreshold       int // Deprecated: Use ObserverTokenThreshold instead
+	TokenThreshold         int // Reflector trigger threshold
+	ObserverTokenThreshold int // Observer trigger threshold (token-based)
+	RetryAttempts          int
+	RetryDelayMs           int
 
 	mu          sync.RWMutex
 	initialized bool
@@ -31,11 +32,12 @@ func GetOMConfig() *OMConfig {
 
 func loadOMConfig() *OMConfig {
 	return &OMConfig{
-		Enabled:          getEnvBool("OM_ENABLED", true),
-		MessageThreshold: getEnvInt("OM_MESSAGE_THRESHOLD", 10),
-		TokenThreshold:   getEnvInt("OM_TOKEN_THRESHOLD", 2000),
-		RetryAttempts:    getEnvInt("OM_RETRY_ATTEMPTS", 3),
-		RetryDelayMs:     getEnvInt("OM_RETRY_DELAY_MS", 1000),
+		Enabled:                getEnvBool("OM_ENABLED", true),
+		MessageThreshold:       getEnvInt("OM_MESSAGE_THRESHOLD", 10), // Deprecated: for backward compatibility
+		TokenThreshold:         getEnvInt("OM_TOKEN_THRESHOLD", 2000),
+		ObserverTokenThreshold: getEnvInt("OM_OBSERVER_TOKEN_THRESHOLD", 30000), // Mastra default
+		RetryAttempts:          getEnvInt("OM_RETRY_ATTEMPTS", 3),
+		RetryDelayMs:           getEnvInt("OM_RETRY_DELAY_MS", 1000),
 	}
 }
 
@@ -51,11 +53,12 @@ func (c *OMConfig) GetConfig() OMConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return OMConfig{
-		Enabled:          c.Enabled,
-		MessageThreshold: c.MessageThreshold,
-		TokenThreshold:   c.TokenThreshold,
-		RetryAttempts:    c.RetryAttempts,
-		RetryDelayMs:     c.RetryDelayMs,
+		Enabled:                c.Enabled,
+		MessageThreshold:       c.MessageThreshold,
+		TokenThreshold:         c.TokenThreshold,
+		ObserverTokenThreshold: c.ObserverTokenThreshold,
+		RetryAttempts:          c.RetryAttempts,
+		RetryDelayMs:           c.RetryDelayMs,
 	}
 }
 

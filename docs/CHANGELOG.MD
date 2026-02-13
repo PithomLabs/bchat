@@ -4,6 +4,54 @@ All notable changes to the bchat AI Agent System are documented in this file.
 
 ---
 
+## 2026-02-13
+
+### Added
+- **Token-Based Observer Trigger** - Observer now triggers based on token count instead of message count
+  - New config option `OM_OBSERVER_TOKEN_THRESHOLD` (default: 30,000 tokens, matching Mastra specification)
+  - Consistent triggering regardless of message verbosity (verbose vs terse conversations)
+  - Replaces deprecated `OM_MESSAGE_THRESHOLD` for Observer trigger
+  - Files: `om_config.go`, `service.go`, `DOCS_ENV_VAR.MD`
+
+- **Current Task & Suggested Response Extraction** - Observer output now parsed for continuity hints
+  - Extracts `<current-task>` and `<suggested-response>` XML tags from Observer LLM output
+  - Stored in new database columns `current_task` and `suggested_response`
+  - Injected into system prompt for agent continuity across sessions
+  - Migration: `26__om_task_response.sql`
+  - Files: `observer.go`, `service.go`, `store/agent.go`, `agent_observations.go`
+
+- **Retry Logic Integration** - Observer and Reflector LLM calls now use retry logic
+  - Uses existing `withRetry()` function with configurable attempts and delay
+  - Reduces transient error failures
+  - Files: `observer.go:140-145`, `observer.go:184-189`
+
+### Documentation
+- **DOCS_OM_GLM5.MD** - Comprehensive gap analysis of OM implementation vs Mastra specification
+  - Critical gaps identified: MySQL/PostgreSQL support, token-based trigger, async buffering
+  - Feature gaps: current task extraction, resource scope, prompt caching
+  - Implementation completeness score: ~65%
+
+- **DOCS_OM_ENHANCEMENT_PLAN.md** - Detailed implementation plan for OM enhancements
+  - Phase 1: Token-based trigger (completed)
+  - Phase 2: Task/response extraction (completed)
+  - Phase 3: Async buffering (planned)
+  - Phase 4: Resource scope (planned)
+  - Phase 5: Prompt caching (planned)
+
+### Changed
+- **LATEST.sql** - Updated agent_observations table schema
+  - Added `current_task TEXT` column
+  - Added `suggested_response TEXT` column
+  - Updated table comment to reflect migration 26 enhancement
+
+### Fixed
+- **Unused PromptCache Code** - Removed dead code from observer.go
+  - Deleted unused `PromptCache` struct, `promptCache` variable, `hashString()` function
+  - Removed unused `sync` import
+  - Code was defined but never integrated into LLM calls
+
+---
+
 ## 2026-02-06
 
 ### Fixed

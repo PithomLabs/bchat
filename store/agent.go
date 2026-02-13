@@ -593,6 +593,8 @@ type ObservationLog struct {
 	ObservationLog       string    `json:"observation_log"`
 	LastObservedMsgIndex int       `json:"last_observed_msg_index"`
 	TokensInLog          int       `json:"tokens_in_log"`
+	CurrentTask          string    `json:"current_task"`       // NEW: Current task from Observer
+	SuggestedResponse    string    `json:"suggested_response"` // NEW: Suggested response hint
 	CreatedAt            time.Time `json:"created_at"`
 	LastUpdatedAt        time.Time `json:"last_updated_at"`
 }
