@@ -22,6 +22,7 @@ This document provides a comprehensive reference for all environment variables u
 | **Core** | `OPENROUTER_API_KEY`, `LLM_MODEL` |
 | **Embedding** | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_TIMEOUT` |
 | **RAG** | `RAG_PIPELINE_ENABLED`, `REINDEX_RAG`, `HYBRID_SEARCH_ENABLED` |
+| **Observational Memory** | `OM_ENABLED`, `OM_MESSAGE_THRESHOLD`, `OM_TOKEN_THRESHOLD` |
 | **Storage** | `LANCEDB_STORAGE_PROVIDER`, `LANCEDB_LOCAL_PATH` |
 
 ---
@@ -398,6 +399,77 @@ When enabled, responses are verified against KB content before being sent.
 - High-stakes deployments needing extra validation
 - Debugging response quality issues
 - Production environments where accuracy is critical
+
+---
+
+## Observational Memory Configuration
+
+Observational Memory (OM) gives agents long-term memory by compressing conversation history into an observation log. See [DOCS_OM_ANALYSIS.MD](./DOCS_OM_ANALYSIS.MD) for details.
+
+### OM_ENABLED
+
+Enables or disables the Observational Memory system.
+
+| Property | Value |
+|----------|-------|
+| Type | Boolean |
+| Default | `true` |
+
+```bash
+export OM_ENABLED=true
+```
+
+### OM_MESSAGE_THRESHOLD
+
+Number of new messages required before triggering the Observer. Helps reduce API calls by only observing after a batch of messages.
+
+| Property | Value |
+|----------|-------|
+| Type | Integer |
+| Default | `10` |
+
+```bash
+export OM_MESSAGE_THRESHOLD=10
+```
+
+### OM_TOKEN_THRESHOLD
+
+Token count threshold for triggering the Reflector to compress the observation log.
+
+| Property | Value |
+|----------|-------|
+| Type | Integer |
+| Default | `2000` |
+
+```bash
+export OM_TOKEN_THRESHOLD=2000
+```
+
+### OM_RETRY_ATTEMPTS
+
+Number of retry attempts for LLM calls in the Observer/Reflector.
+
+| Property | Value |
+|----------|-------|
+| Type | Integer |
+| Default | `3` |
+
+```bash
+export OM_RETRY_ATTEMPTS=3
+```
+
+### OM_RETRY_DELAY_MS
+
+Delay in milliseconds between retry attempts.
+
+| Property | Value |
+|----------|-------|
+| Type | Integer |
+| Default | `1000` |
+
+```bash
+export OM_RETRY_DELAY_MS=1000
+```
 
 ---
 
