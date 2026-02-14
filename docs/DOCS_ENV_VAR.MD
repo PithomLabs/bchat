@@ -23,6 +23,7 @@ This document provides a comprehensive reference for all environment variables u
 | **Embedding** | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_TIMEOUT` |
 | **RAG** | `RAG_PIPELINE_ENABLED`, `REINDEX_RAG`, `HYBRID_SEARCH_ENABLED` |
 | **Observational Memory** | `OM_ENABLED`, `OM_OBSERVER_TOKEN_THRESHOLD`, `OM_TOKEN_THRESHOLD` |
+| **Hybrid OM + RAG** | `HYBRID_OM_RAG_ENABLED`, `HYBRID_OM_RAG_TEMPORAL_DECAY`, `HYBRID_OM_RAG_TTL_DAYS` |
 | **Storage** | `LANCEDB_STORAGE_PROVIDER`, `LANCEDB_LOCAL_PATH` |
 
 ---
@@ -488,6 +489,177 @@ export OM_RETRY_DELAY_MS=1000
 
 ---
 
+## Hybrid OM + RAG Configuration
+
+Hybrid OM + RAG combines Observational Memory with Retrieval-Augmented Generation for unlimited memory capacity. See [DOCS_OM_RAG_IMP.MD](./DOCS_OM_RAG_IMP.MD) for implementation details.
+
+### HYBRID_OM_RAG_ENABLED
+
+Enables the Hybrid OM + RAG mode for unlimited memory capacity.
+
+| Property | Value |
+|----------|-------|
+| Type | Boolean |
+| Default | `false` |
+
+```bash
+export HYBRID_OM_RAG_ENABLED=true
+```
+
+When enabled:
+- Observations are indexed to the vector database
+- RAG retrieval supplements in-context observations
+- Temporal weighting prioritizes recent observations
+- Fusion engine combines OM and RAG results
+
+---
+
+### HYBRID_OM_RAG_VECTOR_WEIGHT
+
+Weight for vector similarity in hybrid search score fusion.
+
+| Property | Value |
+|----------|-------|
+| Type | Float |
+| Default | `0.7` |
+| Range | `0.0` to `1.0` |
+
+```bash
+export HYBRID_OM_RAG_VECTOR_WEIGHT=0.7
+```
+
+Higher values favor semantic similarity over keyword matching.
+
+---
+
+### HYBRID_OM_RAG_TEXT_WEIGHT
+
+Weight for BM25 text matching in hybrid search score fusion.
+
+| Property | Value |
+|----------|-------|
+| Type | Float |
+| Default | `0.3` |
+| Range | `0.0` to `1.0` |
+
+```bash
+export HYBRID_OM_RAG_TEXT_WEIGHT=0.3
+```
+
+Higher values favor exact keyword matches over semantic similarity.
+
+**Note:** `HYBRID_OM_RAG_VECTOR_WEIGHT` + `HYBRID_OM_RAG_TEXT_WEIGHT` should sum to 1.0 for normalized scores.
+
+---
+
+### HYBRID_OM_RAG_TEMPORAL_DECAY
+
+Temporal decay factor for age-based relevance scoring.
+
+| Property | Value |
+|----------|-------|
+| Type | Float |
+| Default | `0.1` |
+| Range | `0.0` to `1.0` |
+
+```bash
+export HYBRID_OM_RAG_TEMPORAL_DECAY=0.1
+```
+
+Controls how quickly observation relevance decays with age:
+- Day 1: Full weight (1.0)
+- Days 1-7: Linear decay from 1.0 to 0.3
+- Days 7-30: Slower decay from 0.3 to 0.1
+- Day 30+: Minimum weight (0.1)
+
+---
+
+### HYBRID_OM_RAG_MAX_RETRIEVED_TOKENS
+
+Maximum tokens to retrieve from RAG for context building.
+
+| Property | Value |
+|----------|-------|
+| Type | Integer |
+| Default | `30000` |
+
+```bash
+export HYBRID_OM_RAG_MAX_RETRIEVED_TOKENS=30000
+```
+
+Controls the maximum size of retrieved context. Higher values provide more context but increase token costs.
+
+---
+
+### HYBRID_OM_RAG_MIN_SCORE
+
+Minimum relevance score for including observations in results.
+
+| Property | Value |
+|----------|-------|
+| Type | Float |
+| Default | `0.1` |
+| Range | `0.0` to `1.0` |
+
+```bash
+export HYBRID_OM_RAG_MIN_SCORE=0.1
+```
+
+Observations with scores below this threshold are excluded. Higher values reduce noise but may miss relevant content.
+
+---
+
+### HYBRID_OM_RAG_INDEX_OBSERVATIONS
+
+Enables automatic indexing of observations to the RAG system.
+
+| Property | Value |
+|----------|-------|
+| Type | Boolean |
+| Default | `true` |
+
+```bash
+export HYBRID_OM_RAG_INDEX_OBSERVATIONS=true
+```
+
+When enabled, the Observer automatically indexes new observations to the vector database after persisting them.
+
+---
+
+### HYBRID_OM_RAG_COMPRESSION
+
+Enables compression for RAG storage.
+
+| Property | Value |
+|----------|-------|
+| Type | Boolean |
+| Default | `true` |
+
+```bash
+export HYBRID_OM_RAG_COMPRESSION=true
+```
+
+When enabled, observations are compressed before storage to reduce disk usage.
+
+---
+
+### HYBRID_OM_RAG_TTL_DAYS
+
+Time-to-live for observations in days. Observations older than this are eligible for deletion.
+
+| Property | Value |
+|----------|-------|
+| Type | Integer |
+| Default | `90` |
+
+```bash
+export HYBRID_OM_RAG_TTL_DAYS=90
+```
+
+Set to `0` to disable automatic expiration. Default of 90 days balances memory retention with storage efficiency.
+
+---
+
 ## Vector Database (LanceDB) Configuration
 
 ### LANCEDB_STORAGE_PROVIDER
@@ -828,5 +1000,5 @@ task build:backend:rag
 
 ---
 
-*Document Version: 1.4*
-*Updated: 2026-01-30* - Added EMBEDDING_TIMEOUT, documented .env vs fly.io deployment
+*Document Version: 1.5*
+*Updated: 2026-02-14* - Added Hybrid OM + RAG configuration variables

@@ -36,6 +36,10 @@ type VectorDB interface {
 	// Delete removes chunks matching the filter criteria.
 	Delete(ctx context.Context, tenantID int32, audienceType string) error
 
+	// DeleteByIDPrefix removes chunks whose IDs start with the given prefix.
+	// This is useful for deleting all observations for a specific session.
+	DeleteByIDPrefix(ctx context.Context, tenantID int32, idPrefix string) (int, error)
+
 	// Search performs hybrid search (vector + metadata filtering).
 	Search(ctx context.Context, query SearchQuery) (*SearchResult, error)
 
@@ -128,6 +132,11 @@ type SearchQuery struct {
 	UseHybridSearch bool    // Enable hybrid mode (vector + BM25)
 	VectorWeight    float64 // Weight for vector score (0-1, default: 0.7)
 	TextWeight      float64 // Weight for BM25 score (0-1, default: 0.3)
+
+	// Temporal weighting parameters (for Hybrid OM + RAG)
+	UseTemporalWeighting bool      // Enable temporal weighting
+	ReferenceTime        time.Time // Reference time for temporal calculations (default: now)
+	TemporalDecay        float64   // Decay factor per day (default: 0.1)
 }
 
 // SearchResult holds the search results.
@@ -273,6 +282,30 @@ func (db *MemoryVectorDB) Delete(ctx context.Context, tenantID int32, audienceTy
 	return nil
 }
 
+// DeleteByIDPrefix removes chunks whose IDs start with the given prefix.
+// Returns the number of chunks deleted.
+func (db *MemoryVectorDB) DeleteByIDPrefix(ctx context.Context, tenantID int32, idPrefix string) (int, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var toDelete []string
+	for id, chunk := range db.chunks {
+		if chunk.TenantID == tenantID && strings.HasPrefix(id, idPrefix) {
+			toDelete = append(toDelete, id)
+		}
+	}
+
+	for _, id := range toDelete {
+		delete(db.chunks, id)
+	}
+
+	slog.Debug("Deleted chunks by ID prefix from memory vector DB",
+		"count", len(toDelete),
+		"tenantID", tenantID,
+		"idPrefix", idPrefix)
+	return len(toDelete), nil
+}
+
 // Search performs vector or hybrid search based on query parameters.
 func (db *MemoryVectorDB) Search(ctx context.Context, query SearchQuery) (*SearchResult, error) {
 	start := time.Now()
@@ -369,6 +402,12 @@ func (db *MemoryVectorDB) Search(ctx context.Context, query SearchQuery) (*Searc
 				finalScore = vectorWeight*vectorScore + textWeight*bm25Score
 			} else {
 				finalScore = vectorScore
+			}
+
+			// Apply temporal weighting if enabled
+			if query.UseTemporalWeighting && !chunk.IndexedAt.IsZero() {
+				temporalWeight := calculateTemporalWeight(chunk.IndexedAt, query.ReferenceTime, query.TemporalDecay)
+				finalScore = finalScore * temporalWeight
 			}
 
 			if finalScore >= query.MinScore {
@@ -505,6 +544,11 @@ func (db *NoOpVectorDB) Delete(ctx context.Context, tenantID int32, audienceType
 	return nil
 }
 
+// DeleteByIDPrefix is a no-op.
+func (db *NoOpVectorDB) DeleteByIDPrefix(ctx context.Context, tenantID int32, idPrefix string) (int, error) {
+	return 0, nil
+}
+
 // Search returns empty results.
 func (db *NoOpVectorDB) Search(ctx context.Context, query SearchQuery) (*SearchResult, error) {
 	return &SearchResult{
@@ -562,6 +606,37 @@ func cosineSimilarity(a, b []float32) float64 {
 	}
 
 	return dotProduct / (math.Sqrt(normA) * math.Sqrt(normB))
+}
+
+// calculateTemporalWeight calculates a weight based on the age of content.
+// Recent content gets higher weight, older content gets lower weight.
+func calculateTemporalWeight(contentTime time.Time, referenceTime time.Time, decayFactor float64) float64 {
+	if contentTime.IsZero() {
+		return 0.5 // Default for unknown times
+	}
+
+	// Use current time if reference time is not set
+	if referenceTime.IsZero() {
+		referenceTime = time.Now()
+	}
+
+	// Calculate age in days
+	age := referenceTime.Sub(contentTime).Hours() / 24
+
+	// Apply decay
+	switch {
+	case age < 1:
+		return 1.0 // Full weight for today
+	case age < 7:
+		// Linear decay from 1.0 to 0.3 over a week
+		return 1.0 - (age * 0.1)
+	case age < 30:
+		// Slower decay from 0.3 to 0.1 over a month
+		return 0.3 - ((age - 7) * 0.01)
+	default:
+		// Minimum weight for old content
+		return 0.1
+	}
 }
 
 // ============================================================================

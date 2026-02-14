@@ -730,6 +730,29 @@ func (db *LanceVectorDB) Delete(ctx context.Context, tenantID int32, audienceTyp
 	return nil
 }
 
+// DeleteByIDPrefix removes chunks whose IDs start with the given prefix.
+// Returns the number of chunks deleted.
+func (db *LanceVectorDB) DeleteByIDPrefix(ctx context.Context, tenantID int32, idPrefix string) (int, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	// LanceDB uses SQL-like filter syntax
+	// Use LIKE for prefix matching
+	filter := fmt.Sprintf("tenant_id = %d AND id LIKE '%s%%'", tenantID, idPrefix)
+
+	// Note: LanceDB doesn't return count from Delete, so we return 0
+	// The actual deletion is logged for debugging
+
+	if err := db.table.Delete(ctx, filter); err != nil {
+		return 0, fmt.Errorf("failed to delete by ID prefix from LanceDB: %w", err)
+	}
+
+	slog.Debug("Deleted chunks by ID prefix from LanceDB",
+		"tenantID", tenantID,
+		"idPrefix", idPrefix)
+	return 0, nil // Return 0 since LanceDB doesn't provide count
+}
+
 // TableName returns the table name for this VectorDB instance.
 // Useful for debugging dimension mismatch issues.
 func (db *LanceVectorDB) TableName() string {
