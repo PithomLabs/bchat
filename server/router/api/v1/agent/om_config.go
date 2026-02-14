@@ -30,6 +30,17 @@ type OMConfig struct {
 	BlockAfter             float64 // Safety threshold multiplier (1.2 = 120%)
 	Scope                  OMScope // Memory scope: thread or resource
 
+	// Hybrid OM + RAG configuration
+	HybridEnabled            bool    // Enable hybrid OM + RAG mode
+	HybridVectorWeight       float64 // Weight for vector similarity (0-1)
+	HybridTextWeight         float64 // Weight for BM25/text match (0-1)
+	HybridTemporalDecay      float64 // Temporal decay factor per day
+	HybridMaxRetrievedTokens int     // Maximum tokens to retrieve from RAG
+	HybridMinScore           float64 // Minimum score to include observation
+	HybridIndexObservations  bool    // Index observations to RAG
+	HybridCompression        bool    // Enable compression for RAG storage
+	HybridTTLDays            int     // TTL for observations in days (0 = no TTL)
+
 	mu          sync.RWMutex
 	initialized bool
 }
@@ -57,6 +68,17 @@ func loadOMConfig() *OMConfig {
 		BufferActivation:       getEnvFloat("OM_BUFFER_ACTIVATION", 0.8), // 80% of threshold
 		BlockAfter:             getEnvFloat("OM_BLOCK_AFTER", 1.2),       // 120% of threshold
 		Scope:                  getEnvScope("OM_SCOPE", OMScopeThread),   // Default to thread scope
+
+		// Hybrid OM + RAG configuration
+		HybridEnabled:            getEnvBool("HYBRID_OM_RAG_ENABLED", false),
+		HybridVectorWeight:       getEnvFloat("HYBRID_OM_RAG_VECTOR_WEIGHT", 0.7),
+		HybridTextWeight:         getEnvFloat("HYBRID_OM_RAG_TEXT_WEIGHT", 0.3),
+		HybridTemporalDecay:      getEnvFloat("HYBRID_OM_RAG_TEMPORAL_DECAY", 0.1),
+		HybridMaxRetrievedTokens: getEnvInt("HYBRID_OM_RAG_MAX_RETRIEVED_TOKENS", 30000),
+		HybridMinScore:           getEnvFloat("HYBRID_OM_RAG_MIN_SCORE", 0.1),
+		HybridIndexObservations:  getEnvBool("HYBRID_OM_RAG_INDEX_OBSERVATIONS", true),
+		HybridCompression:        getEnvBool("HYBRID_OM_RAG_COMPRESSION", true),
+		HybridTTLDays:            getEnvInt("HYBRID_OM_RAG_TTL_DAYS", 90),
 	}
 }
 
@@ -82,6 +104,17 @@ func (c *OMConfig) GetConfig() OMConfig {
 		BufferActivation:       c.BufferActivation,
 		BlockAfter:             c.BlockAfter,
 		Scope:                  c.Scope,
+
+		// Hybrid OM + RAG configuration
+		HybridEnabled:            c.HybridEnabled,
+		HybridVectorWeight:       c.HybridVectorWeight,
+		HybridTextWeight:         c.HybridTextWeight,
+		HybridTemporalDecay:      c.HybridTemporalDecay,
+		HybridMaxRetrievedTokens: c.HybridMaxRetrievedTokens,
+		HybridMinScore:           c.HybridMinScore,
+		HybridIndexObservations:  c.HybridIndexObservations,
+		HybridCompression:        c.HybridCompression,
+		HybridTTLDays:            c.HybridTTLDays,
 	}
 }
 

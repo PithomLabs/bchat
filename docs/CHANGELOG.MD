@@ -4,6 +4,95 @@ All notable changes to the bchat AI Agent System are documented in this file.
 
 ---
 
+## 2026-02-14
+
+### Added
+- **Hybrid OM + RAG Architecture** - Unlimited memory capacity for long-running agents
+  - Combines Observational Memory (OM) with Retrieval-Augmented Generation (RAG)
+  - Observations indexed to vector database for persistent storage
+  - Temporal weighting prioritizes recent observations
+  - Fusion engine combines OM and RAG results intelligently
+  - 75% reduction in token costs for long-running sessions
+  - Files: `fusion_engine.go`, `observation_indexer.go`, `observer.go`, `om_config.go`, `vectordb.go`
+
+- **FusionEngine** - Intelligent context fusion from multiple sources
+  - Combines OM observations with RAG retrieval results
+  - Temporal decay scoring (recent = higher weight)
+  - Relevance scoring based on query matching
+  - Priority boosting for high-priority observations
+  - Deduplication of similar content
+  - Token limit truncation with score-based ranking
+  - Configurable reference time for temporal calculations
+  - File: `server/router/api/v1/agent/fusion_engine.go`
+
+- **ObservationIndexer** - RAG indexing for observations
+  - Parses observation logs into document chunks
+  - Indexes to VectorDB with proper metadata (tenant, session, priority)
+  - Search with temporal weighting and hybrid search
+  - Delete observations by session ID
+  - File: `server/router/api/v1/agent/observation_indexer.go`
+
+- **Temporal Weighting in VectorDB** - Age-based relevance scoring
+  - New `SearchQuery` fields: `UseTemporalWeighting`, `ReferenceTime`, `TemporalDecay`
+  - `calculateTemporalWeight()` function with configurable decay
+  - Day 1: 1.0 (full weight), Days 1-7: linear decay to 0.3, Days 7-30: slower decay to 0.1
+  - File: `server/router/api/v1/agent/vectordb.go`
+
+- **DeleteByIDPrefix in VectorDB** - Session-scoped observation deletion
+  - New `DeleteByIDPrefix()` method in VectorDB interface
+  - Implemented in MemoryVectorDB and NoOpVectorDB
+  - Enables cleanup when sessions are deleted
+  - File: `server/router/api/v1/agent/vectordb.go`
+
+- **Hybrid OM + RAG Configuration** - 9 new environment variables
+  - `HYBRID_OM_RAG_ENABLED` (default: false)
+  - `HYBRID_OM_RAG_VECTOR_WEIGHT` (default: 0.7)
+  - `HYBRID_OM_RAG_TEXT_WEIGHT` (default: 0.3)
+  - `HYBRID_OM_RAG_TEMPORAL_DECAY` (default: 0.1)
+  - `HYBRID_OM_RAG_MAX_RETRIEVED_TOKENS` (default: 30000)
+  - `HYBRID_OM_RAG_MIN_SCORE` (default: 0.1)
+  - `HYBRID_OM_RAG_INDEX_OBSERVATIONS` (default: true)
+  - `HYBRID_OM_RAG_COMPRESSION` (default: true)
+  - `HYBRID_OM_RAG_TTL_DAYS` (default: 90)
+  - File: `server/router/api/v1/agent/om_config.go`
+
+- **TTL Enforcement** - Automatic deletion of expired observations
+  - `EnforceTTL()` method removes observations older than configured TTL
+  - Configured via `HYBRID_OM_RAG_TTL_DAYS` (default: 90 days)
+  - File: `server/router/api/v1/agent/observation_indexer.go`
+
+- **Observation Compression** - Storage optimization for RAG
+  - `compressChunks()` method prioritizes and organizes observations
+  - Configured via `HYBRID_OM_RAG_COMPRESSION` (default: true)
+  - File: `server/router/api/v1/agent/observation_indexer.go`
+
+- **Reflector Integration** - Index consolidated observations
+  - `IndexReflectorObservations()` replaces old observations with consolidated version
+  - Triggered automatically after Reflector compresses observation log
+  - File: `server/router/api/v1/agent/observer.go`, `observation_indexer.go`
+
+- **LanceDB DeleteByIDPrefix** - Session-scoped deletion for LanceDB
+  - Implements `DeleteByIDPrefix()` for LanceDB vector store
+  - Uses SQL LIKE filter for prefix matching
+  - File: `server/router/api/v1/agent/vectordb_lance.go`
+
+### Documentation
+- **DOCS_OM_RAG_GLM5.MD** - Comprehensive analysis of Hybrid OM + RAG architecture
+  - Problem statement: token ceiling in current OM
+  - Hybrid architecture design with component details
+  - Quantitative comparison: unlimited memory vs 200K token limit
+  - Cost efficiency analysis: 75% token cost reduction
+  - Implementation roadmap (Phases 1-4)
+  - Configuration reference with environment variables
+
+- **DOCS_OM_RAG_IMP.MD** - Implementation documentation for Hybrid OM + RAG
+  - Architecture overview and component interactions
+  - Configuration guide with all environment variables
+  - Usage examples and integration points
+  - API reference for FusionEngine and ObservationIndexer
+
+---
+
 ## 2026-02-13
 
 ### Added

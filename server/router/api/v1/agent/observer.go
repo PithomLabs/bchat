@@ -225,6 +225,22 @@ func (s *Service) RunObserver(ctx context.Context, sessionID string) error {
 					"tokens_after", tokenCount,
 					"ratio", fmt.Sprintf("%.2f", compressionRatio))
 			}
+
+			// 8b. Index consolidated observations to RAG (Hybrid OM + RAG)
+			// Replace old observations with consolidated version
+			if config.HybridEnabled && config.HybridIndexObservations && s.vectorDB != nil {
+				indexer := NewObservationIndexerWithConfig(s.vectorDB, config.HybridCompression, config.HybridTTLDays)
+				consolidatedObsLog := &store.ObservationLog{
+					SessionID:      sessionID,
+					ObservationLog: updatedLog,
+					ResourceID:     obsLog.ResourceID,
+				}
+				if err := indexer.IndexReflectorObservations(ctx, consolidatedObsLog, session.TenantID, sessionID); err != nil {
+					slog.Error("Failed to index reflector observations to RAG",
+						"session_id", sessionID,
+						"error", err)
+				}
+			}
 		} else {
 			slog.Error("Reflector failed, continuing with uncompressed log",
 				"session_id", sessionID,
@@ -248,6 +264,17 @@ func (s *Service) RunObserver(ctx context.Context, sessionID string) error {
 		return fmt.Errorf("failed to persist observation log: %w", err)
 	}
 
+	// 10. Index observations to RAG (Hybrid OM + RAG)
+	if config.HybridEnabled && config.HybridIndexObservations && s.vectorDB != nil {
+		indexer := NewObservationIndexerWithConfig(s.vectorDB, config.HybridCompression, config.HybridTTLDays)
+		if err := indexer.IndexObservation(ctx, obsLog, session.TenantID); err != nil {
+			// Log error but don't fail the observation
+			slog.Error("Failed to index observations to RAG",
+				"session_id", sessionID,
+				"error", err)
+		}
+	}
+
 	// Enhanced logging with analytics
 	durationMs := time.Since(startTime).Milliseconds()
 	slog.Info("Observer completed successfully",
@@ -258,6 +285,7 @@ func (s *Service) RunObserver(ctx context.Context, sessionID string) error {
 		"skipped_trivial", len(newMessages)-len(filteredMessages),
 		"total_tokens", tokenCount,
 		"reflector_triggered", reflectorTriggered,
+		"hybrid_indexed", config.HybridEnabled && config.HybridIndexObservations,
 		"duration_ms", durationMs)
 
 	return nil
