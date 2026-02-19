@@ -54,6 +54,7 @@ git tag -a v0.5.24 -m "DOCS_RAG_OVERVIEW.MD"
 git tag -a v0.5.25 -m "fixed 1536 dimensions"
 git tag -a v0.5.26 -m "removed deprecated funcs"
 git tag -a v0.5.27 -m "CHANGELOG.MD 2026-02-06"
+git tag -a v0.5.31 -m "fixed cant extract release bug"
 git push origin --tags
 ```
 

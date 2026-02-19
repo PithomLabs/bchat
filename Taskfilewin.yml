@@ -1,0 +1,182 @@
+version: '3'
+
+# Windows PowerShell equivalent of Taskfile.yml
+# Rename this file to Taskfile.yml when working on Windows.
+
+set: [POWERSHELL]
+
+vars:
+  # LanceDB native library configuration
+  LANCEDB_VERSION: v0.1.2
+  PLATFORM: windows
+  ARCH:
+    sh: powershell -NoProfile -Command "if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'arm64' } else { 'amd64' }"
+  LANCEDB_LIB_DIR: "{{.ROOT_DIR}}\\lib\\{{.PLATFORM}}_{{.ARCH}}"
+
+tasks:
+  setup:
+    desc: Install all dependencies
+    cmds:
+      - npm --prefix web install
+      - go mod download
+
+  setup:lancedb:
+    desc: Download LanceDB native libraries (required for RAG pipeline)
+    cmds:
+      - New-Item -ItemType Directory -Path lib, include -Force | Out-Null
+      - |
+        Write-Host "Downloading LanceDB native libraries for {{.PLATFORM}}_{{.ARCH}}..."
+        powershell -NoProfile -ExecutionPolicy Bypass -File "{{.ROOT_DIR}}\scripts\download-lancedb.ps1" {{.LANCEDB_VERSION}}
+    status:
+      - powershell -NoProfile -Command "if (Test-Path '{{.LANCEDB_LIB_DIR}}\liblancedb_go.a') { exit 0 } else { exit 1 }"
+
+  validate:migrations:
+    desc: Validate LATEST.sql is in sync with migration files
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -File "{{.ROOT_DIR}}\scripts\validate-migrations.ps1"
+
+  validate:schema:
+    desc: Validate database schema and test CRUD operations
+    cmds:
+      - Write-Host "Running schema validation tests..."
+      - go test -v ./store/test/... -run "TestSchemaValidation|TestAgentSourceFile|TestAgentTenantScript|TestMigrationHistoryVersion"
+      - Write-Host "Schema validation passed!"
+
+  build:frontend:
+    desc: Build frontend assets
+    cmds:
+      - npm --prefix web run release
+
+  build:backend:
+    desc: Build the Go binary
+    deps: [validate:migrations]
+    cmds:
+      - New-Item -ItemType Directory -Path build -Force | Out-Null
+      - go build -o build\memos.exe .\bin\memos\main.go
+
+  build:backend:rag:
+    desc: Build the Go binary with LanceDB RAG support
+    deps: [setup:lancedb, validate:migrations]
+    env:
+      CGO_ENABLED: "1"
+      CGO_CFLAGS: "-I{{.ROOT_DIR}}\\include"
+      CGO_LDFLAGS: "{{.LANCEDB_LIB_DIR}}\\liblancedb_go.a"
+    cmds:
+      - New-Item -ItemType Directory -Path build -Force | Out-Null
+      - go build -tags rag -o build\memos.exe .\bin\memos\main.go
+
+  build:widget:
+    desc: Build the embeddable chat widget
+    dir: widget
+    cmds:
+      - npm install
+      - npm run build
+      - Copy-Item dist\embed.min.js site\ -Force
+
+  build:
+    desc: Build everything (frontend + backend)
+    deps: [build:frontend, build:backend]
+
+  build:all:
+    desc: Build everything including widget (frontend + backend + widget)
+    deps: [build:frontend, build:backend, build:widget]
+
+  build:rag:
+    desc: Build everything with RAG support (frontend + backend with LanceDB)
+    deps: [build:frontend, build:backend:rag]
+
+  build:rag:all:
+    desc: Build everything with RAG support including widget
+    deps: [build:frontend, build:backend:rag, build:widget]
+
+  run:
+    desc: Run development server (sources .env file if present)
+    deps: [build:backend]
+    cmds:
+      - |
+        if (Test-Path .env) {
+            Write-Host "Loading environment from .env file..."
+            Get-Content .env | ForEach-Object {
+                $_ = $_.Trim()
+                if ($_ -and -not $_.StartsWith('#')) {
+                    $parts = $_ -split '=', 2
+                    if ($parts.Count -eq 2) {
+                        [System.Environment]::SetEnvironmentVariable($parts[0].Trim(), $parts[1].Trim(), 'Process')
+                    }
+                }
+            }
+        }
+        .\build\memos.exe --mode dev --data "{{.ROOT_DIR}}\build\data"
+
+  run:rag:
+    desc: Run with RAG enabled (sources .env file, local storage)
+    deps: [build:backend:rag]
+    cmds:
+      - |
+        if (Test-Path .env) {
+            Write-Host "Loading environment from .env file..."
+            Get-Content .env | ForEach-Object {
+                $_ = $_.Trim()
+                if ($_ -and -not $_.StartsWith('#')) {
+                    $parts = $_ -split '=', 2
+                    if ($parts.Count -eq 2) {
+                        [System.Environment]::SetEnvironmentVariable($parts[0].Trim(), $parts[1].Trim(), 'Process')
+                    }
+                }
+            }
+        }
+        $env:RAG_PIPELINE_ENABLED = "true"
+        $env:EMBEDDING_MODEL = "qwen/qwen3-embedding-8b"
+        $env:EMBEDDING_BATCH_SIZE = "32"
+        $env:LANCEDB_STORAGE_PROVIDER = "local"
+        .\build\memos.exe --mode dev --data "{{.ROOT_DIR}}\build\data"
+
+  run:binary:
+    desc: Run pre-compiled binary with RAG enabled (no build, sources .env file)
+    cmds:
+      - |
+        if (Test-Path .env) {
+            Write-Host "Loading environment from .env file..."
+            Get-Content .env | ForEach-Object {
+                $_ = $_.Trim()
+                if ($_ -and -not $_.StartsWith('#')) {
+                    $parts = $_ -split '=', 2
+                    if ($parts.Count -eq 2) {
+                        [System.Environment]::SetEnvironmentVariable($parts[0].Trim(), $parts[1].Trim(), 'Process')
+                    }
+                }
+            }
+        }
+        $env:PATH = "{{.LANCEDB_LIB_DIR}};$env:PATH"
+        $env:RAG_PIPELINE_ENABLED = "true"
+        $env:EMBEDDING_MODEL = "qwen/qwen3-embedding-8b"
+        $env:EMBEDDING_BATCH_SIZE = "32"
+        $env:LANCEDB_STORAGE_PROVIDER = "local"
+        .\build\memos.exe --mode dev --data "{{.ROOT_DIR}}\build\data"
+
+  run:rag:l12:
+    desc: Run with RAG + L12 embeddings (sources .env file)
+    deps: [build:backend:rag]
+    cmds:
+      - |
+        if (Test-Path .env) {
+            Write-Host "Loading environment from .env file..."
+            Get-Content .env | ForEach-Object {
+                $_ = $_.Trim()
+                if ($_ -and -not $_.StartsWith('#')) {
+                    $parts = $_ -split '=', 2
+                    if ($parts.Count -eq 2) {
+                        [System.Environment]::SetEnvironmentVariable($parts[0].Trim(), $parts[1].Trim(), 'Process')
+                    }
+                }
+            }
+        }
+        $env:RAG_PIPELINE_ENABLED = "true"
+        $env:EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L12-v2"
+        $env:LANCEDB_STORAGE_PROVIDER = "local"
+        .\build\memos.exe --mode dev --data "{{.ROOT_DIR}}\build\data"
+
+  generate:
+    desc: Run go generate
+    cmds:
+      - go generate ./...
