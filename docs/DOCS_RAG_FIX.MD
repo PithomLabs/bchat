@@ -40,14 +40,21 @@ RAG indexing was failing with `OpenRouter API error: No successful provider resp
 - **Qwen Model**: Failed consistently with "No successful provider responses" even at **Batch 5 / Chunk 1000** (5k payload). Confirmed model/provider instability.
 - **Final State**: Reverted to `openai/text-embedding-3-small` with safe config (**Chunk 1000, Batch 5**) to ensure rock-solid stability.
 
-## How to Run
-The fix is applied to the codebase and configuration. You can now reliably rebuild indexes using your preferred method:
+## Recent Changes (2026-02-20)
 
-```bash
-# Option A: Rebuild via Task (Check .env first)
-task run:rag
+### Fixed
+- **Hard-Limit Chunk Splitting** - Fixed RAG failures on massive files (e.g., minified JS)
+  - Issue: `EstimateTokens` (len/4) underestimated oversized chunks without sentence boundaries (138k chars = 34k tokens > 8k limit).
+  - Fix: Implemented `splitByHardLimit` fallback in `chunker.go`.
+  - Result: Massive blobs are now forcibly chopped into safe segments, preventing API rejection.
 
-# Option B: Rebuild specific tenant via API
-# (Requires token)
-curl -X POST "http://localhost:8081/api/v1/agent/browse/reindex?audience=internal" ...
-```
+- **Embedding Error Logging** - Enhanced debug visibility
+  - Added logging of `firstTextLen` and extended `firstTextPreview` (200 chars) on API errors.
+
+### Changed
+- **REINDEX_RAG Renamed** - Renamed to `FORCE_REINDEX_ON_STARTUP`
+  - Renamed env var `REINDEX_RAG` to `FORCE_REINDEX_ON_STARTUP` to clarify its purpose.
+  - Updated `Taskfile.yml` and documentation.
+
+- **Qwen Embedding Support** - Verified configuration for Qwen models
+  - Validated `EMBEDDING_MODEL=qwen/qwen3-embedding-8b` works with `EMBEDDING_BATCH_SIZE=32`.

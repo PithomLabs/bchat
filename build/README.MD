@@ -57,6 +57,7 @@ git tag -a v0.5.27 -m "CHANGELOG.MD 2026-02-06"
 git tag -a v0.5.31 -m "fixed cant extract release bug"
 git tag -a v0.5.32 -m "Taskfilewin.yml"
 git tag -a v0.5.33 -m "fix run:rag"
+git tag -a v0.5.34 -m "DOCS_RAG_FIX.MD"
 git push origin --tags
 ```
 
