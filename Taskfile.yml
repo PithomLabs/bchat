@@ -106,7 +106,19 @@ tasks:
           echo "Loading environment from .env file..."
           set -a && source .env && set +a
         fi
-        RAG_PIPELINE_ENABLED=true EMBEDDING_MODEL=qwen/qwen3-embedding-8b EMBEDDING_BATCH_SIZE=32 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
+        RAG_PIPELINE_ENABLED=true EMBEDDING_MODEL=openai/text-embedding-3-small EMBEDDING_BATCH_SIZE=10 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
+
+
+  run:testrag:
+    desc: Run with RAG enabled and FORCE full reindex on startup (useful for testing)
+    deps: [build:backend:rag]
+    cmds:
+      - |
+        if [ -f .env ]; then
+          echo "Loading environment from .env file..."
+          set -a && source .env && set +a
+        fi
+        REINDEX_RAG=true RAG_PIPELINE_ENABLED=true EMBEDDING_MODEL=openai/text-embedding-3-small EMBEDDING_BATCH_SIZE=10 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
 
   run:binary:
     desc: Run pre-compiled binary with RAG enabled (no build, sources .env file)
@@ -116,7 +128,7 @@ tasks:
           echo "Loading environment from .env file..."
           set -a && source .env && set +a
         fi
-        LD_LIBRARY_PATH={{.LANCEDB_LIB_DIR}}:$LD_LIBRARY_PATH RAG_PIPELINE_ENABLED=true EMBEDDING_MODEL=qwen/qwen3-embedding-8b EMBEDDING_BATCH_SIZE=32 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
+        LD_LIBRARY_PATH={{.LANCEDB_LIB_DIR}}:$LD_LIBRARY_PATH RAG_PIPELINE_ENABLED=true EMBEDDING_MODEL=qwen/qwen3-embedding-8b EMBEDDING_BATCH_SIZE=10 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
 
   run:rag:l12:
     desc: Run with RAG + L12 embeddings (sources .env file)
