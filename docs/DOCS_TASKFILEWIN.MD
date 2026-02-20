@@ -1,4 +1,4 @@
-# Windows Taskfile Documentation
+# Windows Taskfile Documentation 
 
 This document covers the Windows PowerShell equivalent of the project's `Taskfile.yml`.
 
