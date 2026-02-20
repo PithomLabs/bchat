@@ -55,6 +55,7 @@ git tag -a v0.5.25 -m "fixed 1536 dimensions"
 git tag -a v0.5.26 -m "removed deprecated funcs"
 git tag -a v0.5.27 -m "CHANGELOG.MD 2026-02-06"
 git tag -a v0.5.31 -m "fixed cant extract release bug"
+git tag -a v0.5.32 -m "Taskfilewin.yml"
 git push origin --tags
 ```
 
