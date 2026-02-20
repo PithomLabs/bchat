@@ -106,7 +106,7 @@ tasks:
           echo "Loading environment from .env file..."
           set -a && source .env && set +a
         fi
-        RAG_PIPELINE_ENABLED=true EMBEDDING_MODEL=openai/text-embedding-3-small EMBEDDING_BATCH_SIZE=10 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
+        FORCE_REINDEX_ON_STARTUP=false RAG_PIPELINE_ENABLED=true EMBEDDING_MODEL=openai/text-embedding-3-small EMBEDDING_BATCH_SIZE=1 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
 
 
   run:testrag:
@@ -118,7 +118,7 @@ tasks:
           echo "Loading environment from .env file..."
           set -a && source .env && set +a
         fi
-        REINDEX_RAG=true RAG_PIPELINE_ENABLED=true EMBEDDING_MODEL=openai/text-embedding-3-small EMBEDDING_BATCH_SIZE=10 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
+        FORCE_REINDEX_ON_STARTUP=true RAG_PIPELINE_ENABLED=true EMBEDDING_MODEL=qwen/qwen3-embedding-8b EMBEDDING_BATCH_SIZE=32 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
 
   run:binary:
     desc: Run pre-compiled binary with RAG enabled (no build, sources .env file)

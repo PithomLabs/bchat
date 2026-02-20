@@ -279,13 +279,17 @@ func (e *OpenRouterEmbedding) Embed(ctx context.Context, texts []string) ([][]fl
 	}
 
 	var lastErr error
-	maxRetries := 5
+	maxRetries := 10
 	baseBackoff := 2 * time.Second
+	maxBackoff := 30 * time.Second
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
-			// Exponential backoff: 2s, 4s, 8s, 16s...
+			// Exponential backoff with cap
 			backoff := baseBackoff * time.Duration(1<<(attempt-1))
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
 			slog.Info("Retrying embedding request", "attempt", attempt+1, "backoff", backoff, "textsCount", len(texts))
 			time.Sleep(backoff)
 		}
@@ -353,8 +357,10 @@ func (e *OpenRouterEmbedding) doEmbed(ctx context.Context, texts []string) ([][]
 			"model", e.model,
 			"errorMessage", result.Error.Message,
 			"errorType", result.Error.Type,
-			"textsCount", len(texts))
-		return nil, fmt.Errorf("OpenRouter API error: %s", result.Error.Message)
+			"textsCount", len(texts),
+			"firstTextLen", len(texts[0]),
+			"firstTextPreview", truncateString(texts[0], 200))
+		return nil, fmt.Errorf("OpenRouter API error: %s (Type: %s)", result.Error.Message, result.Error.Type)
 	}
 
 	// Sort embeddings by index to maintain order

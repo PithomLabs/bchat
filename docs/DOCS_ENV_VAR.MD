@@ -269,6 +269,29 @@ export EMBEDDING_TIMEOUT=180s
 
 ---
 
+### EMBEDDING_BATCH_SIZE
+
+Number of chunks to send in a single embedding API request.
+
+| Property | Value |
+|----------|-------|
+| Type | Integer |
+| Default | `10` |
+| Range | `1` to `100` |
+
+```bash
+export EMBEDDING_BATCH_SIZE=32
+```
+
+**Recommended Values:**
+- `openai/text-embedding-3-small`: `10-50` (Stable)
+- `qwen/qwen3-embedding-8b`: `32` (Verified working)
+- Debugging/Instability: `1`
+
+**Note:** Lower values increase stability but reduce speed. If you encounter "No successful provider responses" or timeouts, try reducing this value.
+
+---
+
 ## RAG Pipeline Configuration
 
 ### RAG_PIPELINE_ENABLED
@@ -292,7 +315,7 @@ When enabled:
 
 ---
 
-### REINDEX_RAG
+### FORCE_REINDEX_ON_STARTUP
 
 Triggers re-indexing of all existing content on startup.
 
@@ -303,7 +326,7 @@ Triggers re-indexing of all existing content on startup.
 | Options | `true`, `false` |
 
 ```bash
-export REINDEX_RAG=true
+export FORCE_REINDEX_ON_STARTUP=true
 ```
 
 **Use cases:**
@@ -311,7 +334,7 @@ export REINDEX_RAG=true
 - After fresh deployment with existing database
 - After changing embedding dimensions
 
-**Note:** Set back to `false` after successful reindex.
+**Note:** Previously named `REINDEX_RAG`. Renamed to avoid confusion with `RAG_PIPELINE_ENABLED`. Set back to `false` after successful reindex.
 
 ---
 

@@ -59,7 +59,6 @@ func NewChunker() *Chunker {
 	}
 }
 
-
 // ============================================================================
 // HEADING-BASED CHUNKER (for RAG mode)
 // ============================================================================
@@ -78,7 +77,7 @@ const (
 func GetMaxChunkTokens(embeddingProvider string) int {
 	switch embeddingProvider {
 	case "openrouter":
-		return 7000 // text-embedding-3-small supports 8191 tokens, use 7000 (85% of max)
+		return 1000 // Reduced from 2000 to 1000 to be safe for Qwen (likely 8k limit)
 	case "local":
 		return 150 // 512 token limit with aggressive subword tokenization
 	case "mock":
@@ -441,10 +440,24 @@ func splitByParagraphs(content, title string, maxTokens int) []paragraphChunk {
 
 				if EstimateTokens(combined) > maxTokens && sentenceBuffer.Len() > 0 {
 					// Save current sentence buffer as chunk
-					chunks = append(chunks, paragraphChunk{
-						title:   fmt.Sprintf("%s (Part %d)", title, len(chunks)+1),
-						content: strings.TrimSpace(sentenceBuffer.String()),
-					})
+					content := strings.TrimSpace(sentenceBuffer.String())
+
+					// Hard split if still too big (e.g. minified code)
+					if EstimateTokens(content) > maxTokens {
+						parts := splitByHardLimit(content, maxTokens)
+						for _, p := range parts {
+							chunks = append(chunks, paragraphChunk{
+								title:   fmt.Sprintf("%s (Part %d)", title, len(chunks)+1),
+								content: p,
+							})
+						}
+					} else {
+						chunks = append(chunks, paragraphChunk{
+							title:   fmt.Sprintf("%s (Part %d)", title, len(chunks)+1),
+							content: content,
+						})
+					}
+
 					sentenceBuffer.Reset()
 					sentenceBuffer.WriteString(sent)
 				} else {
@@ -543,6 +556,27 @@ func mergeSmallChunks(chunks []DocumentChunk, minTokens, maxTokens int) []Docume
 	return result
 }
 
+// splitByHardLimit splits text by character count if no other delimiters exist.
+func splitByHardLimit(text string, maxTokens int) []string {
+	var parts []string
+	// Approximate chars per token = 4. Cap at maxTokens * 4 chars.
+	// We use a slightly smaller multiplier (3.5) to be safe.
+	maxChars := int(float64(maxTokens) * 3.5)
+	if maxChars < 100 {
+		maxChars = 100
+	}
+
+	runes := []rune(text)
+	for i := 0; i < len(runes); i += maxChars {
+		end := i + maxChars
+		if end > len(runes) {
+			end = len(runes)
+		}
+		parts = append(parts, string(runes[i:end]))
+	}
+	return parts
+}
+
 // addChunkOverlap prepends context from the previous chunk to each chunk.
 // This improves retrieval when a query spans chunk boundaries.
 func addChunkOverlap(chunks []DocumentChunk, overlapTokens int) []DocumentChunk {
@@ -566,4 +600,3 @@ func addChunkOverlap(chunks []DocumentChunk, overlapTokens int) []DocumentChunk 
 	}
 	return chunks
 }
-
