@@ -279,11 +279,13 @@ func (e *OpenRouterEmbedding) Embed(ctx context.Context, texts []string) ([][]fl
 	}
 
 	var lastErr error
-	maxRetries := 3
+	maxRetries := 5
+	baseBackoff := 2 * time.Second
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
-			backoff := time.Duration(attempt*attempt) * time.Second
+			// Exponential backoff: 2s, 4s, 8s, 16s...
+			backoff := baseBackoff * time.Duration(1<<(attempt-1))
 			slog.Info("Retrying embedding request", "attempt", attempt+1, "backoff", backoff, "textsCount", len(texts))
 			time.Sleep(backoff)
 		}
@@ -347,6 +349,11 @@ func (e *OpenRouterEmbedding) doEmbed(ctx context.Context, texts []string) ([][]
 	}
 
 	if result.Error != nil {
+		slog.Warn("OpenRouter API returned error",
+			"model", e.model,
+			"errorMessage", result.Error.Message,
+			"errorType", result.Error.Type,
+			"textsCount", len(texts))
 		return nil, fmt.Errorf("OpenRouter API error: %s", result.Error.Message)
 	}
 
@@ -369,7 +376,12 @@ func isRetryableError(err error) bool {
 		strings.Contains(errStr, "deadline exceeded") ||
 		strings.Contains(errStr, "connection refused") ||
 		strings.Contains(errStr, "connection reset") ||
-		strings.Contains(errStr, "no such host")
+		strings.Contains(errStr, "no such host") ||
+		strings.Contains(errStr, "No successful provider") ||
+		strings.Contains(errStr, "server error") ||
+		strings.Contains(errStr, "502") ||
+		strings.Contains(errStr, "503") ||
+		strings.Contains(errStr, "429")
 }
 
 // Dimension returns the embedding vector dimension.
@@ -484,5 +496,5 @@ func GetEmbeddingBatchSize() int {
 			return size
 		}
 	}
-	return 25
+	return 10
 }

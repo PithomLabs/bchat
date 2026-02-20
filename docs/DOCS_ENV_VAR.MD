@@ -1002,3 +1002,24 @@ task build:backend:rag
 
 *Document Version: 1.5*
 *Updated: 2026-02-14* - Added Hybrid OM + RAG configuration variables
+
+## Taskfile Commands & RAG Configuration
+
+When running RAG tasks, it is critical to understand the difference between production/dev running and testing/reindexing.
+
+### `run:rag` vs `run:testrag`
+
+| Command | Purpose | Configuration Source | Reindexes Content? |
+|---------|---------|----------------------|--------------------|
+| `task run:rag` | Standard development run | **Strictly `.env` file** (unless fixed in Taskfile) | No (uses existing index) |
+| `task run:testrag` | Testing & Verification | **Explicitly overrides** env vars | **YES** (Delete & Rebuild) |
+
+**What is "wrong" with `run:rag`?**
+- It relies entirely on your local `.env` file.
+- If `RAG_PIPELINE_ENABLED=true` is missing from `.env`, it defaults to `false` and RAG is **silently disabled**.
+- It does not reindex. If you change embedding models or batch sizes, existing embeddings may be incompatible or cause errors until you manually reindex.
+
+**Why `run:testrag` works reliably:**
+- It explicitly sets `RAG_PIPELINE_ENABLED=true`, `EMBEDDING_BATCH_SIZE=10`, and `EMBEDDING_MODEL` inline.
+- It sets `REINDEX_RAG=true`, forcing a fresh index build on startup, which validates the entire pipeline.
+
