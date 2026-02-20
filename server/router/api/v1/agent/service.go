@@ -99,7 +99,8 @@ func NewService(s *store.Store, p *profile.Profile) *Service {
 	}
 
 	// Check if we should reindex all content on startup
-	if os.Getenv("REINDEX_RAG") == "true" {
+	// Renamed from REINDEX_RAG to be more explicit and avoid confusion with enablement flags
+	if os.Getenv("FORCE_REINDEX_ON_STARTUP") == "true" {
 		go func() {
 			// Small delay to ensure everything is initialized
 			time.Sleep(2 * time.Second)

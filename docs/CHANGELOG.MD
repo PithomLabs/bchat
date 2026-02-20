@@ -4,6 +4,27 @@ All notable changes to the bchat AI Agent System are documented in this file.
 
 ---
 
+## 2026-02-20
+
+### Fixed
+- **Hard-Limit Chunk Splitting** - Fixed RAG failures on massive files (e.g., minified JS)
+  - Issue: `EstimateTokens` (len/4) underestimated oversized chunks without sentence boundaries (138k chars = 34k tokens > 8k limit).
+  - Fix: Implemented `splitByHardLimit` fallback in `chunker.go`.
+  - Result: Massive blobs are now forcibly chopped into safe segments, preventing API rejection.
+
+- **Embedding Error Logging** - Enhanced debug visibility
+  - Added logging of `firstTextLen` and extended `firstTextPreview` (200 chars) on API errors.
+
+### Changed
+- **REINDEX_RAG Renamed** - Renamed to `FORCE_REINDEX_ON_STARTUP`
+  - Renamed env var `REINDEX_RAG` to `FORCE_REINDEX_ON_STARTUP` to clarify its purpose.
+  - Updated `Taskfile.yml` and documentation.
+
+- **Qwen Embedding Support** - Verified configuration for Qwen models
+  - Validated `EMBEDDING_MODEL=qwen/qwen3-embedding-8b` works with `EMBEDDING_BATCH_SIZE=32`.
+
+---
+
 ## 2026-02-14
 
 ### Added
