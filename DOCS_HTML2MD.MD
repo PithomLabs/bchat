@@ -1,6 +1,6 @@
 # HTML to Markdown Converter — `html2md.sh`
 
-A bash script that recursively converts all `.html` files in a given folder to Markdown (`.md`) using the [`html2markdown`](https://github.com/suntong/html2md) CLI tool.
+A bash script that recursively converts all `.html` files in a given folder to Markdown (`.md`) using the [`html-to-markdown`](https://github.com/JohannesKaufmann/html-to-markdown) CLI tool.
 
 ---
 
