@@ -157,3 +157,39 @@ If PowerShell refuses to run `.ps1` files:
 ```powershell
 Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 ```
+
+---
+
+## Batch Files (Alternative to Task CLI)
+
+Instead of using Task CLI, you can use the provided batch files for building and running:
+
+| File | Purpose |
+|------|---------|
+| `build-windows-rag.bat` | Downloads LanceDB libraries and builds with RAG support |
+| `run-windows-rag.bat` | Runs the application with RAG enabled |
+
+### Build Steps
+
+1. **Copy batch files** to your bchat project folder on Windows
+2. **Open Command Prompt** and navigate to the bchat folder
+3. **Run the build**:
+```cmd
+cd C:\path\to\bchat
+build-windows-rag.bat
+```
+4. **Run with RAG**:
+```cmd
+run-windows-rag.bat
+```
+
+### Manual Run (Alternative)
+
+If you prefer to run manually without the batch file:
+```cmd
+set RAG_PIPELINE_ENABLED=true
+set LANCEDB_STORAGE_PROVIDER=local
+set EMBEDDING_MODEL=qwen/qwen3-embedding-8b
+build\memos.exe --mode dev --data build\data
+```
+
