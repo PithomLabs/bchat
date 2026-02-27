@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/revrost/go-openrouter"
 	"github.com/usememos/memos/store"
 )
 
@@ -185,7 +184,7 @@ func (ob *ObserverBuffer) runBufferObservation(ctx context.Context, sessionID st
 		return fmt.Errorf("LLM config missing for tenant %d", session.TenantID)
 	}
 
-	client := openrouter.NewClient(apiKey)
+	client := newOpenRouterClient(apiKey)
 
 	// Call Observer LLM
 	var existingObs string

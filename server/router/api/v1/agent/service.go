@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"regexp"
 	"strings"
@@ -18,6 +19,18 @@ import (
 	"github.com/usememos/memos/internal/profile"
 	"github.com/usememos/memos/store"
 )
+
+// Default timeout for LLM client requests
+const defaultLLMTimeout = 180 * time.Second
+
+// newOpenRouterClient creates an OpenRouter client with a timeout.
+func newOpenRouterClient(apiKey string) *openrouter.Client {
+	config := openrouter.DefaultConfig(apiKey)
+	config.HTTPClient = &http.Client{
+		Timeout: defaultLLMTimeout,
+	}
+	return openrouter.NewClientWithConfig(*config)
+}
 
 // Service handles all agent-related business logic.
 type Service struct {
@@ -946,7 +959,7 @@ func (s *Service) verifyResponseWithLLM(ctx context.Context, response string, co
 		SkipOnError:  true,
 	}
 
-	client := openrouter.NewClient(apiKey)
+	client := newOpenRouterClient(apiKey)
 	verifier := NewVerifier(client, verifierConfig)
 
 	// Run verification
@@ -1535,7 +1548,7 @@ User message: "%s"
 
 JSON response:`, config.CompanyName, config.Audience.Role, intentList.String(), message)
 
-	client := openrouter.NewClient(apiKey)
+	client := newOpenRouterClient(apiKey)
 
 	resp, err := client.CreateChatCompletion(ctx, openrouter.ChatCompletionRequest{
 		Model: model,
@@ -1671,13 +1684,21 @@ func (s *Service) generateResponse(ctx context.Context, config *AudienceConfig, 
 		}
 	}
 
-	client := openrouter.NewClient(apiKey)
+	client := newOpenRouterClient(apiKey)
+
+	slog.Debug("LLM: Calling OpenRouter",
+		"session_id", session.ID,
+		"model", model,
+		"message_count", len(messages))
 
 	resp, err := client.CreateChatCompletion(ctx, openrouter.ChatCompletionRequest{
 		Model:    model,
 		Messages: messages,
 	})
 	if err != nil {
+		slog.Error("LLM: OpenRouter call failed",
+			"error", err,
+			"session_id", session.ID)
 		return "", err
 	}
 
@@ -2119,6 +2140,9 @@ func (s *Service) generateRAGResponse(
 			TextWeight:   s.vectorDBConfig.HybridTextWeight,
 		}
 	}
+	slog.Debug("RAG: Starting context retrieval",
+		"session_id", session.ID,
+		"query", userMessage)
 	retrieved, err := RetrieveContextForQuery(
 		ctx,
 		s.vectorDB,
@@ -2157,13 +2181,21 @@ func (s *Service) generateRAGResponse(
 		}
 	}
 
-	client := openrouter.NewClient(apiKey)
+	client := newOpenRouterClient(apiKey)
+
+	slog.Debug("RAG: Calling LLM",
+		"session_id", session.ID,
+		"model", model,
+		"message_count", len(messages))
 
 	resp, err := client.CreateChatCompletion(ctx, openrouter.ChatCompletionRequest{
 		Model:    model,
 		Messages: messages,
 	})
 	if err != nil {
+		slog.Error("RAG: LLM call failed",
+			"error", err,
+			"session_id", session.ID)
 		return "", err
 	}
 
@@ -2853,7 +2885,7 @@ func (s *Service) GenerateAnnotatedKB(ctx context.Context, tenantID int32, compa
 
 	prompt := buildKBGenerationPrompt(companyName, rawContent)
 
-	client := openrouter.NewClient(apiKey)
+	client := newOpenRouterClient(apiKey)
 	resp, err := client.CreateChatCompletion(ctx, openrouter.ChatCompletionRequest{
 		Model: model,
 		Messages: []openrouter.ChatCompletionMessage{
@@ -2883,7 +2915,7 @@ func (s *Service) GenerateAnnotatedPolicy(ctx context.Context, tenantID int32, c
 
 	prompt := buildPolicyGenerationPrompt(companyName, rawContent)
 
-	client := openrouter.NewClient(apiKey)
+	client := newOpenRouterClient(apiKey)
 	resp, err := client.CreateChatCompletion(ctx, openrouter.ChatCompletionRequest{
 		Model: model,
 		Messages: []openrouter.ChatCompletionMessage{
@@ -2910,7 +2942,7 @@ func (s *Service) CallLLMSimple(ctx context.Context, tenantID int32, systemPromp
 		return "", fmt.Errorf("no API key configured")
 	}
 
-	client := openrouter.NewClient(apiKey)
+	client := newOpenRouterClient(apiKey)
 	resp, err := client.CreateChatCompletion(ctx, openrouter.ChatCompletionRequest{
 		Model: model,
 		Messages: []openrouter.ChatCompletionMessage{

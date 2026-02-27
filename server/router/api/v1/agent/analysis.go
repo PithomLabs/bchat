@@ -97,7 +97,7 @@ func (s *Service) AnalyzeTranscript(ctx context.Context, tenantID int32, convers
 
 	// 4. Call LLM
 	model, apiKey := s.getLLMConfig(ctx, tenantID)
-	client := openrouter.NewClient(apiKey)
+	client := newOpenRouterClient(apiKey)
 
 	resp, err := client.CreateChatCompletion(ctx, openrouter.ChatCompletionRequest{
 		Model: model,
