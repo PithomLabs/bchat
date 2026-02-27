@@ -43,7 +43,10 @@ RUN go mod download
 COPY . .
 
 # Copy frontend build from stage 1
-COPY --from=frontend /frontend-build/dist ./web/dist
+# The release script outputs to ../server/router/frontend/dist relative to web/
+# which in the frontend stage lands at /server/router/frontend/dist.
+# The Go embed directive in server/router/frontend/frontend.go expects dist/ next to it.
+COPY --from=frontend /server/router/frontend/dist ./server/router/frontend/dist
 
 # Build with LanceDB RAG support
 ENV CGO_ENABLED=1
@@ -88,13 +91,14 @@ ENV MEMOS_PORT="5230"
 ENV RAG_PIPELINE_ENABLED="true"
 ENV LANCEDB_STORAGE_PROVIDER="local"
 ENV LANCEDB_LOCAL_PATH="/var/opt/memos/lancedb"
-ENV EMBEDDING_PROVIDER="deepinfra"
-ENV EMBEDDING_MODEL="sentence-transformers/all-MiniLM-L12-v2"
+ENV EMBEDDING_PROVIDER="openrouter"
+ENV EMBEDDING_MODEL="openai/text-embedding-3-small"
+ENV EMBEDDING_BATCH_SIZE="10"
 
 # Optional LLM verifier (disabled by default)
 ENV LLM_VERIFIER_ENABLED="false"
 
-ENV LLM_MODEL_REASONING="openai/gpt-oss-120b:free"
+ENV LLM_MODEL_REASONING="nvidia/nemotron-3-nano-30b-a3b:free"
 ENV EMBEDDING_TIMEOUT="10m"
 ENV LLM_MODEL="openai/gpt-oss-120b:free"
 EXPOSE 5230
