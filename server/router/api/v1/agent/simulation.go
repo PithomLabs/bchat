@@ -467,7 +467,7 @@ Generate the next human response. Keep it realistic - usually 1-3 sentences, occ
 		userPrompt += "\nGenerate the next human response:"
 	}
 
-	client := openrouter.NewClient(apiKey)
+	client := newOpenRouterClient(apiKey)
 
 	resp, err := client.CreateChatCompletion(ctx, openrouter.ChatCompletionRequest{
 		Model: model,
@@ -588,7 +588,7 @@ Conversation:
 
 Respond with JSON only: {"is_complete": true/false, "reason": "brief explanation"}`, historyBuilder.String())
 
-	client := openrouter.NewClient(apiKey)
+	client := newOpenRouterClient(apiKey)
 
 	resp, err := client.CreateChatCompletion(ctx, openrouter.ChatCompletionRequest{
 		Model: model,

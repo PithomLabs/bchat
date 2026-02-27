@@ -156,7 +156,7 @@ func (s *Service) RunObserver(ctx context.Context, sessionID string) error {
 		return fmt.Errorf("LLM config missing for tenant %d", session.TenantID)
 	}
 
-	client := openrouter.NewClient(apiKey)
+	client := newOpenRouterClient(apiKey)
 
 	// Call Observer LLM with retry logic
 	var resp openrouter.ChatCompletionResponse
