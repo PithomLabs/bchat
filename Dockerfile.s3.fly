@@ -42,7 +42,7 @@ RUN go mod download
 COPY . .
 
 # Copy frontend build from stage 1
-COPY --from=frontend /frontend-build/dist ./web/dist
+COPY --from=frontend /server/router/frontend/dist ./server/router/frontend/dist
 
 # Build with LanceDB RAG support
 ENV CGO_ENABLED=1

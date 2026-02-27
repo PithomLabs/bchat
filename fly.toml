@@ -1,57 +1,48 @@
-# fly.io configuration for bchat with LanceDB RAG support
-# Storage: Local volume (SQLite + LanceDB on same fly volume)
+# fly.toml app configuration file generated for bchat0534 on 2026-02-27T15:21:59+08:00
 #
-# Usage:
-#   cp fly.local.toml fly.toml
-#   fly deploy
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
-# Required secrets:
-#   fly secrets set OPENROUTER_API_KEY=sk-or-v1-xxx
-#   fly secrets set ENCRYPTION_MASTER_KEY=$(uuidgen)
-#
-# Required volume:
-#   fly volumes create memos_data --size 1 --region ord
 
-app = "bchat"
-primary_region = "sjc"
+app = 'bchat0534'
+primary_region = 'sjc'
 
 [build]
-  dockerfile = "Dockerfile.local.fly"
+  dockerfile = 'Dockerfile.local.fly'
 
 [env]
-  MEMOS_MODE = "prod"
-  MEMOS_PORT = "5230"
-  TZ = "UTC"
+  EMBEDDING_BATCH_SIZE = '10'
+  EMBEDDING_MODEL = 'openai/text-embedding-3-small'
+  EMBEDDING_PROVIDER = 'openrouter'
+  EMBEDDING_TIMEOUT = '10m'
+  LANCEDB_LOCAL_PATH = '/var/opt/memos/lancedb'
+  LANCEDB_STORAGE_PROVIDER = 'local'
+  LLM_MODEL = 'openai/gpt-oss-120b:free'
+  LLM_MODEL_REASONING = 'nvidia/nemotron-3-nano-30b-a3b:free'
+  LLM_VERIFIER_ENABLED = 'false'
+  MEMOS_MODE = 'prod'
+  MEMOS_PORT = '5230'
+  RAG_PIPELINE_ENABLED = 'true'
+  TZ = 'UTC'
 
-  # RAG Pipeline Configuration (Local Storage)
-  RAG_PIPELINE_ENABLED = "true"
-  LANCEDB_STORAGE_PROVIDER = "local"
-  LANCEDB_LOCAL_PATH = "/var/opt/memos/lancedb"
-  EMBEDDING_PROVIDER = "deepinfra"
-  EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L12-v2"
-  LLM_VERIFIER_ENABLED = "false"
+[[mounts]]
+  source = 'memos_data'
+  destination = '/var/opt/memos'
 
-  LLM_MODEL_REASONING = "openai/gpt-oss-120b:free"
-  EMBEDDING_TIMEOUT = "10m"
-  LLM_MODEL = "openai/gpt-oss-120b:free"
 [http_service]
   internal_port = 5230
   force_https = true
-  auto_stop_machines = true
+  auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
-  processes = ["app"]
+  processes = ['app']
 
   [http_service.concurrency]
-    type = "connections"
+    type = 'connections'
     hard_limit = 25
     soft_limit = 20
 
 [[vm]]
-  memory = "1024mb"
-  cpu_kind = "shared"
+  memory = '1024mb'
+  cpu_kind = 'shared'
   cpus = 1
-
-[mounts]
-  source = "memos_data"
-  destination = "/var/opt/memos"
+  memory_mb = 1024

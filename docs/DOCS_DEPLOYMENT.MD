@@ -927,6 +927,7 @@ After running `fly deploy`:
 
 ## See Also
 
+- [DOCS_DEPLOY_FLY.MD](./DOCS_DEPLOY_FLY.MD) — **Local volume variant** (current production) — build challenges and troubleshooting
 - [DOCS_DOCKERFILE.MD](./DOCS_DOCKERFILE.MD) - Docker deployment details
 - [DOCS_UNIFIED_ENV_WORKFLOW.MD](./DOCS_UNIFIED_ENV_WORKFLOW.MD) - Environment workflow
 - [DOCS_ENV_VAR.MD](./DOCS_ENV_VAR.MD) - Complete environment variable reference

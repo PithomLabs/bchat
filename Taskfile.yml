@@ -75,7 +75,7 @@ tasks:
 
   build:all:
     desc: Build everything including widget (frontend + backend + widget)
-    deps: [build:frontend, build:backend, build:widget]
+    deps: [build:frontend, build:backend:rag, build:widget]
 
   build:rag:
     desc: Build everything with RAG support (frontend + backend with LanceDB)
