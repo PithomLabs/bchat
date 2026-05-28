@@ -3,7 +3,7 @@
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'bchat0534'
+app = 'bchat'
 primary_region = 'sjc'
 
 [build]
@@ -16,8 +16,8 @@ primary_region = 'sjc'
   EMBEDDING_TIMEOUT = '10m'
   LANCEDB_LOCAL_PATH = '/var/opt/memos/lancedb'
   LANCEDB_STORAGE_PROVIDER = 'local'
-  LLM_MODEL = 'openai/gpt-4o-mini'
-  LLM_MODEL_REASONING = 'google/gemini-2.0-flash-001'
+  LLM_MODEL = 'openai/gpt-oss-120b:free'
+  LLM_MODEL_REASONING = 'nvidia/nemotron-3-super-120b-a12b:free'
   LLM_VERIFIER_ENABLED = 'false'
   MEMOS_MODE = 'prod'
   MEMOS_PORT = '5230'

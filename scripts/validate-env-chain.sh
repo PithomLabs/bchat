@@ -57,7 +57,7 @@ if [ ! -f fly.toml ]; then
     exit 1
 fi
 
-DOCKERFILE=$(grep -E '^\s*dockerfile\s*=' fly.toml | head -1 | sed 's/.*=\s*"//' | sed 's/".*//')
+DOCKERFILE=$(grep -E '^\s*dockerfile\s*=' fly.toml | head -1 | sed -E "s/^\s*dockerfile\s*=\s*['\"]//; s/['\"]\s*$//")
 if [ -z "$DOCKERFILE" ]; then
     echo -e "${RED}ERROR: No dockerfile specified in fly.toml [build]${NC}"
     exit 1
@@ -113,8 +113,8 @@ while IFS= read -r line; do
         break
     fi
     if [ $IN_ENV_SECTION -eq 1 ]; then
-        # Match KEY = "value" pattern (TOML style)
-        if [[ "$line" =~ ^[[:space:]]*([A-Z_][A-Z0-9_]*)[[:space:]]*=[[:space:]]*\"(.*)\" ]]; then
+        # Match KEY = "value" or KEY = 'value' pattern (TOML style)
+        if [[ "$line" =~ ^[[:space:]]*([A-Z_][A-Z0-9_]*)[[:space:]]*=[[:space:]]*[\'\"](.*)[\'\"] ]]; then
             key="${BASH_REMATCH[1]}"
             value="${BASH_REMATCH[2]}"
             TOML_VARS["$key"]="$value"

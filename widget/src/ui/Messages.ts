@@ -71,23 +71,31 @@ function createMessageElement(message: Message): HTMLDivElement {
   const wrapper = document.createElement('div');
   wrapper.className = `acw-msg acw-msg-${message.role}`;
 
-  // Message bubble with content and timestamp inside
   const bubble = document.createElement('div');
   bubble.className = 'acw-msg-bubble';
 
-  // Content
-  const content = document.createElement('p');
-  content.style.whiteSpace = 'pre-wrap';
-  content.style.margin = '0';
-  content.textContent = message.content;
+  // Header line with Role Name and Timestamp
+  const header = document.createElement('div');
+  header.className = 'acw-msg-header';
 
-  // Timestamp inside bubble
+  const roleName = document.createElement('span');
+  roleName.className = 'acw-msg-role';
+  roleName.textContent = message.role === 'user' ? 'Customer' : 'Agent';
+
   const timestamp = document.createElement('span');
   timestamp.className = 'acw-msg-time';
   timestamp.textContent = formatTime(message.timestamp);
 
+  header.appendChild(roleName);
+  header.appendChild(timestamp);
+
+  // Content block
+  const content = document.createElement('div');
+  content.className = 'acw-msg-content';
+  content.textContent = message.content;
+
+  bubble.appendChild(header);
   bubble.appendChild(content);
-  bubble.appendChild(timestamp);
   wrapper.appendChild(bubble);
 
   return wrapper;
