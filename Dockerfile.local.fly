@@ -98,7 +98,7 @@ ENV EMBEDDING_BATCH_SIZE="10"
 # Optional LLM verifier (disabled by default)
 ENV LLM_VERIFIER_ENABLED="false"
 
-ENV LLM_MODEL_REASONING="nvidia/nemotron-3-nano-30b-a3b:free"
+ENV LLM_MODEL_REASONING="nvidia/nemotron-3-super-120b-a12b:free"
 ENV EMBEDDING_TIMEOUT="10m"
 ENV LLM_MODEL="openai/gpt-oss-120b:free"
 EXPOSE 5230

@@ -234,7 +234,7 @@ export function getStyles(config: WidgetConfig): string {
     /* Message Row */
     .acw-msg {
       display: flex;
-      margin-bottom: 16px;
+      margin-bottom: 12px; /* matches space-y-3 */
       animation: acw-fade-in 0.3s ease;
       width: 100%;
     }
@@ -245,7 +245,7 @@ export function getStyles(config: WidgetConfig): string {
     }
 
     .acw-msg-user {
-      justify-content: flex-end;
+      justify-content: flex-start;
     }
 
     .acw-msg-assistant {
@@ -254,47 +254,62 @@ export function getStyles(config: WidgetConfig): string {
 
     /* Message Bubble */
     .acw-msg-bubble {
-      max-width: 80%;
-      padding: 10px 14px;
-      border-radius: 12px;
+      width: 100%;
+      padding: 12px; /* p-3 */
+      border-radius: 8px; /* rounded-lg */
       font-size: 14px;
       line-height: 1.5;
       word-wrap: break-word;
       white-space: pre-wrap;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
     }
 
     /* Customer (User) Bubble Specifics */
     .acw-msg-user .acw-msg-bubble {
-      background-color: ${color}15; /* Brand color with ~8% opacity */
-      color: #1f2937;
+      background-color: #eff6ff; /* bg-blue-50 */
       margin-left: 32px; /* ml-8 */
-      border-bottom-right-radius: 2px; /* Conversational tail */
     }
 
     /* Agent (Assistant) Bubble Specifics */
     .acw-msg-assistant .acw-msg-bubble {
       background-color: #f3f4f6; /* bg-gray-100 */
-      color: #1f2937;
       margin-right: 32px; /* mr-8 */
-      border-bottom-left-radius: 2px; /* Conversational tail */
     }
 
-    /* Timestamp inside bubble */
+    /* Header inside bubble */
+    .acw-msg-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+
+    /* Role label */
+    .acw-msg-role {
+      font-size: 12px; /* text-xs */
+      font-weight: 500; /* font-medium */
+    }
+
+    .acw-msg-user .acw-msg-role {
+      color: #2563eb; /* text-blue-600 */
+    }
+
+    .acw-msg-assistant .acw-msg-role {
+      color: #4b5563; /* text-gray-600 */
+    }
+
+    /* Timestamp */
     .acw-msg-time {
-      font-size: 10px;
-      margin-top: 6px;
-      display: block;
-      opacity: 0.6;
-      text-align: right;
+      font-size: 12px; /* text-xs */
+      color: #9ca3af; /* text-gray-400 */
     }
 
-    .acw-msg-user .acw-msg-time {
-      color: #4b5563; /* Readable dark gray contrast on brand background */
-    }
-
-    .acw-msg-assistant .acw-msg-time {
-      color: #6b7280;
+    /* Content text */
+    .acw-msg-content {
+      font-size: 14px; /* text-sm */
+      color: #1f2937; /* text-gray-800 */
+      line-height: 1.5;
+      text-align: left;
+      white-space: pre-wrap;
     }
 
     /* Typing Indicator */
@@ -467,21 +482,27 @@ export function getStyles(config: WidgetConfig): string {
 
       /* Dark Mode Bubble Overrides */
       .acw-msg-user .acw-msg-bubble {
-        background-color: ${color}30; /* Brand color with ~18% opacity in dark mode */
-        color: #e5e7eb;
+        background-color: rgba(30, 58, 138, 0.2); /* dark:bg-blue-900/20 */
       }
 
       .acw-msg-assistant .acw-msg-bubble {
         background-color: #1f2937; /* dark:bg-gray-800 */
-        color: #e5e7eb;
       }
 
-      .acw-msg-user .acw-msg-time {
-        color: #9ca3af;
+      .acw-msg-user .acw-msg-role {
+        color: #60a5fa; /* text-blue-400 */
       }
 
-      .acw-msg-assistant .acw-msg-time {
-        color: #9ca3af;
+      .acw-msg-assistant .acw-msg-role {
+        color: #9ca3af; /* text-gray-400 */
+      }
+
+      .acw-msg-time {
+        color: #6b7280; /* text-gray-500 */
+      }
+
+      .acw-msg-content {
+        color: #e5e7eb; /* dark:text-gray-200 */
       }
 
       .acw-typing-bubble {

@@ -82,6 +82,8 @@ ENV TZ="UTC"
 ENV MEMOS_MODE="prod"
 ENV MEMOS_PORT="5230"
 
+ENV LLM_MODEL_REASONING="nvidia/nemotron-3-super-120b-a12b:free"
+
 # RAG pipeline configuration (Tigrisdata S3 + OpenRouter)
 ENV RAG_PIPELINE_ENABLED="true"
 ENV LANCEDB_STORAGE_PROVIDER="s3"
@@ -90,6 +92,7 @@ ENV LANCEDB_S3_REGION="auto"
 ENV EMBEDDING_PROVIDER="openrouter"
 ENV EMBEDDING_MODEL="openai/text-embedding-3-small"
 ENV EMBEDDING_BATCH_SIZE=10
+
 
 # Optional LLM verifier (disabled by default)
 ENV LLM_VERIFIER_ENABLED="false"
