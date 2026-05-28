@@ -234,8 +234,9 @@ export function getStyles(config: WidgetConfig): string {
     /* Message Row */
     .acw-msg {
       display: flex;
-      margin-bottom: 24px;
+      margin-bottom: 16px;
       animation: acw-fade-in 0.3s ease;
+      width: 100%;
     }
 
     @keyframes acw-fade-in {
@@ -251,31 +252,49 @@ export function getStyles(config: WidgetConfig): string {
       justify-content: flex-start;
     }
 
-    /* Message Text - Plain, no bubble */
+    /* Message Bubble */
     .acw-msg-bubble {
-      max-width: 90%;
-      padding: 8px 0;
-      font-size: 15px;
-      line-height: 1.7;
+      max-width: 80%;
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-size: 14px;
+      line-height: 1.5;
       word-wrap: break-word;
       white-space: pre-wrap;
-      color: #1c1e21;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
     }
 
-    /* Timestamp */
+    /* Customer (User) Bubble Specifics */
+    .acw-msg-user .acw-msg-bubble {
+      background-color: ${color}15; /* Brand color with ~8% opacity */
+      color: #1f2937;
+      margin-left: 32px; /* ml-8 */
+      border-bottom-right-radius: 2px; /* Conversational tail */
+    }
+
+    /* Agent (Assistant) Bubble Specifics */
+    .acw-msg-assistant .acw-msg-bubble {
+      background-color: #f3f4f6; /* bg-gray-100 */
+      color: #1f2937;
+      margin-right: 32px; /* mr-8 */
+      border-bottom-left-radius: 2px; /* Conversational tail */
+    }
+
+    /* Timestamp inside bubble */
     .acw-msg-time {
-      font-size: 11px;
-      margin-top: 8px;
+      font-size: 10px;
+      margin-top: 6px;
       display: block;
-      opacity: 0.7;
+      opacity: 0.6;
+      text-align: right;
     }
 
     .acw-msg-user .acw-msg-time {
-      color: rgba(255, 255, 255, 0.85);
+      color: #4b5563; /* Readable dark gray contrast on brand background */
     }
 
     .acw-msg-assistant .acw-msg-time {
-      color: #65676b;
+      color: #6b7280;
     }
 
     /* Typing Indicator */
@@ -446,16 +465,23 @@ export function getStyles(config: WidgetConfig): string {
         color: #b0b3b8;
       }
 
-      .acw-msg-bubble {
-        color: #ffffff;
+      /* Dark Mode Bubble Overrides */
+      .acw-msg-user .acw-msg-bubble {
+        background-color: ${color}30; /* Brand color with ~18% opacity in dark mode */
+        color: #e5e7eb;
       }
 
-      .acw-msg-assistant .acw-msg-time {
-        color: #b0b3b8;
+      .acw-msg-assistant .acw-msg-bubble {
+        background-color: #1f2937; /* dark:bg-gray-800 */
+        color: #e5e7eb;
       }
 
       .acw-msg-user .acw-msg-time {
-        color: #b0b3b8;
+        color: #9ca3af;
+      }
+
+      .acw-msg-assistant .acw-msg-time {
+        color: #9ca3af;
       }
 
       .acw-typing-bubble {
