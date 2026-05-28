@@ -425,7 +425,7 @@ func (s *Service) ReindexTenantContent(ctx context.Context, tenantID int32, audi
 
 // ReindexStatus represents the current state of a reindex operation.
 type ReindexStatus struct {
-	Status          string `json:"status"` // "idle", "in_progress", "completed", "failed"
+	Status          string `json:"status"` // "idle", "in_progress", "completed", "failed", "stale_in_progress"
 	CurrentBatch    int    `json:"current_batch,omitempty"`
 	TotalBatches    int    `json:"total_batches,omitempty"`
 	ProcessedChunks int    `json:"processed_chunks,omitempty"`
@@ -434,39 +434,186 @@ type ReindexStatus struct {
 	LastMessage     string `json:"last_message,omitempty"`
 	ErrorBatch      *int   `json:"error_batch,omitempty"`
 	CanResume       bool   `json:"can_resume"`
+	UpdatedAt       string `json:"updated_at,omitempty"`
 }
 
 // GetReindexStatus returns the current reindex status for a tenant.
+// It satisfies the recovered invariant:
+// INV_RAG_REINDEX_STATUS_MUST_REFLECT_EFFECTIVE_SCOPE.
 func (s *Service) GetReindexStatus(ctx context.Context, tenantID int32, audience string) (*ReindexStatus, error) {
-	checkpoint, err := s.store.GetReindexCheckpoint(ctx, &store.FindReindexCheckpoint{
-		TenantID: &tenantID,
-		Audience: &audience,
-	})
-	if err != nil {
-		return nil, err
+	var checkpoints []*store.ReindexCheckpoint
+
+	if audience == "all" {
+		internalAudience := "internal"
+		internalCp, err := s.store.GetReindexCheckpoint(ctx, &store.FindReindexCheckpoint{
+			TenantID: &tenantID,
+			Audience: &internalAudience,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if internalCp != nil {
+			checkpoints = append(checkpoints, internalCp)
+		}
+
+		externalAudience := "external"
+		externalCp, err := s.store.GetReindexCheckpoint(ctx, &store.FindReindexCheckpoint{
+			TenantID: &tenantID,
+			Audience: &externalAudience,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if externalCp != nil {
+			checkpoints = append(checkpoints, externalCp)
+		}
+
+		allAudience := "all"
+		allCp, err := s.store.GetReindexCheckpoint(ctx, &store.FindReindexCheckpoint{
+			TenantID: &tenantID,
+			Audience: &allAudience,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if allCp != nil {
+			checkpoints = append(checkpoints, allCp)
+		}
+	} else {
+		checkpoint, err := s.store.GetReindexCheckpoint(ctx, &store.FindReindexCheckpoint{
+			TenantID: &tenantID,
+			Audience: &audience,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if checkpoint != nil {
+			checkpoints = append(checkpoints, checkpoint)
+		}
 	}
 
-	if checkpoint == nil {
+	if len(checkpoints) == 0 {
 		return &ReindexStatus{Status: "idle", CanResume: false}, nil
 	}
 
-	status := &ReindexStatus{
-		Status:          checkpoint.Status,
-		CurrentBatch:    int(checkpoint.CurrentBatch),
-		TotalBatches:    int(checkpoint.TotalBatches),
-		ProcessedChunks: int(checkpoint.ProcessedChunks),
-		TotalChunks:     int(checkpoint.TotalChunks),
-		ErrorMessage:    checkpoint.ErrorMessage,
-		LastMessage:     checkpoint.LastMessage,
-		CanResume:       checkpoint.Status == "failed",
+	// Helper to resolve status and stale/resume state
+	resolveState := func(cp *store.ReindexCheckpoint) (string, bool) {
+		status := cp.Status
+		canResume := cp.Status == "failed"
+		if cp.Status == "in_progress" && !cp.UpdatedAt.IsZero() {
+			// Stale threshold: 1 hour
+			if time.Since(cp.UpdatedAt) > 1*time.Hour {
+				status = "stale_in_progress"
+				canResume = true
+			}
+		}
+		return status, canResume
 	}
 
-	if checkpoint.ErrorBatch != nil {
-		batch := int(*checkpoint.ErrorBatch)
-		status.ErrorBatch = &batch
+	// Single checkpoint standard behavior
+	if len(checkpoints) == 1 {
+		cp := checkpoints[0]
+		status, canResume := resolveState(cp)
+		
+		res := &ReindexStatus{
+			Status:          status,
+			CurrentBatch:    int(cp.CurrentBatch),
+			TotalBatches:    int(cp.TotalBatches),
+			ProcessedChunks: int(cp.ProcessedChunks),
+			TotalChunks:     int(cp.TotalChunks),
+			ErrorMessage:    cp.ErrorMessage,
+			LastMessage:     cp.LastMessage,
+			CanResume:       canResume,
+		}
+		if !cp.UpdatedAt.IsZero() {
+			res.UpdatedAt = cp.UpdatedAt.Format(time.RFC3339)
+		}
+		if cp.ErrorBatch != nil {
+			batch := int(*cp.ErrorBatch)
+			res.ErrorBatch = &batch
+		}
+		return res, nil
 	}
 
-	return status, nil
+	// Aggregate multiple checkpoints
+	combinedStatus := "completed"
+	var totalChunks, processedChunks, currentBatch, totalBatches int
+	var errorMsg, lastMsg string
+	var errorBatch *int
+	var canResume bool
+	var latestUpdate time.Time
+
+	hasInProgress := false
+	hasStaleInProgress := false
+	hasFailed := false
+
+	for _, cp := range checkpoints {
+		totalChunks += int(cp.TotalChunks)
+		processedChunks += int(cp.ProcessedChunks)
+		currentBatch += int(cp.CurrentBatch)
+		totalBatches += int(cp.TotalBatches)
+
+		status, resCanResume := resolveState(cp)
+		if resCanResume {
+			canResume = true
+		}
+
+		if status == "in_progress" {
+			hasInProgress = true
+		} else if status == "stale_in_progress" {
+			hasStaleInProgress = true
+		} else if status == "failed" {
+			hasFailed = true
+		}
+
+		if cp.ErrorMessage != "" {
+			if errorMsg != "" {
+				errorMsg += "; "
+			}
+			errorMsg += fmt.Sprintf("[%s]: %s", cp.Audience, cp.ErrorMessage)
+		}
+		if cp.LastMessage != "" {
+			if lastMsg != "" {
+				lastMsg += "; "
+			}
+			lastMsg += fmt.Sprintf("[%s]: %s", cp.Audience, cp.LastMessage)
+		}
+
+		if cp.ErrorBatch != nil && errorBatch == nil {
+			batch := int(*cp.ErrorBatch)
+			errorBatch = &batch
+		}
+
+		if cp.UpdatedAt.After(latestUpdate) {
+			latestUpdate = cp.UpdatedAt
+		}
+	}
+
+	// Precedence order: in_progress > stale_in_progress > failed > completed
+	if hasInProgress {
+		combinedStatus = "in_progress"
+	} else if hasStaleInProgress {
+		combinedStatus = "stale_in_progress"
+	} else if hasFailed {
+		combinedStatus = "failed"
+	}
+
+	res := &ReindexStatus{
+		Status:          combinedStatus,
+		CurrentBatch:    currentBatch,
+		TotalBatches:    totalBatches,
+		ProcessedChunks: processedChunks,
+		TotalChunks:     totalChunks,
+		ErrorMessage:    errorMsg,
+		LastMessage:     lastMsg,
+		ErrorBatch:      errorBatch,
+		CanResume:       canResume,
+	}
+	if !latestUpdate.IsZero() {
+		res.UpdatedAt = latestUpdate.Format(time.RFC3339)
+	}
+
+	return res, nil
 }
 
 // ReindexTenantContentWithResume re-indexes with checkpoint support for resume-from-error.
@@ -645,7 +792,14 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 			ErrorMessage: err.Error(),
 			ErrorBatch:   errBatch,
 		}
-		s.store.UpsertReindexCheckpoint(ctx, failedCheckpoint)
+		// [CODE-LOCAL INVARIANT BOUNDARY COMMENT]
+		// INV_RAG_CHECKPOINT_STATE_MUST_PERSIST_ON_CANCEL:
+		// When the main request context ctx is cancelled or timed out, we must detach
+		// from it and use a short, bounded context to write the failure checkpoint to DB.
+		checkpointCtx, checkpointCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		s.store.UpsertReindexCheckpoint(checkpointCtx, failedCheckpoint)
+		checkpointCancel()
+
 		return 0, err
 	}
 
@@ -660,7 +814,10 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 		BatchSize:       int32(batchSize),
 		Status:          "completed",
 	}
-	s.store.UpsertReindexCheckpoint(ctx, completedCheckpoint)
+	// Detached but bounded context for durability
+	completedCtx, completedCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	s.store.UpsertReindexCheckpoint(completedCtx, completedCheckpoint)
+	completedCancel()
 
 	slog.Info("RAG reindex completed with checkpoint",
 		"tenantID", tenantID,

@@ -346,7 +346,7 @@ func TestLanceVectorDB_Integration_FTSIndexCreation(t *testing.T) {
 // ENVIRONMENT CONFIGURATION TESTS
 // ============================================================================
 
-func TestParseFloatOrDefault(t *testing.T) {
+func TestParseFloatOrDefault_Lance(t *testing.T) {
 	tests := []struct {
 		name       string
 		envKey     string

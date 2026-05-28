@@ -2,6 +2,8 @@ package agent
 
 import (
 	"fmt"
+	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -124,6 +126,157 @@ func sanitizeUTF8(s string) string {
 	return strings.ToValidUTF8(s, "")
 }
 
+// RAGSanitizeReport holds diagnostic details of the sanitization process.
+type RAGSanitizeReport struct {
+	OriginalBytes       int
+	SanitizedBytes      int
+	RemovedSections     int
+	RemovedScriptBlocks int
+	RemovedStyleBlocks  int
+	RejectedChunks      int
+}
+
+var (
+	// Regex to match <script>...</script> tags (case-insensitive, multi-line/dot matches newline)
+	scriptRegex = regexp.MustCompile(`(?is)<script[^>]*?>.*?</script>`)
+	// Regex to match <style>...</style> tags
+	styleRegex  = regexp.MustCompile(`(?is)<style[^>]*?>.*?</style>`)
+	// Regex to match markdown file/section delimiters
+	sectionDelimiterRegex = regexp.MustCompile(`(?m)^---\n([a-zA-Z0-9_\-\./]+)\n---\n`)
+)
+
+// CleanRAGSourceContent removes script, style, tracking, and minified boilerplate code
+// before chunking and vector indexing to satisfy the recovered invariant:
+// INV_RAG_SOURCE_CONTENT_MUST_BE_CANONICAL_BEFORE_CHUNKING.
+func CleanRAGSourceContent(content string) (string, RAGSanitizeReport) {
+	var report RAGSanitizeReport
+	report.OriginalBytes = len(content)
+
+	// 1. Remove HTML script and style elements
+	scriptMatches := scriptRegex.FindAllStringIndex(content, -1)
+	report.RemovedScriptBlocks = len(scriptMatches)
+	content = scriptRegex.ReplaceAllString(content, "")
+
+	styleMatches := styleRegex.FindAllStringIndex(content, -1)
+	report.RemovedStyleBlocks = len(styleMatches)
+	content = styleRegex.ReplaceAllString(content, "")
+
+	// 2. Split content by the markdown file/section delimiters
+	locs := sectionDelimiterRegex.FindAllStringSubmatchIndex(content, -1)
+	if len(locs) == 0 {
+		if isBoilerplateBlock("", content) {
+			report.RemovedSections = 1
+			report.SanitizedBytes = 0
+			return "", report
+		}
+		report.SanitizedBytes = len(content)
+		return content, report
+	}
+
+	var sb strings.Builder
+	firstBlock := content[:locs[0][0]]
+	if !isBoilerplateBlock("", firstBlock) {
+		sb.WriteString(firstBlock)
+	} else {
+		report.RemovedSections++
+	}
+
+	for i := 0; i < len(locs); i++ {
+		filePath := content[locs[i][2]:locs[i][3]]
+		endOfSection := len(content)
+		if i+1 < len(locs) {
+			endOfSection = locs[i+1][0]
+		}
+		sectionStart := locs[i][1]
+		sectionBody := content[sectionStart:endOfSection]
+
+		if isBoilerplateBlock(filePath, sectionBody) {
+			report.RemovedSections++
+			continue // Skip boilerplate section
+		}
+
+		// Keep the valid section and its delimiter
+		sb.WriteString(content[locs[i][0]:sectionStart])
+		sb.WriteString(sectionBody)
+	}
+
+	sanitized := sb.String()
+	report.SanitizedBytes = len(sanitized)
+	return sanitized, report
+}
+
+// isBoilerplateBlock checks if a block of content is purely or predominantly tracking script, minified code, or style boilerplate.
+func isBoilerplateBlock(filePath, body string) bool {
+	filePathLower := strings.ToLower(filePath)
+	
+	// Preserve legitimate documentation/code-reference paths unless it is raw/minified/tracker-like
+	if strings.Contains(filePathLower, "googletagmanager") || 
+		strings.Contains(filePathLower, "google_tag_manager") || 
+		strings.Contains(filePathLower, "google-analytics") {
+		return true
+	}
+
+	// Path hints combined with body tracker keywords (safe, non-destructive check)
+	if (strings.Contains(filePathLower, "gtm") || 
+		strings.Contains(filePathLower, "analytics") || 
+		strings.Contains(filePathLower, "script") || 
+		strings.HasSuffix(filePathLower, ".js")) && 
+		(strings.Contains(body, "googletagmanager") || 
+			strings.Contains(body, "google_tag_manager") || 
+			strings.Contains(body, "dataLayer") || 
+			strings.Contains(body, "GTM-")) {
+		return true
+	}
+
+	lines := strings.Split(body, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if len(line) > 500 {
+			spaces := strings.Count(line, " ")
+			spaceRatio := float64(spaces) / float64(len(line))
+			
+			if spaceRatio < 0.05 {
+				// Check for minified JS keywords/signatures
+				jsSignatures := []string{"(function(", "eval(", "window.", "document.", "var ", "const ", "let ", "function(", "dataLayer.push("}
+				for _, sig := range jsSignatures {
+					if strings.Contains(line, sig) {
+						return true
+					}
+				}
+				
+				// Check for minified CSS signatures
+				if strings.Contains(line, "{") && strings.Contains(line, "}") && strings.Contains(line, ";") {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+// IsGarbageChunk checks if a chunk of text is dominated by minified code or script garbage.
+func IsGarbageChunk(content string) bool {
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if len(line) > 300 {
+			spaces := strings.Count(line, " ")
+			spaceRatio := float64(spaces) / float64(len(line))
+			if spaceRatio < 0.05 {
+				// JS / CSS signature
+				jsKeywords := []string{"function", "var ", "const ", "let ", "return", "eval", "window.", "document.", ";"}
+				for _, kw := range jsKeywords {
+					if strings.Contains(line, kw) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
 // ChunkMarkdownContent chunks raw markdown using heading-based splitting.
 // This is the main entry point for the new chunking strategy.
 // maxTokens controls chunk size - use GetMaxChunkTokens(provider) to get appropriate value.
@@ -135,8 +288,25 @@ func (c *Chunker) ChunkMarkdownContent(
 	sourceVersion int32,
 	maxTokens int, // Use GetMaxChunkTokens(embeddingProvider) for this value
 ) []DocumentChunk {
-	// Sanitize UTF-8: remove invalid sequences to prevent LanceDB errors
+	// [CODE-LOCAL INVARIANT BOUNDARY COMMENT]
+	// INV_RAG_SOURCE_CONTENT_MUST_BE_CANONICAL_BEFORE_CHUNKING:
+	// We sanitize and canonicalize incoming raw content at this entrypoint.
+	// Raw HTML style/script remnants and minified JS/CSS/tracker boilerplate are
+	// stripped before splitting the document to keep the vector database canonical.
 	content = sanitizeUTF8(content)
+	
+	sanitized, report := CleanRAGSourceContent(content)
+	if report.RemovedSections > 0 || report.RemovedScriptBlocks > 0 || report.RemovedStyleBlocks > 0 {
+		slog.Info("RAG source content sanitized during chunking",
+			"tenantID", tenantID,
+			"audience", audience,
+			"originalBytes", report.OriginalBytes,
+			"sanitizedBytes", report.SanitizedBytes,
+			"removedSections", report.RemovedSections,
+			"removedScriptBlocks", report.RemovedScriptBlocks,
+			"removedStyleBlocks", report.RemovedStyleBlocks)
+	}
+	content = sanitized
 
 	if strings.TrimSpace(content) == "" {
 		return nil
@@ -253,6 +423,22 @@ func (c *Chunker) ChunkMarkdownContent(
 
 	// Apply minimum size filter - merge tiny chunks
 	chunks = mergeSmallChunks(chunks, minTokens, maxTokens)
+
+	// Filter out any garbage/script-dominated chunks to satisfy:
+	// INV_RAG_SOURCE_CONTENT_MUST_BE_CANONICAL_BEFORE_CHUNKING.
+	var cleanChunks []DocumentChunk
+	for _, chunk := range chunks {
+		if !IsGarbageChunk(chunk.Content) {
+			cleanChunks = append(cleanChunks, chunk)
+		} else {
+			slog.Warn("RAG: Rejected script-dominated garbage chunk from index",
+				"tenantID", tenantID,
+				"audience", audience,
+				"title", chunk.Title,
+				"contentLength", len(chunk.Content))
+		}
+	}
+	chunks = cleanChunks
 
 	// Add overlap between consecutive chunks for context continuity
 	chunks = addChunkOverlap(chunks, ChunkOverlapTokens)
