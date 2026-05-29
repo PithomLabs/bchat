@@ -174,3 +174,13 @@ tasks:
         echo "=== All pre-deployment checks passed ==="
         echo "Safe to run: fly deploy"
 
+  fly:logs:rag:
+    desc: Stream RAG and database initialization logs on Fly.io (Ctrl+C to exit)
+    cmds:
+      - fly logs | grep -E "RAG|LanceDB|Embedding|vector database|Reindex"
+
+  fly:ssh:db:
+    desc: Open an interactive SQLite terminal inside the remote Fly.io persistent volume
+    cmds:
+      - fly ssh console -C "sqlite3 /var/opt/memos/memos_prod.db"
+

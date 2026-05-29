@@ -1,0 +1,45 @@
+{
+  "name": "@usememos/mui",
+  "version": "0.1.0-20250601165716",
+  "license": "MIT",
+  "main": "dist/index.mjs",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "devDependencies": {
+    "@swc/core": "^1.7.40",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "autoprefixer": "^10.4.20",
+    "clsx": "^2.1.1",
+    "eslint": "^8.57.1",
+    "eslint-plugin-react": "^7.37.2",
+    "framer-motion": "^12.5.0",
+    "globals": "^15.11.0",
+    "lucide-react": "^0.453.0",
+    "postcss": "^8.4.47",
+    "tailwind-merge": "^2.5.4",
+    "tailwindcss": "^3.4.14",
+    "tsup": "^8.3.5",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.12.2"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "homepage": "https://github.com/usememos/mui",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/usememos/mui.git"
+  },
+  "bugs": {
+    "url": "https://github.com/usememos/mui/issues"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts"
+  }
+}

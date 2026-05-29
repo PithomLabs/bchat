@@ -121,6 +121,32 @@ func NewService(s *store.Store, p *profile.Profile) *Service {
 				slog.Error("Failed to reindex RAG content on startup", "error", err)
 			}
 		}()
+	} else {
+		// Auto-bootstrap: Check if RAG is enabled, and if the vector database has 0 chunks
+		// but the SQLite source files database is not empty. If so, trigger a reindex.
+		go func() {
+			// Startup delay: Sleep for 5 seconds to allow other components (database connection pools,
+			// embedding services, and network stacks) to fully initialize before we probe the vector DB.
+			time.Sleep(5 * time.Second)
+			ctx := context.Background()
+			if svc.IsRAGEnabled() {
+				stats, err := svc.GetVectorDB().Stats(ctx)
+				if err == nil && stats.TotalChunks == 0 {
+					// Audit note (tenant scoping): Calling ListAgentSourceFiles with LatestOnly: true 
+					// and TenantID == nil searches globally across ALL active tenants.
+					files, err := s.ListAgentSourceFiles(ctx, &store.FindAgentSourceFile{LatestOnly: true})
+					if err == nil && len(files) > 0 {
+						slog.Info("RAG vector database table is empty but source files exist. Auto-triggering bootstrap reindexing in the background...", "sourceFilesCount", len(files))
+						// Self-correcting design: If bootstrap reindexing fails (e.g. rate-limited), we log it
+						// and exit gracefully. On the next container boot, because TotalChunks remains 0,
+						// the bootstrap check will auto-retry.
+						if err := svc.ReindexAllContent(ctx); err != nil {
+							slog.Error("Failed to auto-bootstrap RAG content reindexing", "error", err)
+						}
+					}
+				}
+			}
+		}()
 	}
 
 	return svc
