@@ -8,8 +8,10 @@ FROM node:20-alpine AS frontend
 # Build main frontend
 WORKDIR /frontend-build
 COPY web/package*.json ./
+COPY web/vendor ./vendor
 RUN npm ci
 COPY web/ .
+RUN test -f node_modules/@usememos/mui/dist/index.css
 RUN npm run release
 
 # Build widget

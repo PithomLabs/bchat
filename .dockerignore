@@ -1873,3 +1873,12 @@ widget/**/node_modules
 widget/**/dist
 widget/**/*.log
 fly.toml
+
+# Keep vendored @usememos/mui package assets available to Docker builds.
+!web/vendor/
+!web/vendor/usememos-mui/
+!web/vendor/usememos-mui/package.json
+!web/vendor/usememos-mui/LICENSE
+!web/vendor/usememos-mui/README.md
+!web/vendor/usememos-mui/dist/
+!web/vendor/usememos-mui/dist/**

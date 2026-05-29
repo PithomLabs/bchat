@@ -29,6 +29,7 @@ primary_region = "sjc"
   LANCEDB_LOCAL_PATH = "/var/opt/memos/lancedb"
   EMBEDDING_PROVIDER = "openrouter"
   EMBEDDING_MODEL = "sentence-transformers/all-minilm-l12-v2"
+  FORCE_REINDEX_ON_STARTUP = "false"
   LLM_VERIFIER_ENABLED = "false"
 
 [http_service]
