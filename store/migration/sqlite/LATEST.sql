@@ -169,6 +169,7 @@ CREATE INDEX idx_tickets_status ON tickets (status);
 CREATE INDEX idx_tickets_beads_id ON tickets(beads_id);
 CREATE INDEX idx_tickets_parent_id ON tickets(parent_id);
 CREATE INDEX idx_tickets_issue_type ON tickets(issue_type);
+CREATE UNIQUE INDEX idx_tickets_creator_description_memo ON tickets(creator_id, description) WHERE description LIKE '/m/%';
 
 -- notifications
 CREATE TABLE notifications (

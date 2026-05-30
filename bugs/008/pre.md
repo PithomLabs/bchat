@@ -1,0 +1,1 @@
+when creating tickets, after entering the title, clicked Add description (Create Memo) button and clicked Create Ticket, why does it show 2 rows in the Tickets table (the type says TASK and SUPPORT), did it create 2 records where one is duplicate? deep dive into root cause and write plan to fix the underlying problem (not band-aid fix)
