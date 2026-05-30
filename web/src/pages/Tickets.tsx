@@ -261,7 +261,25 @@ const Tickets = observer(() => {
     const handleDescriptionCreated = async (memoName: string) => {
         const memoUid = memoName.split("/").pop();
         if (memoUid) {
-            setDescription(`/m/${memoUid}`);
+            const memoUrl = `/m/${memoUid}`;
+            setDescription(memoUrl);
+            try {
+                const response = await fetch(`/api/v1/tickets?description=${encodeURIComponent(memoUrl)}`);
+                if (response.ok) {
+                    const tickets = await response.json();
+                    if (tickets && tickets.length > 0) {
+                        const existingTicket = tickets[0];
+                        setEditingTicket(existingTicket);
+                        setTitle(existingTicket.title);
+                        setStatus(existingTicket.status);
+                        setPriority(existingTicket.priority);
+                        setType(existingTicket.type || "TASK");
+                        setAssigneeId(existingTicket.assigneeId || null);
+                    }
+                }
+            } catch (err) {
+                console.error("Failed to query auto-created ticket:", err);
+            }
         }
         setIsCreatingDescription(false);
     };

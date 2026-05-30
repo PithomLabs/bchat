@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -62,6 +63,11 @@ func (s *APIV1Service) CreateTicket(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusUnauthorized, "Missing user in context")
 	}
 
+	user, err := s.Store.GetUser(ctx, &store.FindUser{ID: &userID})
+	if err != nil || user == nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "User not found")
+	}
+
 	request := &CreateTicketRequest{}
 	if err := c.Bind(request); err != nil {
 		slog.Error("CreateTicket bind error", "error", err)
@@ -95,7 +101,56 @@ func (s *APIV1Service) CreateTicket(c echo.Context) error {
 	}
 	slog.Info("CreateTicket validated")
 
-	ticket, err := s.Store.CreateTicket(ctx, ticket)
+	// Check for existing ticket with same memo description (auto-creation de-duplication)
+	if strings.HasPrefix(ticket.Description, "/m/") {
+		existingList, err := s.Store.ListTickets(ctx, &store.FindTicket{
+			Description: &ticket.Description,
+			CreatorID:   &userID,
+		})
+		if err == nil && len(existingList) > 0 {
+			existing := existingList[0]
+
+			// Smart merge: preserve auto-derived values if user didn't override
+			if ticket.Priority == store.TicketPriorityMedium {
+				// User used default, keep auto-derived priority
+				ticket.Priority = existing.Priority
+			}
+			if ticket.Type == "" || ticket.Type == "TASK" {
+				// User used default, keep auto-derived type
+				ticket.Type = existing.Type
+			}
+
+			// Customers cannot change ticket assignees
+			assigneeID := ticket.AssigneeID
+			if !isSuperUser(user) {
+				assigneeID = nil
+			}
+
+			// Update the existing ticket
+			update := &store.UpdateTicket{
+				ID:          existing.ID,
+				Title:       &ticket.Title,
+				Description: &ticket.Description,
+				Status:      &ticket.Status,
+				Priority:    &ticket.Priority,
+				Type:        &ticket.Type,
+				Tags:        ticket.Tags,
+				AssigneeID:  assigneeID,
+			}
+			now := time.Now().Unix()
+			update.UpdatedTs = &now
+
+			ticket, err = s.Store.UpdateTicket(ctx, update)
+			if err != nil {
+				slog.Error("CreateTicket store update error", "error", err)
+				return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update existing ticket").SetInternal(err)
+			}
+			slog.Info("CreateTicket deduplication success", "id", ticket.ID)
+			return c.JSON(http.StatusOK, convertTicketFromStore(ticket))
+		}
+	}
+
+	ticket, err = s.Store.CreateTicket(ctx, ticket)
 	if err != nil {
 		slog.Error("CreateTicket store error", "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create ticket").SetInternal(err)
@@ -118,6 +173,9 @@ func (s *APIV1Service) ListTickets(c echo.Context) error {
 	}
 
 	find := &store.FindTicket{}
+	if desc := c.QueryParam("description"); desc != "" {
+		find.Description = &desc
+	}
 	if typeStr := c.QueryParam("type"); typeStr != "" {
 		find.Type = &typeStr
 	}
