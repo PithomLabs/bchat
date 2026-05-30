@@ -584,6 +584,8 @@
       "admin": "Admin",
       "archive-member": "Archive member",
       "archive-warning": "Are you sure to archive {{username}}?",
+      "company": "Company",
+      "_company_comment": "Used for user-company (tenant) association in member settings panel",
       "create-a-member": "Create a member",
       "delete-member": "Delete Member",
       "delete-warning": "Are you sure to delete {{username}}? THIS ACTION IS IRREVERSIBLE",

@@ -1,13 +1,15 @@
 import { Radio, RadioGroup } from "@mui/joy";
 import { Button, Input } from "@usememos/mui";
 import { XIcon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "react-hot-toast";
 import { userServiceClient } from "@/grpcweb";
 import useLoading from "@/hooks/useLoading";
 import { User, User_Role } from "@/types/proto/api/v1/user_service";
 import { useTranslate } from "@/utils/i18n";
 import { generateDialog } from "./Dialog";
+import axios from "axios";
+import { agentAdminStore } from "@/store/v2";
 
 interface Props extends DialogProps {
   user?: User;
@@ -17,9 +19,29 @@ interface Props extends DialogProps {
 const CreateUserDialog: React.FC<Props> = (props: Props) => {
   const { confirmCallback, destroy } = props;
   const t = useTranslate();
-  const [user, setUser] = useState(User.fromPartial({ ...props.user }));
+  const [user, setUser] = useState<User>(User.fromPartial({ ...props.user }));
+  const [tenantSlug, setTenantSlug] = useState("");
+  const [originalTenantSlug, setOriginalTenantSlug] = useState("");
   const requestState = useLoading(false);
   const isCreating = !props.user;
+
+  useEffect(() => {
+    agentAdminStore.fetchTenants();
+    if (!isCreating && props.user?.name) {
+      const userId = parseInt(props.user.name.split("/")[1], 10);
+      if (!isNaN(userId)) {
+        axios.get(`/api/v1/user/${userId}/tenants`).then((res) => {
+          if (res.data && res.data.tenants && res.data.tenants.length > 0) {
+            const currentSlug = res.data.tenants[0].tenant?.slug || "";
+            setTenantSlug(currentSlug);
+            setOriginalTenantSlug(currentSlug);
+          }
+        }).catch((err) => {
+          console.error("Failed to fetch user tenants", err);
+        });
+      }
+    }
+  }, [isCreating, props.user]);
 
   const setPartialUser = (state: Partial<User>) => {
     setUser({
@@ -49,12 +71,29 @@ const CreateUserDialog: React.FC<Props> = (props: Props) => {
         if (user.role !== props.user?.role) {
           updateMask.push("role");
         }
-        await userServiceClient.updateUser({ user, updateMask });
+        if (updateMask.length > 0) {
+          await userServiceClient.updateUser({ user, updateMask });
+        }
+        
+        // Handle company (tenant) association update
+        const userId = props.user?.name ? parseInt(props.user.name.split("/")[1], 10) : NaN;
+        if (!isNaN(userId) && tenantSlug !== originalTenantSlug) {
+          // If there was an original tenant and it changed, we should ideally revoke the old one.
+          // The API allows revoking by calling DELETE /api/v1/agent/:slug/permissions/:userId
+          if (originalTenantSlug) {
+            await agentAdminStore.revokePermission(originalTenantSlug, userId);
+          }
+          // Grant new permission
+          if (tenantSlug) {
+            await agentAdminStore.grantPermission(tenantSlug, { userId, permissions: ["tenant:read"] });
+          }
+        }
+
         toast.success("Update user successfully");
       }
     } catch (error: any) {
       console.error(error);
-      toast.error(error.details);
+      toast.error(error.details || "Update failed");
     }
     if (confirmCallback) {
       confirmCallback();
@@ -106,6 +145,23 @@ const CreateUserDialog: React.FC<Props> = (props: Props) => {
             <Radio value={User_Role.USER} label={t("setting.member-section.user")} />
             <Radio value={User_Role.ADMIN} label={t("setting.member-section.admin")} />
           </RadioGroup>
+          {!isCreating && (
+            <>
+              <span className="text-sm whitespace-nowrap mt-3 mb-1">{t("setting.member-section.company", "Company")}</span>
+              <select
+                className="w-full bg-transparent border rounded px-3 py-2 text-sm dark:border-zinc-700"
+                value={tenantSlug}
+                onChange={(e) => setTenantSlug(e.target.value)}
+              >
+                <option value="">None</option>
+                {agentAdminStore.state.tenants.map((tenant) => (
+                  <option key={tenant.slug} value={tenant.slug}>
+                    {tenant.companyName}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
         </div>
         <div className="w-full flex flex-row justify-end items-center space-x-2 mt-2">
           <Button variant="plain" disabled={requestState.isLoading} onClick={destroy}>

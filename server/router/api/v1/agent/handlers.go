@@ -34,6 +34,11 @@ func NewHandler(service *Service, store *store.Store) *Handler {
 	}
 }
 
+func (h *Handler) GetService() *Service {
+	return h.service
+}
+
+
 // ============================================================================
 // CHAT ENDPOINTS
 // ============================================================================
@@ -2258,6 +2263,63 @@ func (h *Handler) HandleGetUserTenants(c echo.Context) error {
 					"permissions": p.Permissions,
 				})
 			}
+		}
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{"tenants": result})
+}
+
+// HandleGetSpecificUserTenants returns tenants a specific user can access.
+// GET /api/v1/user/:id/tenants
+// Requires: ADMIN or HOST role
+func (h *Handler) HandleGetSpecificUserTenants(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	if !h.isAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin or host role")
+	}
+
+	targetUserIDStr := c.Param("id")
+	targetUserID, err := strconv.ParseInt(targetUserIDStr, 10, 32)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid user ID")
+	}
+
+	userID32 := int32(targetUserID)
+
+	user, err := h.store.GetUser(ctx, &store.FindUser{ID: &userID32})
+	if err != nil || user == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "User not found")
+	}
+
+	result := make([]map[string]interface{}, 0)
+
+	tenantToMap := func(t *store.AgentTenant) map[string]interface{} {
+		var domains []string
+		if t.AllowedDomains != "" {
+			json.Unmarshal([]byte(t.AllowedDomains), &domains)
+		}
+		return map[string]interface{}{
+			"id":             t.ID,
+			"slug":           t.Slug,
+			"companyName":    t.CompanyName,
+			"guid":           t.GUID,
+			"vertical":       t.Vertical,
+			"isActive":       t.IsActive,
+			"allowedDomains": domains,
+			"createdAt":      t.CreatedAt,
+			"updatedAt":      t.UpdatedAt,
+		}
+	}
+
+	perms, _ := h.store.ListUserTenantPermissions(ctx, &store.FindUserTenantPermission{UserID: &userID32})
+	for _, p := range perms {
+		tenant, _ := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{ID: &p.TenantID})
+		if tenant != nil {
+			result = append(result, map[string]interface{}{
+				"tenant":      tenantToMap(tenant),
+				"permissions": p.Permissions,
+			})
 		}
 	}
 

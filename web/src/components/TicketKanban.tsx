@@ -18,6 +18,7 @@ export interface Ticket {
   assigneeId?: number;
   createdTs: number;
   updatedTs: number;
+  tags?: string[];
 }
 
 interface User {
@@ -62,6 +63,7 @@ const TicketCard = ({
   };
 
   const assignee = users.find((u) => u.id === ticket.assigneeId);
+  const isEscalated = ticket.tags?.includes("escalated") || false;
 
   return (
     <Card
@@ -71,13 +73,15 @@ const TicketCard = ({
       {...listeners}
       size="sm"
       className={cx(
-        "cursor-pointer hover:shadow-md transition-shadow",
+        "cursor-pointer hover:shadow-md transition-all duration-200",
+        isEscalated ? "border-amber-400 dark:border-amber-600/70 bg-amber-50/20 dark:bg-amber-950/10" : "",
         isOverlay ? "shadow-xl rotate-2 cursor-grabbing" : ""
       )}
       onClick={onClick}
     >
       <div className="flex justify-between items-start gap-2">
         <Typography level="title-sm" className="line-clamp-2 mb-1">
+          {isEscalated && <span className="mr-1">⚠️</span>}
           {ticket.title}
         </Typography>
         {ticket.type && (
@@ -87,15 +91,22 @@ const TicketCard = ({
         )}
       </div>
       <div className="flex justify-between items-center mt-2">
-        <Chip
-          size="sm"
-          variant="soft"
-          color={
-            ticket.priority === "HIGH" ? "danger" : ticket.priority === "MEDIUM" ? "warning" : "primary"
-          }
-        >
-          {ticket.priority}
-        </Chip>
+        <div className="flex gap-1.5 items-center">
+          <Chip
+            size="sm"
+            variant="soft"
+            color={
+              ticket.priority === "HIGH" ? "danger" : ticket.priority === "MEDIUM" ? "warning" : "primary"
+            }
+          >
+            {ticket.priority}
+          </Chip>
+          {isEscalated && (
+            <Chip size="sm" variant="solid" color="danger" sx={{ fontWeight: 600 }}>
+              ESCALATED
+            </Chip>
+          )}
+        </div>
         {assignee && (
           <Avatar size="sm" variant="soft" color="neutral">
             {(assignee.nickname || assignee.username)[0].toUpperCase()}

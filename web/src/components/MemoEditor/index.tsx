@@ -20,6 +20,8 @@ import { UserSetting } from "@/types/proto/api/v1/user_service";
 import { cn } from "@/utils";
 import { useTranslate } from "@/utils/i18n";
 import { convertVisibilityFromString } from "@/utils/memo";
+import { isSuperUser } from "@/utils/user";
+import { Switch } from "@mui/joy";
 import DateTimeInput from "../DateTimeInput";
 import AddMemoRelationPopover from "./ActionButton/AddMemoRelationPopover";
 import LocationSelector from "./ActionButton/LocationSelector";
@@ -94,6 +96,7 @@ const MemoEditor = observer((props: Props) => {
   const [isRequesting, setIsRequesting] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
+  const [isUrgent, setIsUrgent] = useState(false);
   const editorRef = useRef<EditorRefActions>(null);
   const userSetting = userStore.state.userSetting as UserSetting;
   const contentCacheKey = `memo-editor-${cacheKey || ""}`;
@@ -350,7 +353,10 @@ const MemoEditor = observer((props: Props) => {
         isRequesting: true,
       };
     });
-    const content = editorRef.current?.getContent() ?? "";
+    let content = editorRef.current?.getContent() ?? "";
+    if (!memoName && !parentMemoName && isUrgent) {
+      content = content.trim() + "\n\n#staff";
+    }
     try {
       // Update memo.
       if (memoName) {
@@ -440,6 +446,7 @@ const MemoEditor = observer((props: Props) => {
     }
 
     localStorage.removeItem(contentCacheKey);
+    setIsUrgent(false);
     setState((state) => {
       return {
         ...state,
@@ -517,6 +524,26 @@ const MemoEditor = observer((props: Props) => {
         <Editor ref={editorRef} {...editorConfig} />
         <ResourceListView resourceList={state.resourceList} setResourceList={handleSetResourceList} />
         <RelationListView relationList={referenceRelations} setRelationList={handleSetRelationList} />
+        {!memoName && !parentMemoName && !isSuperUser(currentUser) && (
+          <div className="w-full flex items-center justify-start py-2 border-t border-gray-100 dark:border-zinc-700/50 my-1.5">
+            <Switch
+              color="danger"
+              size="sm"
+              checked={isUrgent}
+              onChange={(e) => setIsUrgent(e.target.checked)}
+              endDecorator={
+                <div className="flex flex-col ml-1">
+                  <span className="text-sm font-semibold text-gray-800 dark:text-gray-200">
+                    File as Urgent Support Ticket
+                  </span>
+                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                    Alert human staff directly and skip the AI auto-responder
+                  </span>
+                </div>
+              }
+            />
+          </div>
+        )}
         <div className="relative w-full flex flex-row justify-between items-center py-1" onFocus={(e) => e.stopPropagation()}>
           <div className="flex flex-row justify-start items-center opacity-80 dark:opacity-60 space-x-2">
             <TagSelector editorRef={editorRef} />
