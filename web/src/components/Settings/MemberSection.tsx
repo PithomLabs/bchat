@@ -12,9 +12,10 @@ import { State } from "@/types/proto/api/v1/common";
 import { User, User_Role } from "@/types/proto/api/v1/user_service";
 import { useTranslate } from "@/utils/i18n";
 import showCreateUserDialog from "../CreateUserDialog";
+import { agentAdminStore } from "@/store/v2";
 
 interface LocalState {
-  creatingUser: User;
+  creatingUser: User & { tenantSlug?: string };
 }
 
 const MemberSection = observer(() => {
@@ -32,6 +33,7 @@ const MemberSection = observer(() => {
 
   useEffect(() => {
     fetchUsers();
+    agentAdminStore.fetchTenants();
   }, []);
 
   const fetchUsers = async () => {
@@ -86,15 +88,29 @@ const MemberSection = observer(() => {
     }
 
     try {
-      await userServiceClient.createUser({
+      const response = await userServiceClient.createUser({
         user: {
           username: state.creatingUser.username,
           password: state.creatingUser.password,
           role: state.creatingUser.role,
         },
       });
+
+      // If a company (tenant) was selected, associate the user with it
+      if (state.creatingUser.tenantSlug && response.name) {
+        const userId = parseInt(response.name.split("/")[1], 10);
+        if (!isNaN(userId)) {
+          await agentAdminStore.grantPermission(state.creatingUser.tenantSlug, {
+            userId: userId,
+            permissions: ["tenant:read"],
+          });
+          toast.success("User created and associated with company successfully");
+        }
+      } else {
+        toast.success(t("message.created-successfully"));
+      }
     } catch (error: any) {
-      toast.error(error.details);
+      toast.error(error.details || "Failed to create user");
     }
     await fetchUsers();
     setState({
@@ -103,7 +119,7 @@ const MemberSection = observer(() => {
         username: "",
         password: "",
         role: User_Role.USER,
-      }),
+      }) as any,
     });
   };
 
@@ -170,6 +186,19 @@ const MemberSection = observer(() => {
             <Radio value={User_Role.USER} label={t("setting.member-section.user")} />
             <Radio value={User_Role.ADMIN} label={t("setting.member-section.admin")} />
           </RadioGroup>
+        </div>
+        <div className="flex flex-col justify-start items-start gap-1 mt-1">
+          <span className="text-sm font-medium">{t("setting.member-section.company", "Company")}</span>
+          <select
+            className="w-full bg-transparent border rounded px-3 py-2 text-sm dark:border-zinc-700"
+            value={state.creatingUser.tenantSlug || ""}
+            onChange={(e) => setState({ ...state, creatingUser: { ...state.creatingUser, tenantSlug: e.target.value } })}
+          >
+            <option value="">None</option>
+            {agentAdminStore.state.tenants.map(tenant => (
+              <option key={tenant.slug} value={tenant.slug}>{tenant.companyName}</option>
+            ))}
+          </select>
         </div>
         <div className="mt-2">
           <Button color="primary" onClick={handleCreateUserBtnClick}>

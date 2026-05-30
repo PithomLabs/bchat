@@ -246,6 +246,7 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	userGroup := echoServer.Group("/api/v1/user")
 	userGroup.Use(s.AuthMiddleware)
 	userGroup.GET("/tenants", s.agentHandler.HandleGetUserTenants)
+	userGroup.GET("/:id/tenants", s.agentHandler.HandleGetSpecificUserTenants)
 
 	// Admin routes (Memos admin role required)
 	adminGroup := echoServer.Group("/api/v1/agent")

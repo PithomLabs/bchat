@@ -162,12 +162,23 @@ func (s *APIV1Service) SignIn(ctx context.Context, request *v1pb.SignInRequest) 
 		expireTime = time.Now().Add(100 * 365 * 24 * time.Hour)
 	}
 	if err := s.doSignIn(ctx, existingUser, expireTime); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to sign in, error: %v", err)
+		return nil, err
 	}
 	return convertUserFromStore(existingUser), nil
 }
 
 func (s *APIV1Service) doSignIn(ctx context.Context, user *store.User, expireTime time.Time) error {
+	// External users MUST have a company association to log in.
+	if user.Role == store.RoleUser {
+		perms, err := s.Store.ListUserTenantPermissions(ctx, &store.FindUserTenantPermission{UserID: &user.ID})
+		if err != nil {
+			return status.Errorf(codes.Internal, "failed to verify user company association")
+		}
+		if len(perms) == 0 {
+			return status.Errorf(codes.PermissionDenied, "user is not associated with any company")
+		}
+	}
+
 	accessToken, err := GenerateAccessToken(user.Email, user.ID, expireTime, []byte(s.Secret))
 	if err != nil {
 		return status.Errorf(codes.Internal, "failed to generate access token, error: %v", err)
@@ -232,7 +243,7 @@ func (s *APIV1Service) SignUp(ctx context.Context, request *v1pb.SignUpRequest) 
 	}
 
 	if err := s.doSignIn(ctx, user, time.Now().Add(AccessTokenDuration)); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to sign in, error: %v", err)
+		return nil, err
 	}
 	return convertUserFromStore(user), nil
 }

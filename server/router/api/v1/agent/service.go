@@ -3314,3 +3314,35 @@ func (s *Service) saveTranscript(ctx context.Context, session *store.AgentSessio
 	_, err = s.store.CreateAgentTranscript(ctx, transcript)
 	return err
 }
+
+// ProcessTicketChat processes a support ticket message using the advanced agent pipelines.
+func (s *Service) ProcessTicketChat(ctx context.Context, tenantSlug string, history []store.AgentMessage, latestMessage string) (string, error) {
+	// Load config - use internal audience
+	config, err := s.LoadConfig(ctx, tenantSlug, "internal")
+	if err != nil {
+		return "", err
+	}
+
+	// Create a temporary mock session
+	session := &store.AgentSession{
+		ID:             uuid.New().String(),
+		TenantID:       config.TenantID,
+		AudienceType:   "internal",
+		Phase:          "triage",
+		UrgencyLevel:   0,
+		CoverageStatus: "unknown",
+		MessageCount:   len(history),
+		Messages:       history,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+
+	// Process chat using the standard pipeline
+	response, err := s.processChat(ctx, config, session, latestMessage)
+	if err != nil {
+		return "", err
+	}
+
+	return response.Message.Content, nil
+}
+

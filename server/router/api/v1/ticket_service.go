@@ -108,6 +108,14 @@ func (s *APIV1Service) CreateTicket(c echo.Context) error {
 
 func (s *APIV1Service) ListTickets(c echo.Context) error {
 	ctx := c.Request().Context()
+	userID, ok := c.Get(getUserIDContextKey()).(int32)
+	if !ok {
+		return echo.NewHTTPError(http.StatusUnauthorized, "Missing user in context")
+	}
+	user, err := s.Store.GetUser(ctx, &store.FindUser{ID: &userID})
+	if err != nil || user == nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "User not found")
+	}
 
 	find := &store.FindTicket{}
 	if typeStr := c.QueryParam("type"); typeStr != "" {
@@ -120,6 +128,11 @@ func (s *APIV1Service) ListTickets(c echo.Context) error {
 		}
 		id := int32(creatorID)
 		find.CreatorID = &id
+	}
+
+	if !isSuperUser(user) {
+		// Customers can only list their own tickets
+		find.CreatorID = &userID
 	}
 
 	list, err := s.Store.ListTickets(ctx, find)
@@ -169,10 +182,31 @@ func (s *APIV1Service) ListTicketAssignees(c echo.Context) error {
 
 func (s *APIV1Service) UpdateTicket(c echo.Context) error {
 	ctx := c.Request().Context()
+	userID, ok := c.Get(getUserIDContextKey()).(int32)
+	if !ok {
+		return echo.NewHTTPError(http.StatusUnauthorized, "Missing user in context")
+	}
+	user, err := s.Store.GetUser(ctx, &store.FindUser{ID: &userID})
+	if err != nil || user == nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "User not found")
+	}
+
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid ticket ID")
+	}
+
+	// Verify ownership/permission before update
+	ticketID := int32(id)
+	existingList, err := s.Store.ListTickets(ctx, &store.FindTicket{ID: &ticketID})
+	if err != nil || len(existingList) == 0 {
+		return echo.NewHTTPError(http.StatusNotFound, "Ticket not found")
+	}
+	existingTicket := existingList[0]
+
+	if !isSuperUser(user) && existingTicket.CreatorID != userID {
+		return echo.NewHTTPError(http.StatusForbidden, "You do not have permission to update this ticket")
 	}
 
 	request := &UpdateTicketRequest{}
@@ -186,6 +220,12 @@ func (s *APIV1Service) UpdateTicket(c echo.Context) error {
 		Description: request.Description,
 		AssigneeID:  request.AssigneeID,
 	}
+
+	// Customers cannot change ticket assignees
+	if !isSuperUser(user) {
+		update.AssigneeID = nil
+	}
+
 	if request.Status != nil {
 		status := store.TicketStatus(*request.Status)
 		update.Status = &status
@@ -213,6 +253,20 @@ func (s *APIV1Service) UpdateTicket(c echo.Context) error {
 
 func (s *APIV1Service) DeleteTicket(c echo.Context) error {
 	ctx := c.Request().Context()
+	userID, ok := c.Get(getUserIDContextKey()).(int32)
+	if !ok {
+		return echo.NewHTTPError(http.StatusUnauthorized, "Missing user in context")
+	}
+	user, err := s.Store.GetUser(ctx, &store.FindUser{ID: &userID})
+	if err != nil || user == nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "User not found")
+	}
+
+	// Customers cannot delete support tickets (required for history/compliance)
+	if !isSuperUser(user) {
+		return echo.NewHTTPError(http.StatusForbidden, "Only internal staff can delete tickets")
+	}
+
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
@@ -226,24 +280,17 @@ func (s *APIV1Service) DeleteTicket(c echo.Context) error {
 	return c.JSON(http.StatusOK, true)
 }
 
-func convertTicketFromStore(ticket *store.Ticket) *Ticket {
-	return &Ticket{
-		ID:          ticket.ID,
-		Title:       ticket.Title,
-		Description: ticket.Description,
-		Status:      string(ticket.Status),
-		Priority:    string(ticket.Priority),
-		CreatorID:   ticket.CreatorID,
-		AssigneeID:  ticket.AssigneeID,
-		CreatedTs:   ticket.CreatedTs,
-		UpdatedTs:   ticket.UpdatedTs,
-		Type:        ticket.Type,
-		Tags:        ticket.Tags,
-	}
-}
-
 func (s *APIV1Service) GetTicket(c echo.Context) error {
 	ctx := c.Request().Context()
+	userID, ok := c.Get(getUserIDContextKey()).(int32)
+	if !ok {
+		return echo.NewHTTPError(http.StatusUnauthorized, "Missing user in context")
+	}
+	user, err := s.Store.GetUser(ctx, &store.FindUser{ID: &userID})
+	if err != nil || user == nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "User not found")
+	}
+
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
@@ -288,9 +335,33 @@ func (s *APIV1Service) GetTicket(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "Ticket not found")
 	}
 
-	slog.Info("GetTicket success", "id", list[0].ID)
-	return c.JSON(http.StatusOK, convertTicketFromStore(list[0]))
+	ticket := list[0]
+	// Security check: Only superusers or creator can see the ticket details
+	if !isSuperUser(user) && ticket.CreatorID != userID {
+		return echo.NewHTTPError(http.StatusForbidden, "You do not have permission to access this ticket")
+	}
+
+	slog.Info("GetTicket success", "id", ticket.ID)
+	return c.JSON(http.StatusOK, convertTicketFromStore(ticket))
 }
+
+func convertTicketFromStore(ticket *store.Ticket) *Ticket {
+	return &Ticket{
+		ID:          ticket.ID,
+		Title:       ticket.Title,
+		Description: ticket.Description,
+		Status:      string(ticket.Status),
+		Priority:    string(ticket.Priority),
+		CreatorID:   ticket.CreatorID,
+		AssigneeID:  ticket.AssigneeID,
+		CreatedTs:   ticket.CreatedTs,
+		UpdatedTs:   ticket.UpdatedTs,
+		Type:        ticket.Type,
+		Tags:        ticket.Tags,
+	}
+}
+
+
 
 // Helper to match the key used in common/auth.go checks
 func getUserIDContextKey() string {

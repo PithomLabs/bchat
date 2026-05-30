@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -39,6 +41,9 @@ func (s *APIV1Service) CreateMemo(ctx context.Context, request *v1pb.CreateMemoR
 		CreatorID:  user.ID,
 		Content:    request.Memo.Content,
 		Visibility: convertVisibilityToStore(request.Memo.Visibility),
+	}
+	if !isSuperUser(user) {
+		create.Visibility = store.Private
 	}
 	workspaceMemoRelatedSetting, err := s.Store.GetWorkspaceMemoRelatedSetting(ctx)
 	if err != nil {
@@ -96,6 +101,13 @@ func (s *APIV1Service) CreateMemo(ctx context.Context, request *v1pb.CreateMemoR
 	// Dispatch mentions
 	if err := s.dispatchMemoMentions(ctx, memo); err != nil {
 		slog.Warn("Failed to dispatch memo mentions", slog.Any("err", err))
+	}
+
+	if !isSuperUser(user) {
+		isEscalated := s.handleAutoTicketCreation(ctx, memo, user)
+		if !isEscalated {
+			go s.handleTicketAIResponse(context.Background(), memo.UID, user.ID, memo.Content)
+		}
 	}
 
 	return memoMessage, nil
@@ -506,6 +518,11 @@ func (s *APIV1Service) CreateMemoComment(ctx context.Context, request *v1pb.Crea
 		}
 	}
 
+	user, err := s.Store.GetUser(ctx, &store.FindUser{ID: &creatorID})
+	if err == nil && user != nil && !isSuperUser(user) {
+		go s.handleTicketAIResponse(context.Background(), memo.UID, user.ID, request.Comment.Content)
+	}
+
 	return memoComment, nil
 }
 
@@ -874,4 +891,245 @@ func substring(s string, length int) string {
 	}
 
 	return s[:byteIndex]
+}
+
+func (s *APIV1Service) handleAutoTicketCreation(ctx context.Context, memo *store.Memo, user *store.User) bool {
+	// Extract title
+	title := memo.Content
+	if idx := strings.Index(title, "\n"); idx > 0 {
+		title = title[:idx]
+	}
+	title = strings.TrimSpace(strings.TrimLeft(title, "#* \t"))
+	if len(title) > 80 {
+		title = title[:80] + "..."
+	}
+	if title == "" {
+		title = "Support Request"
+	}
+
+	// Parse tags in content to set Priority and Type
+	priority := store.TicketPriorityMedium
+	ticketType := "SUPPORT"
+	contentLower := strings.ToLower(memo.Content)
+
+	if strings.Contains(contentLower, "#high") || strings.Contains(contentLower, "#urgent") {
+		priority = store.TicketPriorityHigh
+	} else if strings.Contains(contentLower, "#low") {
+		priority = store.TicketPriorityLow
+	}
+
+	if strings.Contains(contentLower, "#bug") {
+		ticketType = "BUG"
+	} else if strings.Contains(contentLower, "#feature") {
+		ticketType = "FEATURE"
+	}
+
+	tags := []string{}
+	isEscalated := false
+	// If user tagged `#staff` or `#human` or `#escalated`, mark ticket as escalated from start!
+	if strings.Contains(contentLower, "#staff") || strings.Contains(contentLower, "#human") || strings.Contains(contentLower, "#escalated") {
+		tags = append(tags, "escalated")
+		priority = store.TicketPriorityHigh // Auto escalate is high priority
+		isEscalated = true
+	}
+
+	ticket := &store.Ticket{
+		Title:       title,
+		Description: "/m/" + memo.UID,
+		Status:      store.TicketStatusOpen,
+		Priority:    priority,
+		Type:        ticketType,
+		Tags:        tags,
+		CreatorID:   user.ID,
+		CreatedTs:   time.Now().Unix(),
+		UpdatedTs:   time.Now().Unix(),
+	}
+
+	_, err := s.Store.CreateTicket(ctx, ticket)
+	if err != nil {
+		slog.Error("failed to create automatic support ticket for memo", "memoUID", memo.UID, "error", err)
+		return isEscalated
+	}
+
+	slog.Info("Successfully created automatic support ticket for customer memo", "memoUID", memo.UID, "ticket_title", title, "priority", priority, "type", ticketType)
+	return isEscalated
+}
+
+func (s *APIV1Service) handleTicketAIResponse(ctx context.Context, memoUID string, creatorID int32, latestMessageContent string) {
+	// 1. Sleep slightly (e.g. 500ms) to ensure DB commits/relations are finished
+	time.Sleep(500 * time.Millisecond)
+
+	user, err := s.Store.GetUser(ctx, &store.FindUser{ID: &creatorID})
+	if err != nil || user == nil {
+		return
+	}
+
+	// 2. Fetch the target memo
+	memo, err := s.Store.GetMemo(ctx, &store.FindMemo{UID: &memoUID})
+	if err != nil || memo == nil {
+		return
+	}
+
+	// 3. Find the parent memo (if this is a comment)
+	parentMemo := memo
+	commentType := store.MemoRelationComment
+	relations, err := s.Store.ListMemoRelations(ctx, &store.FindMemoRelation{
+		MemoID: &memo.ID,
+		Type:   &commentType,
+	})
+	if err == nil && len(relations) > 0 {
+		// It is a comment, load parent memo
+		pID := relations[0].RelatedMemoID
+		pMemo, err := s.Store.GetMemo(ctx, &store.FindMemo{ID: &pID})
+		if err == nil && pMemo != nil {
+			parentMemo = pMemo
+		}
+	}
+
+	// 4. Find the ticket linked to the parent memo
+	descriptionLink := "/m/" + parentMemo.UID
+	tickets, err := s.Store.ListTickets(ctx, &store.FindTicket{Description: &descriptionLink})
+	if err != nil || len(tickets) == 0 {
+		slog.Warn("AI support: linked ticket not found", "parentMemoUID", parentMemo.UID)
+		return
+	}
+	ticket := tickets[0]
+
+	// 5. Check if the ticket is escalated to human staff (if so, skip AI)
+	for _, tag := range ticket.Tags {
+		if tag == "escalated" {
+			slog.Info("AI support: ticket is escalated to human, skipping auto-reply", "ticketID", ticket.ID)
+			return
+		}
+	}
+
+	// 6. Find the customer's TenantID
+	perms, err := s.Store.ListUserTenantPermissions(ctx, &store.FindUserTenantPermission{UserID: &ticket.CreatorID})
+	var tenantID int32
+	if err != nil || len(perms) == 0 {
+		// Default fallback: load first active tenant in system
+		tenants, err := s.Store.ListAgentTenants(ctx, &store.FindAgentTenant{})
+		if err == nil && len(tenants) > 0 {
+			tenantID = tenants[0].ID
+		} else {
+			slog.Error("AI support: no active tenants found in the system")
+			return
+		}
+	} else {
+		tenantID = perms[0].TenantID
+	}
+
+	tenant, err := s.Store.GetAgentTenant(ctx, &store.FindAgentTenant{ID: &tenantID})
+	if err != nil || tenant == nil {
+		slog.Error("AI support: failed to get tenant", "tenantID", tenantID)
+		return
+	}
+
+	// 7. Build conversation history from parent memo + all comments (excluding latest)
+	history := []store.AgentMessage{}
+
+	// Root message
+	rootCreator, _ := s.Store.GetUser(ctx, &store.FindUser{ID: &parentMemo.CreatorID})
+	rootRole := "user"
+	if rootCreator != nil && isSuperUser(rootCreator) {
+		rootRole = "assistant"
+	} else if parentMemo.CreatorID == store.SystemBotID {
+		rootRole = "assistant"
+	}
+	// Only add root to history if it's not the latest message itself
+	if parentMemo.UID != memoUID {
+		history = append(history, store.AgentMessage{
+			Role:      rootRole,
+			Content:   parentMemo.Content,
+			Timestamp: time.Unix(parentMemo.CreatedTs, 0),
+		})
+	}
+
+	// Get comments
+	commentsRelations, err := s.Store.ListMemoRelations(ctx, &store.FindMemoRelation{
+		RelatedMemoID: &parentMemo.ID,
+		Type:          &commentType,
+	})
+	if err == nil {
+		type commentWithTime struct {
+			content   string
+			creatorID int32
+			createdTs int64
+			uid       string
+		}
+		var list []commentWithTime
+		for _, r := range commentsRelations {
+			cMemo, err := s.Store.GetMemo(ctx, &store.FindMemo{ID: &r.MemoID})
+			if err == nil && cMemo != nil {
+				list = append(list, commentWithTime{
+					content:   cMemo.Content,
+					creatorID: cMemo.CreatorID,
+					createdTs: cMemo.CreatedTs,
+					uid:       cMemo.UID,
+				})
+			}
+		}
+		// Sort chronologically by createdTs
+		sort.Slice(list, func(i, j int) bool {
+			return list[i].createdTs < list[j].createdTs
+		})
+
+		for _, c := range list {
+			// Skip the latest message itself since it's passed separately
+			if c.uid == memoUID {
+				continue
+			}
+			cCreator, _ := s.Store.GetUser(ctx, &store.FindUser{ID: &c.creatorID})
+			role := "user"
+			if cCreator != nil && isSuperUser(cCreator) {
+				role = "assistant"
+			} else if c.creatorID == store.SystemBotID {
+				role = "assistant"
+			}
+			history = append(history, store.AgentMessage{
+				Role:      role,
+				Content:   c.content,
+				Timestamp: time.Unix(c.createdTs, 0),
+			})
+		}
+	}
+
+	// 8. Generate AI response
+	slog.Info("AI support: generating response", "tenant", tenant.Slug, "ticketID", ticket.ID)
+	aiReply, err := s.agentHandler.GetService().ProcessTicketChat(ctx, tenant.Slug, history, latestMessageContent)
+	if err != nil {
+		slog.Error("AI support: failed to process chat", "error", err)
+		return
+	}
+
+	// 9. Post AI reply comment
+	aiMemo := &store.Memo{
+		UID:        shortuuid.New(),
+		CreatorID:  store.SystemBotID,
+		Content:    aiReply,
+		Visibility: store.Private,
+	}
+	if err := memopayload.RebuildMemoPayload(aiMemo); err != nil {
+		slog.Error("AI support: failed to rebuild payload", "error", err)
+		return
+	}
+
+	createdReply, err := s.Store.CreateMemo(ctx, aiMemo)
+	if err != nil {
+		slog.Error("AI support: failed to save reply memo", "error", err)
+		return
+	}
+
+	// Link AI comment to parent
+	_, err = s.Store.UpsertMemoRelation(ctx, &store.MemoRelation{
+		MemoID:        createdReply.ID,
+		RelatedMemoID: parentMemo.ID,
+		Type:          store.MemoRelationComment,
+	})
+	if err != nil {
+		slog.Error("AI support: failed to create comment relation", "error", err)
+		return
+	}
+
+	slog.Info("AI support: auto-replied successfully to ticket", "ticketID", ticket.ID, "replyUID", createdReply.UID)
 }

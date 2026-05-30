@@ -130,11 +130,11 @@ const Navigation = observer((props: Props) => {
 
   const baseNavLinks: NavLinkItem[] = [
     homeNavLink,
-    exploreNavLink,
+    ...(isAdmin ? [exploreNavLink] : []),
     resourcesNavLink,
     ticketsNavLink,
     notificationsNavLink,
-    ...(canAccessInternalAgent ? [internalAgentNavLink, agentSimulationNavLink] : []),
+    ...(isAdmin ? [internalAgentNavLink, agentSimulationNavLink] : []),
   ];
   const adminNavLinks: NavLinkItem[] = isAdmin ? [agentAdminNavLink, ragStatsNavLink] : [];
 

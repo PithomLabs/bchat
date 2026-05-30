@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "react-hot-toast";
 import { Link, useSearchParams } from "react-router-dom";
 import useCurrentUser from "@/hooks/useCurrentUser";
+import { isSuperUser } from "@/utils/user";
 import MobileHeader from "@/components/MobileHeader";
 import { memoStore } from "@/store/v2";
 import { Memo, Visibility, MemoRelation_Type } from "@/types/proto/api/v1/memo_service";
@@ -46,6 +47,7 @@ function extractMemoUidFromDescription(description: string): string | null {
 
 const Tickets = observer(() => {
     const currentUser = useCurrentUser();
+    const isAdmin = isSuperUser(currentUser);
     const [searchParams, setSearchParams] = useSearchParams();
     const [tickets, setTickets] = useState<Ticket[]>([]);
     const [users, setUsers] = useState<User[]>([]);
@@ -53,6 +55,43 @@ const Tickets = observer(() => {
     const [editingTicket, setEditingTicket] = useState<Ticket | null>(null);
     const [viewMode, setViewMode] = useState<"list" | "board">("list");
 
+    const isEscalated = editingTicket?.tags?.includes("escalated") || false;
+
+    useEffect(() => {
+        if (!isAdmin) {
+            setViewMode("list");
+        }
+    }, [isAdmin]);
+
+    const handleEscalateTicket = async () => {
+        if (!editingTicket) return;
+        try {
+            const currentTags = editingTicket.tags || [];
+            const newTags = Array.from(new Set([...currentTags, "escalated"]));
+            
+            const response = await fetch(`/api/v1/tickets/${editingTicket.id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ 
+                    tags: newTags,
+                    priority: "HIGH"
+                }),
+            });
+
+            if (!response.ok) throw new Error("Failed to escalate ticket");
+
+            toast.success("Ticket escalated to support staff");
+            
+            const updatedTicket = { ...editingTicket, tags: newTags, priority: "HIGH" };
+            setEditingTicket(updatedTicket);
+            setPriority("HIGH");
+            setTickets(prev => prev.map(t => t.id === updatedTicket.id ? updatedTicket : t));
+            
+            fetchTickets();
+        } catch (error: any) {
+            toast.error("Failed to escalate: " + (error.details || error.message));
+        }
+    };
 
     // Delete confirmation modal state
     const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -310,20 +349,22 @@ const Tickets = observer(() => {
                         <h1 className="text-2xl font-bold text-gray-800 dark:text-gray-200">Tickets</h1>
                     </div>
                     <div className="flex items-center gap-2">
-                        <ButtonGroup>
-                            <IconButton
-                                variant={viewMode === "list" ? "solid" : "outlined"}
-                                onClick={() => setViewMode("list")}
-                            >
-                                <LayoutListIcon />
-                            </IconButton>
-                            <IconButton
-                                variant={viewMode === "board" ? "solid" : "outlined"}
-                                onClick={() => setViewMode("board")}
-                            >
-                                <KanbanIcon />
-                            </IconButton>
-                        </ButtonGroup>
+                        {isAdmin && (
+                            <ButtonGroup>
+                                <IconButton
+                                    variant={viewMode === "list" ? "solid" : "outlined"}
+                                    onClick={() => setViewMode("list")}
+                                >
+                                    <LayoutListIcon />
+                                </IconButton>
+                                <IconButton
+                                    variant={viewMode === "board" ? "solid" : "outlined"}
+                                    onClick={() => setViewMode("board")}
+                                >
+                                    <KanbanIcon />
+                                </IconButton>
+                            </ButtonGroup>
+                        )}
                         <Button startDecorator={<PlusIcon />} onClick={openCreate}>
                             New Ticket
                         </Button>
@@ -390,9 +431,11 @@ const Tickets = observer(() => {
                                         </td>
                                         <td>{new Date(ticket.updatedTs * 1000).toLocaleDateString()}</td>
                                         <td>
-                                            <IconButton size="sm" color="danger" onClick={() => openDeleteModal(ticket)}>
-                                                <TrashIcon className="w-4 h-4" />
-                                            </IconButton>
+                                            {isAdmin && (
+                                                <IconButton size="sm" color="danger" onClick={() => openDeleteModal(ticket)}>
+                                                    <TrashIcon className="w-4 h-4" />
+                                                </IconButton>
+                                            )}
                                         </td>
                                     </tr>
                                 ))}
@@ -429,51 +472,136 @@ const Tickets = observer(() => {
                         </div>
 
                         <div className="flex flex-col gap-4">
+                            {editingTicket && !isAdmin && (
+                                <div className={cx(
+                                    "p-4 rounded-xl border mb-2 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 shadow-sm transition-all duration-300",
+                                    isEscalated 
+                                        ? "bg-amber-50/70 border-amber-200 dark:bg-amber-950/20 dark:border-amber-900/30" 
+                                        : "bg-blue-50/70 border-blue-200 dark:bg-blue-950/20 dark:border-blue-900/30"
+                                )}>
+                                    <div className="flex flex-col gap-0.5">
+                                        <span className={cx(
+                                            "text-sm font-semibold flex items-center gap-1.5",
+                                            isEscalated ? "text-amber-800 dark:text-amber-300" : "text-blue-800 dark:text-blue-300"
+                                        )}>
+                                            {isEscalated ? "🛡️ Escalated to Staff" : "🤖 Supported by AI Assistant"}
+                                        </span>
+                                        <span className="text-xs text-gray-500 dark:text-gray-400">
+                                            {isEscalated 
+                                                ? "Human support staff has been alerted. AI replies are temporarily paused."
+                                                : "Our AI assistant is helping you. Need human help? Escalate at any time."}
+                                        </span>
+                                    </div>
+                                    {!isEscalated && (
+                                        <Button 
+                                            color="danger" 
+                                            variant="solid" 
+                                            size="sm"
+                                            onClick={handleEscalateTicket}
+                                            sx={{ borderRadius: "lg", fontWeight: 600 }}
+                                        >
+                                            Escalate to Human
+                                        </Button>
+                                    )}
+                                </div>
+                            )}
+
                             <div>
                                 <label className="block text-sm font-medium mb-1">Title</label>
-                                <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ticket title" />
+                                <Input 
+                                    value={title} 
+                                    onChange={(e) => setTitle(e.target.value)} 
+                                    placeholder="Ticket title" 
+                                    readOnly={!isAdmin && !!editingTicket}
+                                    variant={!isAdmin && !!editingTicket ? "plain" : "outlined"}
+                                    sx={!isAdmin && !!editingTicket ? { px: 0, fontWeight: 600, fontSize: "1.1rem" } : {}}
+                                />
                             </div>
 
                             <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-sm font-medium mb-1">Type</label>
-                                    <Select value={type} onChange={(_, val) => setType(val || "TASK")}>
-                                        <Option value="TASK">Task</Option>
-                                        <Option value="BUG">Bug</Option>
-                                        <Option value="STORY">Story</Option>
-                                    </Select>
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium mb-1">Status</label>
-                                    <Select value={status} onChange={(_, val) => setStatus(val || "OPEN")}>
-                                        <Option value="OPEN">Open</Option>
-                                        <Option value="IN_PROGRESS">In Progress</Option>
-                                        <Option value="CLOSED">Closed</Option>
-                                    </Select>
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium mb-1">Priority</label>
-                                    <Select value={priority} onChange={(_, val) => setPriority(val || "MEDIUM")}>
-                                        <Option value="LOW">Low</Option>
-                                        <Option value="MEDIUM">Medium</Option>
-                                        <Option value="HIGH">High</Option>
-                                    </Select>
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium mb-1">Assignee</label>
-                                    <Select
-                                        value={assigneeId}
-                                        onChange={(_, val) => setAssigneeId(val)}
-                                        placeholder="Select assignee"
-                                    >
-                                        <Option value={null as unknown as number}>Unassigned</Option>
-                                        {users.map((user) => (
-                                            <Option key={user.id} value={user.id}>
-                                                {user.username}
-                                            </Option>
-                                        ))}
-                                    </Select>
-                                </div>
+                                {isAdmin ? (
+                                    <>
+                                        <div>
+                                            <label className="block text-sm font-medium mb-1">Type</label>
+                                            <Select value={type} onChange={(_, val) => setType(val || "TASK")}>
+                                                <Option value="TASK">Task</Option>
+                                                <Option value="BUG">Bug</Option>
+                                                <Option value="STORY">Story</Option>
+                                            </Select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium mb-1">Status</label>
+                                            <Select value={status} onChange={(_, val) => setStatus(val || "OPEN")}>
+                                                <Option value="OPEN">Open</Option>
+                                                <Option value="IN_PROGRESS">In Progress</Option>
+                                                <Option value="CLOSED">Closed</Option>
+                                            </Select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium mb-1">Priority</label>
+                                            <Select value={priority} onChange={(_, val) => setPriority(val || "MEDIUM")}>
+                                                <Option value="LOW">Low</Option>
+                                                <Option value="MEDIUM">Medium</Option>
+                                                <Option value="HIGH">High</Option>
+                                            </Select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium mb-1">Assignee</label>
+                                            <Select
+                                                value={assigneeId}
+                                                onChange={(_, val) => setAssigneeId(val)}
+                                                placeholder="Select assignee"
+                                            >
+                                                <Option value={null as unknown as number}>Unassigned</Option>
+                                                {users.map((user) => (
+                                                    <Option key={user.id} value={user.id}>
+                                                        {user.username}
+                                                    </Option>
+                                                ))}
+                                            </Select>
+                                        </div>
+                                    </>
+                                ) : (
+                                    // Simplified customer view
+                                    <>
+                                        <div>
+                                            <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">Type</label>
+                                            <div className="py-2 text-sm font-medium text-gray-900 dark:text-gray-100">
+                                                <Chip size="sm" variant="outlined" color="primary">{type || "SUPPORT"}</Chip>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">Status</label>
+                                            <div className="py-1">
+                                                <Chip
+                                                    size="sm" variant="soft"
+                                                    color={status === "OPEN" ? "success" : status === "IN_PROGRESS" ? "warning" : "neutral"}
+                                                >
+                                                    {status}
+                                                </Chip>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">Priority</label>
+                                            <div className="py-1">
+                                                <Chip
+                                                    size="sm" variant="solid"
+                                                    color={priority === "HIGH" ? "danger" : priority === "MEDIUM" ? "warning" : "primary"}
+                                                >
+                                                    {priority}
+                                                </Chip>
+                                            </div>
+                                        </div>
+                                        {assigneeId && (
+                                            <div>
+                                                <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">Assignee</label>
+                                                <div className="py-2 text-sm font-medium text-gray-600 dark:text-gray-400">
+                                                    {getUserDisplayName(assigneeId)}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </>
+                                )}
                             </div>
 
                             <div>
@@ -529,11 +657,13 @@ const Tickets = observer(() => {
 
                             <div className="flex justify-end gap-2 pt-4 border-b pb-4 mb-4">
                                 <Button variant="outlined" color="neutral" onClick={() => setShowCreateDialog(false)}>
-                                    Cancel
+                                    {(!isAdmin && editingTicket) ? "Close" : "Cancel"}
                                 </Button>
-                                <Button onClick={handleCreateOrUpdate}>
-                                    {editingTicket ? "Update Ticket" : "Create Ticket"}
-                                </Button>
+                                {(isAdmin || !editingTicket) && (
+                                    <Button onClick={handleCreateOrUpdate}>
+                                        {editingTicket ? "Update Ticket" : "Create Ticket"}
+                                    </Button>
+                                )}
                             </div>
 
                             {/* Comments Section (only for existing tickets linked to a memo) */}
