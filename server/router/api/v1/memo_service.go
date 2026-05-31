@@ -154,15 +154,19 @@ func (s *APIV1Service) ListMemos(ctx context.Context, request *v1pb.ListMemosReq
 		memoFind.VisibilityList = []store.Visibility{store.Public}
 	} else {
 		if memoFind.CreatorID == nil {
-			internalFilter := fmt.Sprintf(`creator_id == %d || visibility in ["PUBLIC", "PROTECTED"]`, currentUser.ID)
-			if memoFind.Filter != nil {
-				filter := fmt.Sprintf("(%s) && (%s)", *memoFind.Filter, internalFilter)
-				memoFind.Filter = &filter
-			} else {
-				memoFind.Filter = &internalFilter
+			if !isSuperUser(currentUser) {
+				internalFilter := fmt.Sprintf(`creator_id == %d || visibility in ["PUBLIC", "PROTECTED"]`, currentUser.ID)
+				if memoFind.Filter != nil {
+					filter := fmt.Sprintf("(%s) && (%s)", *memoFind.Filter, internalFilter)
+					memoFind.Filter = &filter
+				} else {
+					memoFind.Filter = &internalFilter
+				}
 			}
 		} else if *memoFind.CreatorID != currentUser.ID {
-			memoFind.VisibilityList = []store.Visibility{store.Public, store.Protected}
+			if !isSuperUser(currentUser) {
+				memoFind.VisibilityList = []store.Visibility{store.Public, store.Protected}
+			}
 		}
 	}
 
@@ -242,7 +246,7 @@ func (s *APIV1Service) GetMemo(ctx context.Context, request *v1pb.GetMemoRequest
 		if user == nil {
 			return nil, status.Errorf(codes.PermissionDenied, "permission denied")
 		}
-		if memo.Visibility == store.Private && memo.CreatorID != user.ID {
+		if memo.Visibility == store.Private && memo.CreatorID != user.ID && !isSuperUser(user) {
 			return nil, status.Errorf(codes.PermissionDenied, "permission denied")
 		}
 	}
@@ -540,17 +544,19 @@ func (s *APIV1Service) ListMemoComments(ctx context.Context, request *v1pb.ListM
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to get user")
 	}
-	var memoFilter string
+	var memoFilter *string
 	if currentUser == nil {
-		memoFilter = `visibility == "PUBLIC"`
-	} else {
-		memoFilter = fmt.Sprintf(`creator_id == %d || visibility in ["PUBLIC", "PROTECTED"]`, currentUser.ID)
+		filterStr := `visibility == "PUBLIC"`
+		memoFilter = &filterStr
+	} else if !isSuperUser(currentUser) {
+		filterStr := fmt.Sprintf(`creator_id == %d || visibility in ["PUBLIC", "PROTECTED"]`, currentUser.ID)
+		memoFilter = &filterStr
 	}
 	memoRelationComment := store.MemoRelationComment
 	memoRelations, err := s.Store.ListMemoRelations(ctx, &store.FindMemoRelation{
 		RelatedMemoID: &memo.ID,
 		Type:          &memoRelationComment,
-		MemoFilter:    &memoFilter,
+		MemoFilter:    memoFilter,
 	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list memo relations")
@@ -1107,7 +1113,7 @@ func (s *APIV1Service) handleTicketAIResponse(ctx context.Context, memoUID strin
 		UID:        shortuuid.New(),
 		CreatorID:  store.SystemBotID,
 		Content:    aiReply,
-		Visibility: store.Private,
+		Visibility: store.Protected,
 	}
 	if err := memopayload.RebuildMemoPayload(aiMemo); err != nil {
 		slog.Error("AI support: failed to rebuild payload", "error", err)
