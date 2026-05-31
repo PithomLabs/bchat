@@ -1,0 +1,142 @@
+chaschel@linux:~/Documents/go/bchat$ go test ./...
+?   	github.com/usememos/memos/bin/memos	[no test files]
+?   	github.com/usememos/memos/build/widget-test	[no test files]
+?   	github.com/usememos/memos/cmd/parser	[no test files]
+ok  	github.com/usememos/memos/internal/base	(cached)
+?   	github.com/usememos/memos/internal/crypto	[no test files]
+?   	github.com/usememos/memos/internal/profile	[no test files]
+ok  	github.com/usememos/memos/internal/util	(cached)
+ok  	github.com/usememos/memos/internal/version	(cached)
+ok  	github.com/usememos/memos/plugin/cron	(cached)
+?   	github.com/usememos/memos/plugin/filter	[no test files]
+ok  	github.com/usememos/memos/plugin/httpgetter	(cached)
+?   	github.com/usememos/memos/plugin/idp	[no test files]
+ok  	github.com/usememos/memos/plugin/idp/oauth2	0.011s
+?   	github.com/usememos/memos/plugin/storage/s3	[no test files]
+ok  	github.com/usememos/memos/plugin/webhook	(cached) [no tests to run]
+?   	github.com/usememos/memos/proto/gen/api/v1	[no test files]
+?   	github.com/usememos/memos/proto/gen/store	[no test files]
+?   	github.com/usememos/memos/server	[no test files]
+?   	github.com/usememos/memos/server/profiler	[no test files]
+?   	github.com/usememos/memos/server/router/api/v1	[no test files]
+ok  	github.com/usememos/memos/server/router/api/v1/agent	(cached)
+?   	github.com/usememos/memos/server/router/frontend	[no test files]
+?   	github.com/usememos/memos/server/router/rss	[no test files]
+?   	github.com/usememos/memos/server/runner/memopayload	[no test files]
+?   	github.com/usememos/memos/server/runner/s3presign	[no test files]
+?   	github.com/usememos/memos/server/service	[no test files]
+?   	github.com/usememos/memos/store	[no test files]
+ok  	github.com/usememos/memos/store/cache	(cached)
+?   	github.com/usememos/memos/store/db	[no test files]
+ok  	github.com/usememos/memos/store/db/mysql	(cached)
+ok  	github.com/usememos/memos/store/db/postgres	(cached)
+ok  	github.com/usememos/memos/store/db/sqlite	(cached)
+2026/05/31 21:49:39 WARN failed to find migration history in pre-migrate error="SQL logic error: no such table: migration_history (1)"
+2026/05/31 21:49:39 INFO Column already exists, skipping table=tickets column=type
+2026/05/31 21:49:39 INFO Column already exists, skipping table=tickets column=tags
+2026/05/31 21:49:39 WARN failed to find migration history in pre-migrate error="SQL logic error: no such table: migration_history (1)"
+2026/05/31 21:49:39 INFO Column already exists, skipping table=tickets column=type
+2026/05/31 21:49:39 INFO Column already exists, skipping table=tickets column=tags
+2026/05/31 21:49:39 WARN failed to find migration history in pre-migrate error="SQL logic error: no such table: migration_history (1)"
+2026/05/31 21:49:39 INFO Column already exists, skipping table=tickets column=type
+2026/05/31 21:49:39 INFO Column already exists, skipping table=tickets column=tags
+2026/05/31 21:49:39 WARN failed to find migration history in pre-migrate error="SQL logic error: no such table: migration_history (1)"
+2026/05/31 21:49:39 INFO Column already exists, skipping table=tickets column=type
+2026/05/31 21:49:39 INFO Column already exists, skipping table=tickets column=tags
+2026/05/31 21:49:39 WARN failed to find migration history in pre-migrate error="SQL logic error: no such table: migration_history (1)"
+2026/05/31 21:49:39 INFO Column already exists, skipping table=tickets column=type
+2026/05/31 21:49:39 INFO Column already exists, skipping table=tickets column=tags
+2026/05/31 21:49:39 WARN failed to find migration history in pre-migrate error="SQL logic error: no such table: migration_history (1)"
+2026/05/31 21:49:39 INFO Column already exists, skipping table=tickets column=type
+2026/05/31 21:49:39 INFO Column already exists, skipping table=tickets column=tags
+2026/05/31 21:49:39 WARN failed to find migration history in pre-migrate error="SQL logic error: no such table: migration_history (1)"
+2026/05/31 21:49:39 INFO Column already exists, skipping table=tickets column=type
+2026/05/31 21:49:39 INFO Column already exists, skipping table=tickets column=tags
+2026/05/31 21:49:40 WARN failed to find migration history in pre-migrate error="SQL logic error: no such table: migration_history (1)"
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=type
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=tags
+2026/05/31 21:49:40 WARN failed to find migration history in pre-migrate error="SQL logic error: no such table: migration_history (1)"
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=type
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=tags
+2026/05/31 21:49:40 WARN failed to find migration history in pre-migrate error="SQL logic error: no such table: migration_history (1)"
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=type
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=tags
+--- FAIL: TestGetCurrentSchemaVersion (0.03s)
+    store.go:98: failed to load .env file, but it's ok
+    migrator_test.go:16: 
+        	Error Trace:	/home/chaschel/Documents/go/bchat/store/test/migrator_test.go:16
+        	Error:      	Not equal: 
+        	            	expected: "0.24.2"
+        	            	actual  : "0.25.29"
+        	            	
+        	            	Diff:
+        	            	--- Expected
+        	            	+++ Actual
+        	            	@@ -1 +1 @@
+        	            	-0.24.2
+        	            	+0.25.29
+        	Test:       	TestGetCurrentSchemaVersion
+2026/05/31 21:49:40 WARN failed to find migration history in pre-migrate error="SQL logic error: no such table: migration_history (1)"
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=type
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=tags
+2026/05/31 21:49:40 WARN failed to find migration history in pre-migrate error="SQL logic error: no such table: migration_history (1)"
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=type
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=tags
+2026/05/31 21:49:40 WARN failed to find migration history in pre-migrate error="SQL logic error: no such table: migration_history (1)"
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=type
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=tags
+2026/05/31 21:49:40 WARN failed to find migration history in pre-migrate error="SQL logic error: no such table: migration_history (1)"
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=type
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=tags
+2026/05/31 21:49:40 WARN failed to find migration history in pre-migrate error="SQL logic error: no such table: migration_history (1)"
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=type
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=tags
+2026/05/31 21:49:40 WARN failed to find migration history in pre-migrate error="SQL logic error: no such table: migration_history (1)"
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=type
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=tags
+2026/05/31 21:49:40 WARN failed to find migration history in pre-migrate error="SQL logic error: no such table: migration_history (1)"
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=type
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=tags
+--- FAIL: TestTicketForeignKeyConstraints (0.10s)
+    store.go:98: failed to load .env file, but it's ok
+    ticket_test.go:87: Foreign keys pragma: 1 (should be 1)
+    ticket_test.go:100: Tickets table schema: CREATE TABLE tickets (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'OPEN',
+          priority TEXT NOT NULL DEFAULT 'MEDIUM',
+          creator_id INTEGER NOT NULL,
+          assignee_id INTEGER,
+          created_ts BIGINT NOT NULL,
+          updated_ts BIGINT NOT NULL,
+          type TEXT NOT NULL DEFAULT 'TASK',
+          tags TEXT NOT NULL DEFAULT '[]',
+          beads_id TEXT UNIQUE,
+          parent_id INTEGER REFERENCES tickets(id),
+          labels TEXT DEFAULT '[]',
+          dependencies TEXT DEFAULT '[]',
+          discovery_context TEXT,
+          closed_reason TEXT,
+          issue_type TEXT
+        )
+    ticket_test.go:119: 
+        	Error Trace:	/home/chaschel/Documents/go/bchat/store/test/ticket_test.go:119
+        	Error:      	An error is expected but got nil.
+        	Test:       	TestTicketForeignKeyConstraints
+        	Messages:   	Should fail with invalid creator_id
+2026/05/31 21:49:40 WARN failed to find migration history in pre-migrate error="SQL logic error: no such table: migration_history (1)"
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=type
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=tags
+2026/05/31 21:49:40 WARN failed to find migration history in pre-migrate error="SQL logic error: no such table: migration_history (1)"
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=type
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=tags
+2026/05/31 21:49:40 WARN failed to find migration history in pre-migrate error="SQL logic error: no such table: migration_history (1)"
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=type
+2026/05/31 21:49:40 INFO Column already exists, skipping table=tickets column=tags
+2026/05/31 21:49:41 WARN failed to find migration history in pre-migrate error="SQL logic error: no such table: migration_history (1)"
+2026/05/31 21:49:41 INFO Column already exists, skipping table=tickets column=type
+2026/05/31 21:49:41 INFO Column already exists, skipping table=tickets column=tags
+FAIL
+FAIL	github.com/usememos/memos/store/test	1.592s
+FAIL
