@@ -48,6 +48,10 @@ export interface Props {
   autoFocus?: boolean;
   onConfirm?: (memoName: string) => void;
   onCancel?: () => void;
+  // Force visibility for the memo (overrides parent and default).
+  forceVisibility?: Visibility;
+  // Hide the visibility selector UI element.
+  hideVisibilitySelector?: boolean;
 }
 
 interface State {
@@ -72,12 +76,14 @@ const MemoEditor = observer((props: Props) => {
     autoFocus,
     onConfirm,
     onCancel,
+    forceVisibility,
+    hideVisibilitySelector,
   } = props;
   const t = useTranslate();
   const { i18n } = useTranslation();
   const currentUser = useCurrentUser();
   const [state, setState] = useState<State>({
-    memoVisibility: defaultVisibility,
+    memoVisibility: forceVisibility ?? defaultVisibility,
     resourceList: [],
     relationList: [],
     location: undefined,
@@ -119,20 +125,27 @@ const MemoEditor = observer((props: Props) => {
     }
   }, [autoFocus]);
 
-  useAsyncEffect(async () => {
-    let visibility = convertVisibilityFromString(userSetting.memoVisibility);
-    if (workspaceMemoRelatedSetting.disallowPublicVisibility && visibility === Visibility.PUBLIC) {
-      visibility = Visibility.PROTECTED;
-    }
-    if (parentMemoName) {
-      const parentMemo = await memoStore.getOrFetchMemoByName(parentMemoName);
-      visibility = parentMemo.visibility;
-    }
-    setState((prevState) => ({
-      ...prevState,
-      memoVisibility: convertVisibilityFromString(visibility),
-    }));
-  }, [parentMemoName, userSetting.memoVisibility, workspaceMemoRelatedSetting.disallowPublicVisibility]);
+useAsyncEffect(async () => {
+     if (forceVisibility) {
+       setState((prevState) => ({
+         ...prevState,
+         memoVisibility: forceVisibility,
+       }));
+       return;
+     }
+     let visibility = convertVisibilityFromString(userSetting.memoVisibility);
+     if (workspaceMemoRelatedSetting.disallowPublicVisibility && visibility === Visibility.PUBLIC) {
+       visibility = Visibility.PROTECTED;
+     }
+     if (parentMemoName) {
+       const parentMemo = await memoStore.getOrFetchMemoByName(parentMemoName);
+       visibility = parentMemo.visibility;
+     }
+     setState((prevState) => ({
+       ...prevState,
+       memoVisibility: convertVisibilityFromString(visibility),
+     }));
+   }, [forceVisibility, parentMemoName, userSetting.memoVisibility, workspaceMemoRelatedSetting.disallowPublicVisibility]);
 
   useAsyncEffect(async () => {
     if (!memoName) {
@@ -572,21 +585,23 @@ const MemoEditor = observer((props: Props) => {
             </Button>
           </div>
         </div>
-        <div
-          className={cn(
-            "absolute right-1 top-1 opacity-60",
-            "invisible group-focus-within:visible group-hover:visible hover:visible focus-within:visible",
-            (isVisibilitySelectorOpen || memoName) && "visible",
-          )}
-          onFocus={(e) => e.stopPropagation()}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          <VisibilitySelector
-            value={state.memoVisibility}
-            onChange={handleMemoVisibilityChange}
-            onOpenChange={setIsVisibilitySelectorOpen}
-          />
-        </div>
+<div
+           className={cn(
+             "absolute right-1 top-1 opacity-60",
+             "invisible group-focus-within:visible group-hover:visible hover:visible focus-within:visible",
+             (isVisibilitySelectorOpen || memoName) && "visible",
+           )}
+           onFocus={(e) => e.stopPropagation()}
+           onMouseDown={(e) => e.stopPropagation()}
+         >
+           {!hideVisibilitySelector && (
+             <VisibilitySelector
+               value={state.memoVisibility}
+               onChange={handleMemoVisibilityChange}
+               onOpenChange={setIsVisibilitySelectorOpen}
+             />
+           )}
+         </div>
       </div>
 
       {/* Show memo metadata if memoName is provided */}

@@ -701,15 +701,16 @@ const Tickets = observer(() => {
                                         </Button>
                                     ) : (
                                         <div className="border rounded-lg p-3 bg-white dark:bg-zinc-800">
-                                            <MemoEditor
-                                                cacheKey={`ticket-comment-${editingTicket.id}`}
-                                                placeholder="Write a comment..."
-                                                parentMemoName={`memos/${extractMemoUidFromDescription(editingTicket.description)}`}
-                                                autoFocus
-                                                defaultVisibility={Visibility.PUBLIC}
-                                                onConfirm={handleCommentCreated}
-                                                onCancel={() => setShowCommentEditor(false)}
-                                            />
+<MemoEditor
+                                                    cacheKey={`ticket-comment-${editingTicket.id}`}
+                                                    placeholder="Write a comment..."
+                                                    parentMemoName={`memos/${extractMemoUidFromDescription(editingTicket.description)}`}
+                                                    autoFocus
+                                                    forceVisibility={Visibility.PROTECTED}
+                                                    hideVisibilitySelector={true}
+                                                    onConfirm={handleCommentCreated}
+                                                    onCancel={() => setShowCommentEditor(false)}
+                                                />
                                         </div>
                                     )}
                                 </div>
