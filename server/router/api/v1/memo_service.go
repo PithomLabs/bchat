@@ -30,6 +30,13 @@ import (
 	"github.com/usememos/memos/store"
 )
 
+// contextKey is used for internal context values
+type contextKey string
+
+// skipTicketAIResponseKey is set on context when CreateMemo is called from CreateMemoComment
+// to prevent duplicate AI response triggers (the comment handler will trigger it separately)
+const skipTicketAIResponseKey contextKey = "skip-ticket-ai-response"
+
 func (s *APIV1Service) CreateMemo(ctx context.Context, request *v1pb.CreateMemoRequest) (*v1pb.Memo, error) {
 	user, err := s.GetCurrentUser(ctx)
 	if err != nil {
@@ -105,7 +112,9 @@ func (s *APIV1Service) CreateMemo(ctx context.Context, request *v1pb.CreateMemoR
 
 	if !isSuperUser(user) {
 		isEscalated := s.handleAutoTicketCreation(ctx, memo, user)
-		if !isEscalated {
+		// Skip AI response if context indicates this is a comment creation (handled by CreateMemoComment)
+		skipTicketAI, _ := ctx.Value(skipTicketAIResponseKey).(bool)
+		if !isEscalated && !skipTicketAI {
 			go s.handleTicketAIResponse(context.Background(), memo.UID, user.ID, memo.Content)
 		}
 	}
@@ -468,7 +477,10 @@ func (s *APIV1Service) CreateMemoComment(ctx context.Context, request *v1pb.Crea
 	if request.Comment.Visibility == v1pb.Visibility_VISIBILITY_UNSPECIFIED {
 		request.Comment.Visibility = v1pb.Visibility_PUBLIC
 	}
-	memoComment, err := s.CreateMemo(ctx, &v1pb.CreateMemoRequest{Memo: request.Comment})
+	// Pass context with skip flag to prevent duplicate AI response trigger
+	// (CreateMemoComment will trigger the AI response separately after linking the comment)
+	ctxWithSkip := context.WithValue(ctx, skipTicketAIResponseKey, true)
+	memoComment, err := s.CreateMemo(ctxWithSkip, &v1pb.CreateMemoRequest{Memo: request.Comment})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create memo")
 	}
