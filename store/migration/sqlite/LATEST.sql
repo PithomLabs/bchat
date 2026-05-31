@@ -144,29 +144,30 @@ CREATE TABLE reaction (
 
 -- tickets
 CREATE TABLE tickets (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'OPEN',
-  priority TEXT NOT NULL DEFAULT 'MEDIUM',
-  creator_id INTEGER NOT NULL,
-  assignee_id INTEGER,
-  created_ts BIGINT NOT NULL,
-  updated_ts BIGINT NOT NULL,
-  type TEXT NOT NULL DEFAULT 'TASK',
-  tags TEXT NOT NULL DEFAULT '[]',
-  beads_id TEXT UNIQUE,
-  parent_id INTEGER REFERENCES tickets(id),
-  labels TEXT DEFAULT '[]',
-  dependencies TEXT DEFAULT '[]',
-  discovery_context TEXT,
-  closed_reason TEXT,
-  issue_type TEXT
-);
+   id INTEGER PRIMARY KEY AUTOINCREMENT,
+   title TEXT NOT NULL,
+   description TEXT NOT NULL DEFAULT '',
+   status TEXT NOT NULL DEFAULT 'OPEN',
+   priority TEXT NOT NULL DEFAULT 'MEDIUM',
+   creator_id INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
+   assignee_id INTEGER REFERENCES user(id) ON DELETE SET NULL,
+   created_ts BIGINT NOT NULL,
+   updated_ts BIGINT NOT NULL,
+   type TEXT NOT NULL DEFAULT 'TASK',
+   tags TEXT NOT NULL DEFAULT '[]',
+   beads_id TEXT UNIQUE,
+   parent_id INTEGER REFERENCES tickets(id) ON DELETE CASCADE,
+   labels TEXT DEFAULT '[]',
+   dependencies TEXT DEFAULT '[]',
+   discovery_context TEXT,
+   closed_reason TEXT,
+   issue_type TEXT
+ );
 
 CREATE INDEX idx_tickets_creator_id ON tickets (creator_id);
 CREATE INDEX idx_tickets_status ON tickets (status);
-CREATE INDEX idx_tickets_beads_id ON tickets(beads_id);
+CREATE INDEX idx_tickets_assignee_id ON tickets (assignee_id);
+CREATE UNIQUE INDEX idx_tickets_beads_id ON tickets(beads_id) WHERE beads_id IS NOT NULL;
 CREATE INDEX idx_tickets_parent_id ON tickets(parent_id);
 CREATE INDEX idx_tickets_issue_type ON tickets(issue_type);
 CREATE UNIQUE INDEX idx_tickets_creator_description_memo ON tickets(creator_id, description) WHERE description LIKE '/m/%';
