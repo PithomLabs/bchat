@@ -158,7 +158,7 @@ Copying fly.local.toml to fly.toml...
 
 OpenRouter API Key is required for LLM and embeddings.
 Get your key at: https://openrouter.ai/keys
-Enter your OPENROUTER_API_KEY (sk-or-v1-...): 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
+Enter your OPENROUTER_API_KEY (sk-or-v1-...): 
 Secrets are staged for the first deployment
 ✓ OPENROUTER_API_KEY set
 
