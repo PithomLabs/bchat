@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -37,7 +38,6 @@ func NewHandler(service *Service, store *store.Store) *Handler {
 func (h *Handler) GetService() *Service {
 	return h.service
 }
-
 
 // ============================================================================
 // CHAT ENDPOINTS
@@ -135,6 +135,9 @@ func (h *Handler) HandleChatExternal(c echo.Context) error {
 	// Process chat
 	response, err := h.service.ChatExternal(ctx, slug, clientIP, userAgent, req)
 	if err != nil {
+		if errors.Is(err, store.ErrInvalidExternalSessionID) {
+			return echo.NewHTTPError(http.StatusBadRequest, "Invalid session_id")
+		}
 		if strings.Contains(err.Error(), "rate limit") {
 			return echo.NewHTTPError(http.StatusTooManyRequests, map[string]interface{}{
 				"error":       "rate_limit_exceeded",

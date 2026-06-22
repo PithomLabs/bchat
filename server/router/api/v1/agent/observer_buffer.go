@@ -15,8 +15,8 @@ import (
 // This reduces latency by buffering observations before the threshold is reached
 type ObserverBuffer struct {
 	mu            sync.RWMutex
-	buffers       map[string]*BufferState // sessionID -> buffer state
-	triggerChan   chan string             // channel for triggering buffer processing
+	buffers       map[memorySessionKey]*BufferState
+	triggerChan   chan memorySessionKey
 	service       *Service
 	config        *OMConfig
 	lastCleanup   time.Time
@@ -40,8 +40,8 @@ type BufferState struct {
 // NewObserverBuffer creates a new ObserverBuffer
 func NewObserverBuffer(service *Service, config *OMConfig) *ObserverBuffer {
 	ob := &ObserverBuffer{
-		buffers:       make(map[string]*BufferState),
-		triggerChan:   make(chan string, 100), // Buffered channel to handle bursts
+		buffers:       make(map[memorySessionKey]*BufferState),
+		triggerChan:   make(chan memorySessionKey, 100), // Buffered channel to handle bursts
 		service:       service,
 		config:        config,
 		lastCleanup:   time.Now(),
@@ -55,10 +55,10 @@ func NewObserverBuffer(service *Service, config *OMConfig) *ObserverBuffer {
 
 // bufferWorker processes buffer triggers in the background
 func (ob *ObserverBuffer) bufferWorker() {
-	for sessionID := range ob.triggerChan {
+	for key := range ob.triggerChan {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		if err := ob.runBufferObservation(ctx, sessionID); err != nil {
-			slog.Error("Buffer observation failed", "session_id", sessionID, "error", err)
+		if err := ob.runBufferObservation(ctx, key.TenantID, key.SessionID); err != nil {
+			slog.Error("Buffer observation failed", "tenant_id", key.TenantID, "session_id", key.SessionID, "error", err)
 		}
 		cancel()
 	}
@@ -99,12 +99,12 @@ func (ob *ObserverBuffer) cleanupWorker() {
 }
 
 // runBufferObservation performs a background observation for buffering
-func (ob *ObserverBuffer) runBufferObservation(ctx context.Context, sessionID string) error {
+func (ob *ObserverBuffer) runBufferObservation(ctx context.Context, tenantID int32, sessionID string) error {
 	// Get the session
-	session := ob.service.memorySessions.Get(sessionID)
+	session := ob.service.memorySessions.Get(tenantID, sessionID)
 	if session == nil {
 		var err error
-		session, err = ob.service.store.GetAgentSession(ctx, &store.FindAgentSession{ID: &sessionID})
+		session, err = ob.service.store.GetAgentSession(ctx, &store.FindAgentSession{ID: &sessionID, TenantID: &tenantID})
 		if err != nil || session == nil {
 			return nil // Session not found, skip
 		}
@@ -138,12 +138,13 @@ func (ob *ObserverBuffer) runBufferObservation(ctx context.Context, sessionID st
 
 	// Get or create buffer state
 	ob.mu.Lock()
-	buffer, exists := ob.buffers[sessionID]
+	key := memorySessionKey{TenantID: tenantID, SessionID: sessionID}
+	buffer, exists := ob.buffers[key]
 	if !exists {
 		buffer = &BufferState{
 			LastBufferedMsgIndex: lastObservedIdx,
 		}
-		ob.buffers[sessionID] = buffer
+		ob.buffers[key] = buffer
 	}
 	ob.mu.Unlock()
 
@@ -232,9 +233,9 @@ func (ob *ObserverBuffer) runBufferObservation(ctx context.Context, sessionID st
 }
 
 // TriggerBuffer schedules a background observation for a session
-func (ob *ObserverBuffer) TriggerBuffer(sessionID string) {
+func (ob *ObserverBuffer) TriggerBuffer(tenantID int32, sessionID string) {
 	select {
-	case ob.triggerChan <- sessionID:
+	case ob.triggerChan <- memorySessionKey{TenantID: tenantID, SessionID: sessionID}:
 		// Trigger sent
 	default:
 		// Channel full, skip this trigger
@@ -243,9 +244,9 @@ func (ob *ObserverBuffer) TriggerBuffer(sessionID string) {
 }
 
 // GetAndActivateBuffer returns the buffered observations and marks them as activated
-func (ob *ObserverBuffer) GetAndActivateBuffer(sessionID string) (observations, currentTask, suggestedResponse string, tokenCount int, lastMsgIndex int, resourceID string, ok bool) {
+func (ob *ObserverBuffer) GetAndActivateBuffer(tenantID int32, sessionID string) (observations, currentTask, suggestedResponse string, tokenCount int, lastMsgIndex int, resourceID string, ok bool) {
 	ob.mu.RLock()
-	buffer, exists := ob.buffers[sessionID]
+	buffer, exists := ob.buffers[memorySessionKey{TenantID: tenantID, SessionID: sessionID}]
 	ob.mu.RUnlock()
 
 	if !exists {
@@ -267,16 +268,16 @@ func (ob *ObserverBuffer) GetAndActivateBuffer(sessionID string) (observations, 
 }
 
 // ClearBuffer removes the buffer for a session (after activation)
-func (ob *ObserverBuffer) ClearBuffer(sessionID string) {
+func (ob *ObserverBuffer) ClearBuffer(tenantID int32, sessionID string) {
 	ob.mu.Lock()
-	delete(ob.buffers, sessionID)
+	delete(ob.buffers, memorySessionKey{TenantID: tenantID, SessionID: sessionID})
 	ob.mu.Unlock()
 }
 
 // HasBuffer checks if a session has a pending buffer
-func (ob *ObserverBuffer) HasBuffer(sessionID string) bool {
+func (ob *ObserverBuffer) HasBuffer(tenantID int32, sessionID string) bool {
 	ob.mu.RLock()
-	buffer, exists := ob.buffers[sessionID]
+	buffer, exists := ob.buffers[memorySessionKey{TenantID: tenantID, SessionID: sessionID}]
 	ob.mu.RUnlock()
 
 	if !exists {

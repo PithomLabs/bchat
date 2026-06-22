@@ -57,7 +57,7 @@ func init() {
 // RunObserver executes the Observational Memory pipeline for a given session.
 // It retrieves recent messages, generates observations using an LLM, and persists them.
 // If observations grow too large, it triggers the Reflector to compress them.
-func (s *Service) RunObserver(ctx context.Context, sessionID string) error {
+func (s *Service) RunObserver(ctx context.Context, tenantID int32, sessionID string) error {
 	// Get configuration
 	config := GetOMConfig().GetConfig()
 
@@ -71,11 +71,11 @@ func (s *Service) RunObserver(ctx context.Context, sessionID string) error {
 
 	// 1. Retrieve Session
 	// We check in-memory cache first
-	session := s.memorySessions.Get(sessionID)
+	session := s.memorySessions.Get(tenantID, sessionID)
 	if session == nil {
 		// Fallback to store if not in memory (common for sessions that have been idle or after a restart)
 		var err error
-		session, err = s.store.GetAgentSession(ctx, &store.FindAgentSession{ID: &sessionID})
+		session, err = s.store.GetAgentSession(ctx, &store.FindAgentSession{ID: &sessionID, TenantID: &tenantID})
 		if err != nil {
 			return fmt.Errorf("failed to retrieve session %s from database: %w", sessionID, err)
 		}
@@ -208,7 +208,7 @@ func (s *Service) RunObserver(ctx context.Context, sessionID string) error {
 		tokenCountBefore := tokenCount
 		var reflectedLog string
 		err = withRetry(ctx, config.RetryAttempts, config.RetryDelayMs, func() error {
-			reflectedLog, err = s.runReflector(ctx, client, model, updatedLog, config)
+			reflectedLog, err = s.runReflector(ctx, client, model, updatedLog, &config)
 			return err
 		})
 		if err == nil {
@@ -383,7 +383,7 @@ func (s *Service) callObserverLLMWithCache(ctx context.Context, client *openrout
 	return resp, nil
 }
 
-func (s *Service) runReflector(ctx context.Context, client *openrouter.Client, model string, observations string, config OMConfig) (string, error) {
+func (s *Service) runReflector(ctx context.Context, client *openrouter.Client, model string, observations string, config *OMConfig) (string, error) {
 	prompt := fmt.Sprintf("%s\n\n## OBSERVATIONS TO REFLECT ON\n\n%s", reflectorSystemPrompt, observations)
 
 	userMsg := openrouter.UserMessage(prompt)
@@ -499,12 +499,12 @@ func isTrivialMessage(content string) bool {
 
 // storeObservationFromBuffer stores a pre-computed observation from the buffer
 // This is used when the buffer is activated at the threshold
-func (s *Service) storeObservationFromBuffer(ctx context.Context, sessionID string, observations string, currentTask string, suggestedResponse string, lastMsgIndex int, resourceID string) error {
+func (s *Service) storeObservationFromBuffer(ctx context.Context, tenantID int32, sessionID string, observations string, currentTask string, suggestedResponse string, lastMsgIndex int, resourceID string) error {
 	// Get the session to retrieve tenant ID
-	session := s.memorySessions.Get(sessionID)
+	session := s.memorySessions.Get(tenantID, sessionID)
 	if session == nil {
 		var err error
-		session, err = s.store.GetAgentSession(ctx, &store.FindAgentSession{ID: &sessionID})
+		session, err = s.store.GetAgentSession(ctx, &store.FindAgentSession{ID: &sessionID, TenantID: &tenantID})
 		if err != nil || session == nil {
 			return fmt.Errorf("session %s not found", sessionID)
 		}
