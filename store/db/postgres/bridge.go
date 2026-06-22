@@ -34,3 +34,11 @@ func (d *DB) UpdateBridgeHandoffRoutingModeCAS(context.Context, int32, string, i
 func (d *DB) GetBridgeHandoff(context.Context, int32, string, string) (*store.BridgeHandoff, error) {
 	return nil, store.ErrBridgeUnsupportedDatabase
 }
+
+func (d *DB) CreateBridgeHandoffReplyIfActive(context.Context, *store.CreateBridgeHandoffReply) (*store.BridgeHandoffReply, error) {
+	return nil, store.ErrBridgeUnsupportedDatabase
+}
+
+func (d *DB) GetBridgeHandoffReplyByClientMessageID(context.Context, int32, string, string, string) (*store.BridgeHandoffReply, error) {
+	return nil, store.ErrBridgeUnsupportedDatabase
+}

@@ -327,3 +327,134 @@ func isSQLiteRetryable(err error) bool {
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "database is locked") || strings.Contains(message, "database is busy")
 }
+
+func (d *DB) CreateBridgeHandoffReplyIfActive(ctx context.Context, create *store.CreateBridgeHandoffReply) (*store.BridgeHandoffReply, error) {
+	conn, err := d.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get connection: %w", err)
+	}
+	defer conn.Close()
+
+	_, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE")
+	if err != nil {
+		return nil, fmt.Errorf("begin immediate transaction: %w", err)
+	}
+
+	rollback := func() {
+		_, _ = conn.ExecContext(ctx, "ROLLBACK")
+	}
+
+	var sessionID string
+	var active int
+	var routingMode string
+	var generation int64
+
+	err = conn.QueryRowContext(ctx, `
+		SELECT session_id, active, routing_mode, generation
+		FROM bridge_handoffs
+		WHERE tenant_id = ? AND handoff_id = ?
+	`, create.TenantID, create.HandoffID).Scan(&sessionID, &active, &routingMode, &generation)
+	if errors.Is(err, sql.ErrNoRows) {
+		rollback()
+		return nil, store.ErrBridgeHandoffNotFound
+	}
+	if err != nil {
+		rollback()
+		return nil, fmt.Errorf("query handoff in transaction: %w", err)
+	}
+
+	if sessionID != create.SessionID {
+		rollback()
+		return nil, store.ErrBridgeHandoffConflict
+	}
+
+	if active != 1 || routingMode != string(store.BridgeRoutingModeHumanActive) {
+		rollback()
+		return nil, store.ErrBridgeHandoffConflict
+	}
+
+	_, err = conn.ExecContext(ctx, `
+		INSERT INTO bridge_handoff_replies (
+			reply_id, tenant_id, session_id, handoff_id, generation,
+			client_message_id, text, delivery_status, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, 'not_delivered', ?)
+	`, create.ReplyID, create.TenantID, create.SessionID, create.HandoffID, generation,
+		create.ClientMessageID, create.Text, create.Now)
+
+	if err != nil {
+		if isSQLiteConstraint(err) {
+			var existingReplyID string
+			var existingText string
+			var existingDeliveryStatus string
+			var existingCreatedAt int64
+			var existingGeneration int64
+
+			errQuery := conn.QueryRowContext(ctx, `
+				SELECT reply_id, text, delivery_status, created_at, generation
+				FROM bridge_handoff_replies
+				WHERE tenant_id = ? AND session_id = ? AND handoff_id = ? AND client_message_id = ?
+			`, create.TenantID, create.SessionID, create.HandoffID, create.ClientMessageID).Scan(
+				&existingReplyID, &existingText, &existingDeliveryStatus, &existingCreatedAt, &existingGeneration,
+			)
+			if errQuery == nil {
+				if existingText == create.Text {
+					rollback()
+					return &store.BridgeHandoffReply{
+						ReplyID:         existingReplyID,
+						TenantID:        create.TenantID,
+						SessionID:       create.SessionID,
+						HandoffID:       create.HandoffID,
+						Generation:      existingGeneration,
+						ClientMessageID: create.ClientMessageID,
+						Text:            existingText,
+						DeliveryStatus:  existingDeliveryStatus,
+						CreatedAt:       existingCreatedAt,
+					}, nil
+				} else {
+					rollback()
+					return nil, store.ErrBridgeHandoffReplyTextMismatch
+				}
+			}
+		}
+		rollback()
+		return nil, fmt.Errorf("insert reply: %w", err)
+	}
+
+	_, err = conn.ExecContext(ctx, "COMMIT")
+	if err != nil {
+		rollback()
+		return nil, fmt.Errorf("commit reply: %w", err)
+	}
+
+	return &store.BridgeHandoffReply{
+		ReplyID:         create.ReplyID,
+		TenantID:        create.TenantID,
+		SessionID:       create.SessionID,
+		HandoffID:       create.HandoffID,
+		Generation:      generation,
+		ClientMessageID: create.ClientMessageID,
+		Text:            create.Text,
+		DeliveryStatus:  "not_delivered",
+		CreatedAt:       create.Now,
+	}, nil
+}
+
+func (d *DB) GetBridgeHandoffReplyByClientMessageID(ctx context.Context, tenantID int32, sessionID string, handoffID string, clientMessageID string) (*store.BridgeHandoffReply, error) {
+	var reply store.BridgeHandoffReply
+	err := d.db.QueryRowContext(ctx, `
+		SELECT id, reply_id, tenant_id, session_id, handoff_id, generation, client_message_id, text, delivery_status, created_at
+		FROM bridge_handoff_replies
+		WHERE tenant_id = ? AND session_id = ? AND handoff_id = ? AND client_message_id = ?
+	`, tenantID, sessionID, handoffID, clientMessageID).Scan(
+		&reply.ID, &reply.ReplyID, &reply.TenantID, &reply.SessionID, &reply.HandoffID,
+		&reply.Generation, &reply.ClientMessageID, &reply.Text, &reply.DeliveryStatus, &reply.CreatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get bridge handoff reply by client message id: %w", err)
+	}
+	return &reply, nil
+}
+

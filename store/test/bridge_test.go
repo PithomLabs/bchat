@@ -297,3 +297,279 @@ func createBridgeHandoffFixture(t *testing.T, slug string) (context.Context, *st
 	require.NoError(t, err)
 	return ctx, ts, tenant, session, handoff
 }
+
+func createHumanActiveHandoffFixture(t *testing.T, slug string) (context.Context, *store.Store, *store.AgentTenant, *store.BridgeExternalSession, *store.BridgeHandoff) {
+	ctx, ts, tenant, session, handoff := createBridgeHandoffFixture(t, slug)
+	updated, err := ts.UpdateBridgeHandoffRoutingModeCAS(ctx, tenant.ID, session.SessionID, handoff.Generation, handoff.HandoffID, handoff.Version, store.BridgeRoutingModeHandoffQueued, store.BridgeRoutingModeHumanActive, "accepted", time.Now())
+	require.NoError(t, err)
+	return ctx, ts, tenant, session, updated
+}
+
+func TestCreateBridgeHandoffReplyIfActivePersists(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "reply-persist")
+	defer ts.Close()
+
+	now := time.Now().Unix()
+	reply, err := ts.CreateBridgeHandoffReplyIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "reply-1",
+		TenantID:        tenant.ID,
+		SessionID:       session.SessionID,
+		HandoffID:       handoff.HandoffID,
+		ClientMessageID: "msg-1",
+		Text:            "Hello world",
+		Now:             now,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, reply)
+	require.Equal(t, "reply-1", reply.ReplyID)
+	require.Equal(t, tenant.ID, reply.TenantID)
+	require.Equal(t, session.SessionID, reply.SessionID)
+	require.Equal(t, handoff.HandoffID, reply.HandoffID)
+	require.Equal(t, int64(handoff.Generation), reply.Generation)
+	require.Equal(t, "msg-1", reply.ClientMessageID)
+	require.Equal(t, "Hello world", reply.Text)
+	require.Equal(t, "not_delivered", reply.DeliveryStatus)
+	require.Equal(t, now, reply.CreatedAt)
+
+	// Retrieve it directly from db to ensure durability
+	var count int
+	err = ts.GetDriver().GetDB().QueryRowContext(ctx, "SELECT COUNT(1) FROM bridge_handoff_replies WHERE reply_id = ?", "reply-1").Scan(&count)
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+}
+
+func TestCreateBridgeHandoffReplyIfActiveRequiresHumanActive(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createBridgeHandoffFixture(t, "reply-queued")
+	defer ts.Close()
+
+	// Currently the handoff is handoff_queued, not human_active
+	_, err := ts.CreateBridgeHandoffReplyIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "reply-1",
+		TenantID:        tenant.ID,
+		SessionID:       session.SessionID,
+		HandoffID:       handoff.HandoffID,
+		ClientMessageID: "msg-1",
+		Text:            "Hello",
+		Now:             time.Now().Unix(),
+	})
+	require.ErrorIs(t, err, store.ErrBridgeHandoffConflict)
+}
+
+func TestCreateBridgeHandoffReplyIfActiveRejectsClosed(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "reply-closed")
+	defer ts.Close()
+
+	// Update CAS to closed
+	_, err := ts.UpdateBridgeHandoffRoutingModeCAS(ctx, tenant.ID, session.SessionID, handoff.Generation, handoff.HandoffID, handoff.Version, store.BridgeRoutingModeHumanActive, store.BridgeRoutingModeClosed, "test-close", time.Now())
+	require.NoError(t, err)
+
+	_, err = ts.CreateBridgeHandoffReplyIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "reply-1",
+		TenantID:        tenant.ID,
+		SessionID:       session.SessionID,
+		HandoffID:       handoff.HandoffID,
+		ClientMessageID: "msg-1",
+		Text:            "Hello",
+		Now:             time.Now().Unix(),
+	})
+	require.ErrorIs(t, err, store.ErrBridgeHandoffConflict)
+}
+
+func TestCreateBridgeHandoffReplyIfActiveIdempotentSameText(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "reply-idem-same")
+	defer ts.Close()
+
+	now := time.Now().Unix()
+	reply1, err := ts.CreateBridgeHandoffReplyIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "reply-1",
+		TenantID:        tenant.ID,
+		SessionID:       session.SessionID,
+		HandoffID:       handoff.HandoffID,
+		ClientMessageID: "msg-1",
+		Text:            "Same Text",
+		Now:             now,
+	})
+	require.NoError(t, err)
+
+	// Call again with same client_message_id and same text, but a different reply_id
+	reply2, err := ts.CreateBridgeHandoffReplyIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "reply-2",
+		TenantID:        tenant.ID,
+		SessionID:       session.SessionID,
+		HandoffID:       handoff.HandoffID,
+		ClientMessageID: "msg-1",
+		Text:            "Same Text",
+		Now:             now + 10,
+	})
+	require.NoError(t, err)
+	require.Equal(t, reply1.ReplyID, reply2.ReplyID) // Must return the original reply_id ("reply-1")
+	require.Equal(t, reply1.Text, reply2.Text)
+	require.Equal(t, reply1.CreatedAt, reply2.CreatedAt) // Original creation time preserved
+}
+
+func TestCreateBridgeHandoffReplyIfActiveRejectsDifferentText(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "reply-idem-diff")
+	defer ts.Close()
+
+	_, err := ts.CreateBridgeHandoffReplyIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "reply-1",
+		TenantID:        tenant.ID,
+		SessionID:       session.SessionID,
+		HandoffID:       handoff.HandoffID,
+		ClientMessageID: "msg-1",
+		Text:            "Original Text",
+		Now:             time.Now().Unix(),
+	})
+	require.NoError(t, err)
+
+	_, err = ts.CreateBridgeHandoffReplyIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "reply-2",
+		TenantID:        tenant.ID,
+		SessionID:       session.SessionID,
+		HandoffID:       handoff.HandoffID,
+		ClientMessageID: "msg-1",
+		Text:            "Different Text",
+		Now:             time.Now().Unix(),
+	})
+	require.ErrorIs(t, err, store.ErrBridgeHandoffReplyTextMismatch)
+}
+
+func TestCreateBridgeHandoffReplyIfActiveTenantIsolation(t *testing.T) {
+	ctx, ts, _, session1, handoff1 := createHumanActiveHandoffFixture(t, "tenant-1")
+	defer ts.Close()
+
+	// Create second tenant
+	tenant2 := createBridgeTenant(t, ctx, ts, "tenant-2")
+	session2, _, err := ts.EnsureBridgeExternalSession(ctx, tenant2.ID, "session", time.Now(), time.Now().Add(time.Minute))
+	require.NoError(t, err)
+	handoff2, err := ts.CreateBridgeHandoff(ctx, tenant2.ID, session2.SessionID, time.Now())
+	require.NoError(t, err)
+	handoff2, err = ts.UpdateBridgeHandoffRoutingModeCAS(ctx, tenant2.ID, session2.SessionID, handoff2.Generation, handoff2.HandoffID, handoff2.Version, store.BridgeRoutingModeHandoffQueued, store.BridgeRoutingModeHumanActive, "accepted", time.Now())
+	require.NoError(t, err)
+
+	// Attempt to create a reply using tenant2's ID but tenant1's handoffID/sessionID
+	_, err = ts.CreateBridgeHandoffReplyIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "reply-1",
+		TenantID:        tenant2.ID,
+		SessionID:       session1.SessionID,
+		HandoffID:       handoff1.HandoffID,
+		ClientMessageID: "msg-1",
+		Text:            "Hello",
+		Now:             time.Now().Unix(),
+	})
+	require.ErrorIs(t, err, store.ErrBridgeHandoffNotFound)
+}
+
+func TestCreateBridgeHandoffReplyIfActiveSessionIsolation(t *testing.T) {
+	ctx, ts, tenant, _, handoff1 := createHumanActiveHandoffFixture(t, "session-1")
+	defer ts.Close()
+
+	// Create another session for the same tenant
+	session2, _, err := ts.EnsureBridgeExternalSession(ctx, tenant.ID, "session-other", time.Now(), time.Now().Add(time.Minute))
+	require.NoError(t, err)
+	handoff2, err := ts.CreateBridgeHandoff(ctx, tenant.ID, session2.SessionID, time.Now())
+	require.NoError(t, err)
+	handoff2, err = ts.UpdateBridgeHandoffRoutingModeCAS(ctx, tenant.ID, session2.SessionID, handoff2.Generation, handoff2.HandoffID, handoff2.Version, store.BridgeRoutingModeHandoffQueued, store.BridgeRoutingModeHumanActive, "accepted", time.Now())
+	require.NoError(t, err)
+
+	// Attempt to write reply for handoff1 but using session2's sessionID
+	_, err = ts.CreateBridgeHandoffReplyIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "reply-1",
+		TenantID:        tenant.ID,
+		SessionID:       session2.SessionID,
+		HandoffID:       handoff1.HandoffID,
+		ClientMessageID: "msg-1",
+		Text:            "Hello",
+		Now:             time.Now().Unix(),
+	})
+	require.ErrorIs(t, err, store.ErrBridgeHandoffConflict)
+}
+
+func TestCreateBridgeHandoffReplyIfActiveRaceWithRelease(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "reply-race-release")
+	defer ts.Close()
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, err := ts.UpdateBridgeHandoffRoutingModeCAS(ctx, tenant.ID, session.SessionID, handoff.Generation, handoff.HandoffID, handoff.Version, store.BridgeRoutingModeHumanActive, store.BridgeRoutingModeClosed, "released", time.Now())
+		errs <- err
+	}()
+	go func() {
+		defer wg.Done()
+		_, err := ts.CreateBridgeHandoffReplyIfActive(ctx, &store.CreateBridgeHandoffReply{
+			ReplyID:         "reply-1",
+			TenantID:        tenant.ID,
+			SessionID:       session.SessionID,
+			HandoffID:       handoff.HandoffID,
+			ClientMessageID: "msg-1",
+			Text:            "Hello world",
+			Now:             time.Now().Unix(),
+		})
+		errs <- err
+	}()
+
+	wg.Wait()
+	close(errs)
+
+	hasNoError := false
+	for err := range errs {
+		if err == nil {
+			hasNoError = true
+		} else {
+			require.ErrorIs(t, err, store.ErrBridgeHandoffConflict)
+		}
+	}
+	require.True(t, hasNoError)
+}
+
+func TestCreateBridgeHandoffReplyIfActiveDuplicateMessageIDRace(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "reply-race-msg")
+	defer ts.Close()
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		go func(id int) {
+			defer wg.Done()
+			_, err := ts.CreateBridgeHandoffReplyIfActive(ctx, &store.CreateBridgeHandoffReply{
+				ReplyID:         "reply-id",
+				TenantID:        tenant.ID,
+				SessionID:       session.SessionID,
+				HandoffID:       handoff.HandoffID,
+				ClientMessageID: "msg-shared",
+				Text:            "Hello world",
+				Now:             time.Now().Unix(),
+			})
+			errs <- err
+		}(i)
+	}
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+}
+
+func TestCreateBridgeHandoffReplyIfActiveDeliveryStatusConstraint(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "reply-delivery-constraint")
+	defer ts.Close()
+
+	_, err := ts.GetDriver().GetDB().ExecContext(ctx, `
+		INSERT INTO bridge_handoff_replies (
+			reply_id, tenant_id, session_id, handoff_id, generation,
+			client_message_id, text, delivery_status, created_at
+		) VALUES ('reply-fail', ?, ?, ?, ?, 'msg-fail', 'some text', 'delivered', ?)
+	`, tenant.ID, session.SessionID, handoff.HandoffID, handoff.Generation, time.Now().Unix())
+	
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "constraint failed")
+}
+

@@ -41,6 +41,7 @@ var (
 	ErrBridgeHandoffNotFound         = errors.New("bridge handoff not found")
 	ErrBridgeHandoffConflict         = errors.New("bridge handoff conflict")
 	ErrBridgeUnsupportedDatabase     = errors.New("bridge runtime unsupported for database")
+	ErrBridgeHandoffReplyTextMismatch = errors.New("bridge handoff reply text mismatch")
 
 	externalSessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 )
@@ -75,6 +76,29 @@ type BridgeHandoff struct {
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 	ClosedAt          *time.Time
+}
+
+type BridgeHandoffReply struct {
+	ID              int64
+	ReplyID         string
+	TenantID        int32
+	SessionID       string
+	HandoffID       string
+	Generation      int64
+	ClientMessageID string
+	Text            string
+	DeliveryStatus  string
+	CreatedAt       int64
+}
+
+type CreateBridgeHandoffReply struct {
+	ReplyID         string
+	TenantID        int32
+	SessionID       string
+	HandoffID       string
+	ClientMessageID string
+	Text            string
+	Now             int64
 }
 
 func ValidateExternalSessionID(sessionID string) error {
@@ -129,6 +153,14 @@ func (s *Store) UpdateBridgeHandoffRoutingModeCAS(ctx context.Context, tenantID 
 
 func (s *Store) GetBridgeHandoff(ctx context.Context, tenantID int32, sessionID string, handoffID string) (*BridgeHandoff, error) {
 	return s.driver.GetBridgeHandoff(ctx, tenantID, sessionID, handoffID)
+}
+
+func (s *Store) CreateBridgeHandoffReplyIfActive(ctx context.Context, create *CreateBridgeHandoffReply) (*BridgeHandoffReply, error) {
+	return s.driver.CreateBridgeHandoffReplyIfActive(ctx, create)
+}
+
+func (s *Store) GetBridgeHandoffReplyByClientMessageID(ctx context.Context, tenantID int32, sessionID string, handoffID string, clientMessageID string) (*BridgeHandoffReply, error) {
+	return s.driver.GetBridgeHandoffReplyByClientMessageID(ctx, tenantID, sessionID, handoffID, clientMessageID)
 }
 
 var (
