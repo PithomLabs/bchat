@@ -114,7 +114,7 @@ func TestChatExternalMaterializesDurableExternalSession(t *testing.T) {
 func TestFailOpenMaterializationAllowsAIChat(t *testing.T) {
 	ctx, ts, service, tenant := newBridgeChatTestService(t, "chat-fail-open")
 	defer ts.Close()
-	_, err := ts.GetDriver().GetDB().ExecContext(ctx, "DROP TABLE bridge_handoffs; DROP TABLE bridge_external_sessions;")
+	_, err := ts.GetDriver().GetDB().ExecContext(ctx, "DROP TABLE bridge_external_sessions;")
 	require.NoError(t, err)
 	_, _ = service.ChatExternal(ctx, tenant.Slug, "127.0.0.1", "test", ChatRequest{SessionID: "widget-session", Message: "hello"})
 	session := service.memorySessions.Get(tenant.ID, "widget-session")
@@ -133,10 +133,11 @@ func TestNoHandoffRowCreatedByChatExternal(t *testing.T) {
 
 func TestChatExternalNormalAIBehaviorUnchanged(t *testing.T) {
 	responseType := reflect.TypeOf(ChatResponse{})
-	require.Equal(t, 4, responseType.NumField())
+	require.Equal(t, 5, responseType.NumField())
 	require.Equal(t, "session_id", responseType.Field(0).Tag.Get("json"))
 	require.Equal(t, "message", responseType.Field(1).Tag.Get("json"))
 	require.Equal(t, "metadata", responseType.Field(2).Tag.Get("json"))
+	require.Equal(t, "bridge,omitempty", responseType.Field(4).Tag.Get("json"))
 }
 
 func newBridgeChatTestService(t *testing.T, slug string) (context.Context, *store.Store, *Service, *store.AgentTenant) {
@@ -185,7 +186,7 @@ func TestMaterializationFailureLogsSanitizedWarningOnce(t *testing.T) {
 	defer ts.Close()
 
 	// Drop tables to cause a real non-unsupported database materialization error
-	_, err := ts.GetDriver().GetDB().ExecContext(ctx, "DROP TABLE bridge_handoffs; DROP TABLE bridge_external_sessions;")
+	_, err := ts.GetDriver().GetDB().ExecContext(ctx, "DROP TABLE bridge_external_sessions;")
 	require.NoError(t, err)
 
 	// Set up log capturing

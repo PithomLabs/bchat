@@ -1376,12 +1376,20 @@ type ChatRequest struct {
 	Message   string `json:"message"`
 }
 
+// BridgeRuntimeState represents the state of an active human handoff.
+type BridgeRuntimeState struct {
+	Status      string `json:"status"`
+	HandoffID   string `json:"handoff_id"`
+	RoutingMode string `json:"routing_mode"`
+}
+
 // ChatResponse represents a chat response.
 type ChatResponse struct {
-	SessionID        string          `json:"session_id"`
-	Message          ResponseMessage `json:"message"`
-	Metadata         ChatMetadata    `json:"metadata"`
-	SessionPersisted bool            `json:"session_persisted,omitempty"`
+	SessionID        string              `json:"session_id"`
+	Message          ResponseMessage     `json:"message"`
+	Metadata         ChatMetadata        `json:"metadata"`
+	SessionPersisted bool                `json:"session_persisted,omitempty"`
+	Bridge           *BridgeRuntimeState `json:"bridge,omitempty"`
 }
 
 // ResponseMessage represents the assistant's response.
@@ -1431,6 +1439,38 @@ func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAg
 	now := time.Now()
 	if _, _, materializeErr := s.store.EnsureBridgeExternalSession(ctx, config.TenantID, session.ID, now, now.Add(30*time.Minute)); shouldLogBridgeMaterializationError(materializeErr) {
 		slog.Warn("bridge external session materialization failed", "tenant_id", config.TenantID, "error", materializeErr)
+	}
+
+	// Check for active human handoff before processing AI chat
+	activeHandoff, err := s.store.FindActiveBridgeHandoff(ctx, config.TenantID, session.ID)
+	if err != nil && !errors.Is(err, store.ErrBridgeUnsupportedDatabase) {
+		slog.Error("bridge handoff check failed", "tenant_id", config.TenantID, "session_id", session.ID, "error", err)
+		return nil, fmt.Errorf("bridge handoff check failed")
+	}
+
+	if activeHandoff != nil {
+		status := "human_handoff_active"
+		if activeHandoff.RoutingMode == store.BridgeRoutingModeHandoffQueued {
+			status = "human_handoff_queued"
+		}
+
+		return &ChatResponse{
+			SessionID: session.ID,
+			Message: ResponseMessage{
+				Role:      "system",
+				Content:   "A human operator is handling this conversation.",
+				Timestamp: now,
+			},
+			Metadata: ChatMetadata{
+				Intent: "handoff_active",
+				Phase:  "handoff",
+			},
+			Bridge: &BridgeRuntimeState{
+				Status:      status,
+				HandoffID:   activeHandoff.HandoffID,
+				RoutingMode: string(activeHandoff.RoutingMode),
+			},
+		}, nil
 	}
 
 	// Process chat
