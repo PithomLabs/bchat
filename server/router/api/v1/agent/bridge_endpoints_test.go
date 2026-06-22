@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
@@ -691,6 +692,9 @@ func TestBridgeReplySuccessPersisted(t *testing.T) {
 	require.Equal(t, handoffID, respReply.HandoffID)
 	require.Equal(t, "msg_reply_success", respReply.MessageID)
 	require.Equal(t, "not_delivered", respReply.DeliveryStatus)
+	require.NotNil(t, respReply.Outbox)
+	require.Equal(t, "pending", respReply.Outbox.Status)
+	require.NotEmpty(t, respReply.Outbox.OutboxID)
 
 	// Verify reply row in the database
 	var dbReplyText string
@@ -699,6 +703,14 @@ func TestBridgeReplySuccessPersisted(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "persisted text", dbReplyText)
 	require.Equal(t, "not_delivered", dbReplyStatus)
+
+	// Verify outbox row in the database
+	var dbOutboxStatus string
+	var dbOutboxID string
+	err = dbConn.QueryRowContext(ctx, "SELECT status, outbox_id FROM bridge_reply_outbox WHERE reply_id = ?", respReply.ReplyID).Scan(&dbOutboxStatus, &dbOutboxID)
+	require.NoError(t, err)
+	require.Equal(t, "pending", dbOutboxStatus)
+	require.Equal(t, respReply.Outbox.OutboxID, dbOutboxID)
 
 	// Assert no database state side effects for unrelated tables
 	sessionAfter, err := ts.FindBridgeExternalSession(ctx, tenant.ID, "session_reply_success")
@@ -718,8 +730,8 @@ func TestBridgeReplySuccessPersisted(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, memoCountBefore, memoCountAfter, "Expected no new memos/chat messages to be appended to the DB")
 
-	// Verify no delivery/outbox/message tables exist in SQLite schema
-	rows, err := dbConn.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE '%bridge_outbox%' OR name LIKE '%bridge_message%' OR name LIKE '%delivery%')")
+	// Verify no other delivery/outbox/message tables exist in SQLite schema
+	rows, err := dbConn.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE '%bridge_outbox%' OR name LIKE '%bridge_message%' OR name LIKE '%delivery%') AND name != 'bridge_reply_outbox'")
 	require.NoError(t, err)
 	defer rows.Close()
 	var tableNames []string
@@ -729,7 +741,7 @@ func TestBridgeReplySuccessPersisted(t *testing.T) {
 		require.NoError(t, err)
 		tableNames = append(tableNames, name)
 	}
-	require.Empty(t, tableNames, "Expected no delivery/outbox/message tables to exist in SQLite schema, but found: %v", tableNames)
+	require.Empty(t, tableNames, "Expected no other delivery/outbox/message tables to exist in SQLite schema, but found: %v", tableNames)
 }
 
 func TestBridgeReplyDuplicateMessageIDSameTextIdempotent(t *testing.T) {
@@ -785,6 +797,9 @@ func TestBridgeReplyDuplicateMessageIDSameTextIdempotent(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec2.Body.Bytes(), &respReply1))
 	require.Equal(t, "reply_persisted_not_delivered", respReply1.Status)
 	require.NotEmpty(t, respReply1.ReplyID)
+	require.NotNil(t, respReply1.Outbox)
+	require.NotEmpty(t, respReply1.Outbox.OutboxID)
+	require.Equal(t, "pending", respReply1.Outbox.Status)
 
 	// Second reply request with same message_id and same text
 	nonce3 := "reply_nonce_12345_2"
@@ -803,6 +818,8 @@ func TestBridgeReplyDuplicateMessageIDSameTextIdempotent(t *testing.T) {
 	var respReply2 BridgeReplyResponse
 	require.NoError(t, json.Unmarshal(rec3.Body.Bytes(), &respReply2))
 	require.Equal(t, respReply1.ReplyID, respReply2.ReplyID) // Must return same reply_id
+	require.NotNil(t, respReply2.Outbox)
+	require.Equal(t, respReply1.Outbox.OutboxID, respReply2.Outbox.OutboxID) // Must return same outbox_id
 }
 
 func TestBridgeReplyDuplicateMessageIDDifferentTextConflict(t *testing.T) {
@@ -1111,11 +1128,11 @@ func TestBridgeEndpointsDoNotRegisterSSE(t *testing.T) {
 	require.NotContains(t, contentStr, "bridge/sse")
 }
 
-func TestBridgeEndpointsDoNotAddOutbox(t *testing.T) {
+func TestBridgeEndpointsDoNotAddOtherOutboxes(t *testing.T) {
 	content, err := os.ReadFile("../../../../../store/migration/sqlite/LATEST.sql")
 	require.NoError(t, err)
 	contentStr := strings.ToLower(string(content))
-	require.NotContains(t, contentStr, "bridge_outbox")
+	// We allow bridge_reply_outbox, but not others:
 	require.NotContains(t, contentStr, "bridge_messages")
 	require.NotContains(t, contentStr, "bridge_message")
 }
@@ -1167,3 +1184,20 @@ func TestBridgeEndpointsDoNotAddHermesTelegramTicketMutation(t *testing.T) {
 		require.NotContains(t, handlerBody, "CreateTicket")
 	}
 }
+
+func TestBridgeOutboxDoesNotAddDeliveryWorker(t *testing.T) {
+	// Search codebase to confirm no worker reads bridge_reply_outbox
+	// By scanning backend directory for "bridge_reply_outbox" and ensuring it only appears in expected files
+	files, err := filepath.Glob("../../../../../server/router/api/v1/agent/*.go")
+	require.NoError(t, err)
+	for _, f := range files {
+		base := filepath.Base(f)
+		if base == "handlers.go" || base == "bridge_endpoints_test.go" || base == "service.go" {
+			continue
+		}
+		content, err := os.ReadFile(f)
+		require.NoError(t, err)
+		require.NotContains(t, string(content), "bridge_reply_outbox")
+	}
+}
+
