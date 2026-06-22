@@ -127,6 +127,10 @@ func (s *Store) UpdateBridgeHandoffRoutingModeCAS(ctx context.Context, tenantID 
 	return s.driver.UpdateBridgeHandoffRoutingModeCAS(ctx, tenantID, sessionID, generation, handoffID, fromVersion, fromMode, toMode, reason, now)
 }
 
+func (s *Store) GetBridgeHandoff(ctx context.Context, tenantID int32, sessionID string, handoffID string) (*BridgeHandoff, error) {
+	return s.driver.GetBridgeHandoff(ctx, tenantID, sessionID, handoffID)
+}
+
 var (
 	ErrBridgeAuthReplay           = errors.New("bridge auth replay detected")
 	ErrBridgeAuthKeyNotFound       = errors.New("bridge auth key not found")

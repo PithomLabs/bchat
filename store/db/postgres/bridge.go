@@ -30,3 +30,7 @@ func (d *DB) FindActiveBridgeHandoff(context.Context, int32, string) (*store.Bri
 func (d *DB) UpdateBridgeHandoffRoutingModeCAS(context.Context, int32, string, int, string, int, store.BridgeRoutingMode, store.BridgeRoutingMode, string, time.Time) (*store.BridgeHandoff, error) {
 	return nil, store.ErrBridgeUnsupportedDatabase
 }
+
+func (d *DB) GetBridgeHandoff(context.Context, int32, string, string) (*store.BridgeHandoff, error) {
+	return nil, store.ErrBridgeUnsupportedDatabase
+}

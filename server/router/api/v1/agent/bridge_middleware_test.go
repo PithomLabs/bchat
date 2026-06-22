@@ -404,15 +404,15 @@ func TestBridgeAuthMiddlewareMaxBodySizeLimit(t *testing.T) {
 	require.Equal(t, http.StatusRequestEntityTooLarge, echoErr.Code)
 }
 
-func TestBridgeAuthDoesNotRegisterBridgeEndpoints(t *testing.T) {
+func TestBridgeAuthRegistersBridgeEndpoints(t *testing.T) {
 	content, err := os.ReadFile("../v1.go")
 	require.NoError(t, err)
 	s := string(content)
 
-	require.NotContains(t, s, "RequireBridgeHMAC")
-	require.NotContains(t, s, "takeover")
-	require.NotContains(t, s, "reply")
-	require.NotContains(t, s, "release")
+	require.Contains(t, s, "RequireBridgeHMAC")
+	require.Contains(t, s, "takeover")
+	require.Contains(t, s, "reply")
+	require.Contains(t, s, "release")
 }
 
 func TestBridgeAuthDoesNotChangeChatExternal(t *testing.T) {

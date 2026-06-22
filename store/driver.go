@@ -151,6 +151,7 @@ type Driver interface {
 	CreateBridgeHandoff(ctx context.Context, tenantID int32, sessionID string, now time.Time) (*BridgeHandoff, error)
 	FindActiveBridgeHandoff(ctx context.Context, tenantID int32, sessionID string) (*BridgeHandoff, error)
 	UpdateBridgeHandoffRoutingModeCAS(ctx context.Context, tenantID int32, sessionID string, generation int, handoffID string, fromVersion int, fromMode, toMode BridgeRoutingMode, reason string, now time.Time) (*BridgeHandoff, error)
+	GetBridgeHandoff(ctx context.Context, tenantID int32, sessionID string, handoffID string) (*BridgeHandoff, error)
 
 	UpsertAgentSourceFile(ctx context.Context, file *AgentSourceFile) (*AgentSourceFile, error)
 	GetAgentSourceFile(ctx context.Context, find *FindAgentSourceFile) (*AgentSourceFile, error)

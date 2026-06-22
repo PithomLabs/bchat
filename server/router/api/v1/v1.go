@@ -188,6 +188,13 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	publicGroup.POST("/:slug/chat/ext", s.agentHandler.HandleChatExternal)
 	publicGroup.GET("/:slug/widget.js", s.agentHandler.HandleWidget) // Legacy - inline JS
 
+	// Bridge routes (HMAC authenticated)
+	bridgeGroup := echoServer.Group("/api/v1/agent/:slug/bridge")
+	bridgeGroup.Use(agent.RequireBridgeHMAC(s.Store, s.agentHandler.GetService().EncryptionService()))
+	bridgeGroup.POST("/takeover", s.agentHandler.HandleBridgeTakeover)
+	bridgeGroup.POST("/reply", s.agentHandler.HandleBridgeReply)
+	bridgeGroup.POST("/release", s.agentHandler.HandleBridgeRelease)
+
 	// Widget routes (public, no auth) - CORS handled globally
 	widgetGroup := echoServer.Group("/widget")
 	widgetGroup.GET("/:slug/embed.js", s.agentHandler.HandleWidgetEmbed) // Built bundle

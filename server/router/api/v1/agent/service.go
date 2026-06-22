@@ -161,6 +161,13 @@ func (s *Service) GetVectorDB() VectorDB {
 	return s.vectorDB
 }
 
+// EncryptionService returns the encryption service.
+// NOTE: This accessor is strictly for wiring the RequireBridgeHMAC middleware.
+// It MUST NOT be used casually within request handlers.
+func (s *Service) EncryptionService() *crypto.EncryptionService {
+	return s.encryptionService
+}
+
 // IsRAGEnabled returns true if RAG pipeline is enabled (not using NoOpVectorDB).
 func (s *Service) IsRAGEnabled() bool {
 	s.vectorDBMu.RLock()
@@ -3404,4 +3411,35 @@ func (s *Service) ProcessTicketChat(ctx context.Context, tenantSlug string, hist
 	}
 
 	return response.Message.Content, nil
+}
+
+type BridgeTakeoverRequest struct {
+	SessionID string `json:"session_id"`
+}
+
+type BridgeTakeoverResponse struct {
+	Status    string               `json:"status"`
+	HandoffID string               `json:"handoff_id,omitempty"`
+	Handoff   *store.BridgeHandoff `json:"handoff,omitempty"`
+}
+
+type BridgeReplyRequest struct {
+	SessionID string `json:"session_id"`
+	HandoffID string `json:"handoff_id"`
+	MessageID string `json:"message_id"`
+	Text      string `json:"text"`
+}
+
+type BridgeReplyResponse struct {
+	Status string `json:"status"`
+}
+
+type BridgeReleaseRequest struct {
+	SessionID string  `json:"session_id"`
+	HandoffID string  `json:"handoff_id"`
+	Reason    *string `json:"reason,omitempty"`
+}
+
+type BridgeReleaseResponse struct {
+	Status string `json:"status"`
 }
