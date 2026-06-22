@@ -895,15 +895,21 @@ func NewMemorySessionStore(ttl time.Duration) *MemorySessionStore {
 // GetOrCreate retrieves or creates a new session.
 func (s *MemorySessionStore) GetOrCreate(tenantID int32, sessionID string) *store.AgentSession {
 	if sessionID == "" {
-		sessionID = uuid.NewString()
+		return nil
 	}
 	key := memorySessionKey{TenantID: tenantID, SessionID: sessionID}
-	s.mu.RLock()
-	if session, ok := s.sessions[key]; ok && session.TenantID == tenantID {
-		s.mu.RUnlock()
-		return session
+	now := time.Now()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if session, ok := s.sessions[key]; ok {
+		if session.TenantID == tenantID && session.ID == sessionID {
+			session.UpdatedAt = now
+			return session
+		}
+		delete(s.sessions, key)
 	}
-	s.mu.RUnlock()
 
 	// Create new session
 	session := &store.AgentSession{
@@ -915,14 +921,11 @@ func (s *MemorySessionStore) GetOrCreate(tenantID int32, sessionID string) *stor
 		CoverageStatus: "unknown",
 		MessageCount:   0,
 		Messages:       []store.AgentMessage{},
-		CreatedAt:      time.Now(),
-		UpdatedAt:      time.Now(),
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 
-	s.mu.Lock()
 	s.sessions[key] = session
-	s.mu.Unlock()
-
 	return session
 }
 

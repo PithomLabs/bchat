@@ -312,3 +312,122 @@ func TestUnsupportedDBPathCreatesNoWarnings(t *testing.T) {
 	}
 	require.Empty(t, warningOrErrorRecords, "Should produce no warning/error log spam")
 }
+
+func TestMemorySessionStoreConcurrentGetOrCreateSameKeyReturnsSamePointer(t *testing.T) {
+	memory := NewMemorySessionStore(time.Minute)
+	const numGoroutines = 100
+	var wg sync.WaitGroup
+	results := make([]*store.AgentSession, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			results[idx] = memory.GetOrCreate(1, "concurrent-session")
+		}(i)
+	}
+	wg.Wait()
+
+	first := results[0]
+	require.NotNil(t, first)
+	for i := 1; i < numGoroutines; i++ {
+		require.Same(t, first, results[i])
+	}
+}
+
+func TestMemorySessionStoreConcurrentGetOrCreateSameSessionDifferentTenantsReturnsDifferentPointers(t *testing.T) {
+	memory := NewMemorySessionStore(time.Minute)
+	const numGoroutines = 100
+	var wg sync.WaitGroup
+	results := make([]*store.AgentSession, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			// Use idx as tenantID to simulate different tenants
+			results[idx] = memory.GetOrCreate(int32(idx+1), "shared-session")
+		}(i)
+	}
+	wg.Wait()
+
+	seen := make(map[*store.AgentSession]bool)
+	for i := 0; i < numGoroutines; i++ {
+		require.NotNil(t, results[i])
+		require.False(t, seen[results[i]])
+		seen[results[i]] = true
+		require.Equal(t, int32(i+1), results[i].TenantID)
+	}
+}
+
+func TestMemorySessionStoreGetOrCreateDoesNotLeakDuplicateTransientSessions(t *testing.T) {
+	memory := NewMemorySessionStore(time.Minute)
+	const numGoroutines = 500
+	var wg sync.WaitGroup
+
+	// start them all at once
+	start := make(chan struct{})
+	results := make([]*store.AgentSession, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			<-start
+			results[idx] = memory.GetOrCreate(1, "leak-test-session")
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	first := results[0]
+	require.NotNil(t, first)
+	for i := 1; i < numGoroutines; i++ {
+		require.Same(t, first, results[i])
+	}
+}
+
+func TestMemorySessionStoreUpdateRejectsWrongTenantSession(t *testing.T) {
+	memory := NewMemorySessionStore(time.Minute)
+	session := memory.GetOrCreate(1, "update-session")
+	require.NotNil(t, session)
+
+	// Attempt to update with wrong tenant
+	session.TenantID = 2
+	err := memory.Update(session)
+	require.ErrorContains(t, err, "memory session tenant or id mutation rejected")
+}
+
+func TestMemorySessionStoreCleanupConcurrentWithGetOrCreate(t *testing.T) {
+	memory := NewMemorySessionStore(time.Millisecond)
+	const numGoroutines = 50
+	var wg sync.WaitGroup
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				memory.GetOrCreate(1, "cleanup-session")
+				time.Sleep(time.Microsecond)
+			}
+		}(i)
+	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for j := 0; j < 50; j++ {
+			memory.cleanup()
+			time.Sleep(time.Microsecond)
+		}
+	}()
+
+	wg.Wait()
+}
+
+func TestMemorySessionStoreGetOrCreateRejectsEmptySessionID(t *testing.T) {
+	memory := NewMemorySessionStore(time.Minute)
+	session := memory.GetOrCreate(1, "")
+	require.Nil(t, session)
+}
