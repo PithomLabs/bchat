@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -132,7 +133,7 @@ func NewService(s *store.Store, p *profile.Profile) *Service {
 			if svc.IsRAGEnabled() {
 				stats, err := svc.GetVectorDB().Stats(ctx)
 				if err == nil && stats.TotalChunks == 0 {
-					// Audit note (tenant scoping): Calling ListAgentSourceFiles with LatestOnly: true 
+					// Audit note (tenant scoping): Calling ListAgentSourceFiles with LatestOnly: true
 					// and TenantID == nil searches globally across ALL active tenants.
 					files, err := s.ListAgentSourceFiles(ctx, &store.FindAgentSourceFile{LatestOnly: true})
 					if err == nil && len(files) > 0 {
@@ -540,7 +541,7 @@ func (s *Service) GetReindexStatus(ctx context.Context, tenantID int32, audience
 	if len(checkpoints) == 1 {
 		cp := checkpoints[0]
 		status, canResume := resolveState(cp)
-		
+
 		res := &ReindexStatus{
 			Status:          status,
 			CurrentBatch:    int(cp.CurrentBatch),
@@ -871,15 +872,20 @@ func extractBatchFromError(err error) *int32 {
 
 // MemorySessionStore manages in-memory sessions for external users.
 type MemorySessionStore struct {
-	sessions map[string]*store.AgentSession
+	sessions map[memorySessionKey]*store.AgentSession
 	mu       sync.RWMutex
 	ttl      time.Duration
+}
+
+type memorySessionKey struct {
+	TenantID  int32
+	SessionID string
 }
 
 // NewMemorySessionStore creates a new memory session store.
 func NewMemorySessionStore(ttl time.Duration) *MemorySessionStore {
 	store := &MemorySessionStore{
-		sessions: make(map[string]*store.AgentSession),
+		sessions: make(map[memorySessionKey]*store.AgentSession),
 		ttl:      ttl,
 	}
 	go store.cleanupLoop()
@@ -887,19 +893,21 @@ func NewMemorySessionStore(ttl time.Duration) *MemorySessionStore {
 }
 
 // GetOrCreate retrieves or creates a new session.
-func (s *MemorySessionStore) GetOrCreate(sessionID string, tenantID int32) *store.AgentSession {
-	if sessionID != "" {
-		s.mu.RLock()
-		if session, ok := s.sessions[sessionID]; ok {
-			s.mu.RUnlock()
-			return session
-		}
-		s.mu.RUnlock()
+func (s *MemorySessionStore) GetOrCreate(tenantID int32, sessionID string) *store.AgentSession {
+	if sessionID == "" {
+		sessionID = uuid.NewString()
 	}
+	key := memorySessionKey{TenantID: tenantID, SessionID: sessionID}
+	s.mu.RLock()
+	if session, ok := s.sessions[key]; ok && session.TenantID == tenantID {
+		s.mu.RUnlock()
+		return session
+	}
+	s.mu.RUnlock()
 
 	// Create new session
 	session := &store.AgentSession{
-		ID:             uuid.New().String(),
+		ID:             sessionID,
 		TenantID:       tenantID,
 		AudienceType:   "external",
 		Phase:          "triage",
@@ -912,25 +920,42 @@ func (s *MemorySessionStore) GetOrCreate(sessionID string, tenantID int32) *stor
 	}
 
 	s.mu.Lock()
-	s.sessions[session.ID] = session
+	s.sessions[key] = session
 	s.mu.Unlock()
 
 	return session
 }
 
 // Get retrieves a session by ID.
-func (s *MemorySessionStore) Get(sessionID string) *store.AgentSession {
+func (s *MemorySessionStore) Get(tenantID int32, sessionID string) *store.AgentSession {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.sessions[sessionID]
+	session := s.sessions[memorySessionKey{TenantID: tenantID, SessionID: sessionID}]
+	if session == nil || session.TenantID != tenantID {
+		return nil
+	}
+	return session
 }
 
 // Update updates a session in the store.
-func (s *MemorySessionStore) Update(session *store.AgentSession) {
+func (s *MemorySessionStore) Update(session *store.AgentSession) error {
+	if session == nil || session.TenantID <= 0 {
+		return fmt.Errorf("invalid memory session tenant")
+	}
+	if err := store.ValidateExternalSessionID(session.ID); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	key := memorySessionKey{TenantID: session.TenantID, SessionID: session.ID}
+	for existingKey, existing := range s.sessions {
+		if existing == session && existingKey != key {
+			return fmt.Errorf("memory session tenant or id mutation rejected")
+		}
+	}
 	session.UpdatedAt = time.Now()
-	s.sessions[session.ID] = session
+	s.sessions[key] = session
+	return nil
 }
 
 func (s *MemorySessionStore) cleanupLoop() {
@@ -945,11 +970,23 @@ func (s *MemorySessionStore) cleanup() {
 	defer s.mu.Unlock()
 
 	cutoff := time.Now().Add(-s.ttl)
-	for id, session := range s.sessions {
+	for key, session := range s.sessions {
 		if session.UpdatedAt.Before(cutoff) {
-			delete(s.sessions, id)
+			delete(s.sessions, key)
 		}
 	}
+}
+
+// NormalizeExternalSessionID validates caller-provided external session IDs.
+// Missing IDs receive a server-generated UUID; malformed non-empty IDs are rejected.
+func NormalizeExternalSessionID(input string) (string, bool, error) {
+	if input == "" {
+		return uuid.NewString(), true, nil
+	}
+	if err := store.ValidateExternalSessionID(input); err != nil {
+		return "", false, err
+	}
+	return input, false, nil
 }
 
 // ============================================================================
@@ -1360,6 +1397,13 @@ func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAg
 		return nil, err
 	}
 
+	// Validate before any per-session memory or durable lookup. Missing IDs are
+	// generated; malformed caller-provided IDs are rejected rather than replaced.
+	sessionID, _, err := NormalizeExternalSessionID(req.SessionID)
+	if err != nil {
+		return nil, err
+	}
+
 	// Check rate limit (still track as "external" for rate limiting purposes)
 	allowed, err := s.CheckRateLimit(ctx, config.TenantID, "external", clientIP, config.Audience.RateLimitRPM)
 	if err != nil {
@@ -1369,8 +1413,15 @@ func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAg
 		return nil, fmt.Errorf("rate limit exceeded")
 	}
 
-	// Get or create session
-	session := s.memorySessions.GetOrCreate(req.SessionID, config.TenantID)
+	// Get or create a tenant-scoped in-memory session.
+	session := s.memorySessions.GetOrCreate(config.TenantID, sessionID)
+
+	// Materialization is best-effort until bridge routing is enabled. Unsupported
+	// database drivers are expected and intentionally do not produce per-request logs.
+	now := time.Now()
+	if _, _, materializeErr := s.store.EnsureBridgeExternalSession(ctx, config.TenantID, session.ID, now, now.Add(30*time.Minute)); shouldLogBridgeMaterializationError(materializeErr) {
+		slog.Warn("bridge external session materialization failed", "tenant_id", config.TenantID, "error", materializeErr)
+	}
 
 	// Process chat
 	response, err := s.processChat(ctx, config, session, req.Message)
@@ -1379,7 +1430,9 @@ func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAg
 	}
 
 	// Update memory session
-	s.memorySessions.Update(session)
+	if err := s.memorySessions.Update(session); err != nil {
+		return nil, fmt.Errorf("failed to update external session: %w", err)
+	}
 
 	// Save transcript if recording is enabled
 	if s.shouldRecordTranscript(ctx, config.TenantID) {
@@ -1390,6 +1443,10 @@ func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAg
 	}
 
 	return response, nil
+}
+
+func shouldLogBridgeMaterializationError(err error) bool {
+	return err != nil && !errors.Is(err, store.ErrBridgeUnsupportedDatabase)
 }
 
 // ChatInternal handles chat for internal (authenticated) users.
@@ -1922,23 +1979,23 @@ func (s *Service) generateResponse(ctx context.Context, config *AudienceConfig, 
 		// Check if we should trigger buffer pre-computation
 		if s.observerBuffer != nil && s.observerBuffer.ShouldTriggerBuffer(unobservedTokens, threshold) {
 			// Check if we already have a buffer for this session
-			if !s.observerBuffer.HasBuffer(session.ID) {
+			if !s.observerBuffer.HasBuffer(session.TenantID, session.ID) {
 				slog.Debug("Triggering buffer observation", "session_id", session.ID, "unobserved_tokens", unobservedTokens)
-				s.observerBuffer.TriggerBuffer(session.ID)
+				s.observerBuffer.TriggerBuffer(session.TenantID, session.ID)
 			}
 		}
 
 		// Check if we should activate the buffer (threshold reached)
 		if s.observerBuffer != nil && s.observerBuffer.ShouldActivateBuffer(unobservedTokens, threshold) {
 			// Try to get buffered observations
-			observations, currentTask, suggestedResp, tokenCount, lastMsgIdx, resourceID, ok := s.observerBuffer.GetAndActivateBuffer(session.ID)
+			observations, currentTask, suggestedResp, tokenCount, lastMsgIdx, resourceID, ok := s.observerBuffer.GetAndActivateBuffer(session.TenantID, session.ID)
 			if ok {
 				slog.Debug("Activating buffered observation", "session_id", session.ID, "tokens", tokenCount)
 				// Store the buffered observation
-				if err := s.storeObservationFromBuffer(context.Background(), session.ID, observations, currentTask, suggestedResp, lastMsgIdx, resourceID); err != nil {
+				if err := s.storeObservationFromBuffer(context.Background(), session.TenantID, session.ID, observations, currentTask, suggestedResp, lastMsgIdx, resourceID); err != nil {
 					slog.Error("Failed to store buffered observation", "session_id", session.ID, "error", err)
 				}
-				s.observerBuffer.ClearBuffer(session.ID)
+				s.observerBuffer.ClearBuffer(session.TenantID, session.ID)
 				return
 			}
 		}
@@ -1966,7 +2023,7 @@ func (s *Service) generateResponse(ctx context.Context, config *AudienceConfig, 
 		}
 		defer GetObserverMutex().Unlock(session.ID)
 
-		if err := s.RunObserver(context.Background(), session.ID); err != nil {
+		if err := s.RunObserver(context.Background(), session.TenantID, session.ID); err != nil {
 			slog.Error("Failed to run observer", "session_id", session.ID, "error", err)
 		}
 	}()
@@ -3345,4 +3402,3 @@ func (s *Service) ProcessTicketChat(ctx context.Context, tenantSlug string, hist
 
 	return response.Message.Content, nil
 }
-
