@@ -65,11 +65,13 @@ func DefaultConfig() Config {
 
 // Cache is a thread-safe in-memory cache with TTL and memory management.
 type Cache struct {
+	mu         sync.RWMutex
 	data       sync.Map
 	config     Config
 	itemCount  int64 // Use atomic operations to track item count
 	stopChan   chan struct{}
 	closedChan chan struct{}
+	closed     bool
 }
 
 // New creates a new memory cache with the given configuration.
@@ -96,6 +98,9 @@ func (c *Cache) Set(ctx context.Context, key string, value any) {
 
 // SetWithTTL adds a value to the cache with a custom TTL.
 func (c *Cache) SetWithTTL(_ context.Context, key string, value any, ttl time.Duration) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	// Estimate size of the item (very rough approximation).
 	size := estimateSize(value)
 
@@ -121,6 +126,9 @@ func (c *Cache) SetWithTTL(_ context.Context, key string, value any, ttl time.Du
 
 // Get retrieves a value from the cache.
 func (c *Cache) Get(_ context.Context, key string) (any, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	value, ok := c.data.Load(key)
 	if !ok {
 		return nil, false
@@ -148,6 +156,9 @@ func (c *Cache) Get(_ context.Context, key string) (any, bool) {
 
 // Delete removes a value from the cache.
 func (c *Cache) Delete(_ context.Context, key string) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	if value, loaded := c.data.LoadAndDelete(key); loaded {
 		atomic.AddInt64(&c.itemCount, -1)
 
@@ -161,6 +172,9 @@ func (c *Cache) Delete(_ context.Context, key string) {
 
 // Clear removes all values from the cache.
 func (c *Cache) Clear(_ context.Context) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if c.config.OnEviction != nil {
 		c.data.Range(func(key, value any) bool {
 			itm, ok := value.(item)
@@ -185,15 +199,18 @@ func (c *Cache) Size() int64 {
 
 // Close stops the cache cleanup goroutine.
 func (c *Cache) Close() error {
-	select {
-	case <-c.stopChan:
-		// Already closed
-		return nil
-	default:
-		close(c.stopChan)
-		<-c.closedChan // Wait for cleanup goroutine to exit
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		<-c.closedChan
 		return nil
 	}
+	c.closed = true
+	close(c.stopChan)
+	c.mu.Unlock()
+
+	<-c.closedChan // Wait for cleanup goroutine to exit
+	return nil
 }
 
 // cleanupLoop periodically cleans up expired items.
@@ -216,6 +233,9 @@ func (c *Cache) cleanupLoop() {
 
 // cleanup removes expired items.
 func (c *Cache) cleanup() {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	evicted := make(map[string]any)
 	count := 0
 

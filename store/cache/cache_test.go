@@ -207,3 +207,147 @@ func TestEvictionCallback(t *testing.T) {
 	}
 	evictedMu.Unlock()
 }
+
+func TestCacheClearConcurrentWithCleanupRace(t *testing.T) {
+	ctx := context.Background()
+	config := DefaultConfig()
+	config.CleanupInterval = 5 * time.Millisecond
+	c := New(config)
+	defer c.Close()
+
+	var wg sync.WaitGroup
+	wg.Add(4)
+
+	// Setters
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			c.Set(ctx, fmt.Sprintf("key-%d", i%10), i)
+			time.Sleep(time.Microsecond)
+		}
+	}()
+
+	// Getters
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			c.Get(ctx, fmt.Sprintf("key-%d", i%10))
+			time.Sleep(time.Microsecond)
+		}
+	}()
+
+	// Deleters
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			c.Delete(ctx, fmt.Sprintf("key-%d", i%10))
+			time.Sleep(time.Microsecond)
+		}
+	}()
+
+	// Clearers
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 20; i++ {
+			c.Clear(ctx)
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+
+	wg.Wait()
+}
+
+func TestCacheCloseConcurrentWithCleanupRace(t *testing.T) {
+	ctx := context.Background()
+	config := DefaultConfig()
+	config.CleanupInterval = time.Millisecond
+	c := New(config)
+
+	// Concurrently Close and Get/Set
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		time.Sleep(2 * time.Millisecond)
+		c.Close()
+	}()
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			c.Set(ctx, "key", i)
+			c.Get(ctx, "key")
+			time.Sleep(100 * time.Microsecond)
+		}
+	}()
+
+	wg.Wait()
+}
+
+func TestCacheCloseIdempotent(t *testing.T) {
+	config := DefaultConfig()
+	c := New(config)
+
+	err := c.Close()
+	if err != nil {
+		t.Errorf("expected no error, got %v", err)
+	}
+
+	// Second Close should be safe and idempotent
+	err = c.Close()
+	if err != nil {
+		t.Errorf("expected no error on second Close, got %v", err)
+	}
+}
+
+func TestCacheNoGoroutineLeakOnClose(t *testing.T) {
+	config := DefaultConfig()
+	c := New(config)
+
+	// Close the cache
+	_ = c.Close()
+
+	// Verify cleanup loop terminates
+	select {
+	case <-c.closedChan:
+		// Cleanup goroutine terminated successfully
+	case <-time.After(2 * time.Second):
+		t.Errorf("cleanup goroutine did not terminate in time")
+	}
+}
+
+func TestClearResetsItemCount(t *testing.T) {
+	ctx := context.Background()
+	c := NewDefault()
+	defer c.Close()
+
+	c.Set(ctx, "k1", "v1")
+	c.Set(ctx, "k2", "v2")
+	if c.Size() != 2 {
+		t.Errorf("expected size 2, got %d", c.Size())
+	}
+
+	c.Clear(ctx)
+	if c.Size() != 0 {
+		t.Errorf("expected size 0 after Clear, got %d", c.Size())
+	}
+}
+
+func TestCloseConcurrentCallsDoNotPanic(t *testing.T) {
+	config := DefaultConfig()
+	c := New(config)
+
+	const numGoroutines = 20
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			defer wg.Done()
+			_ = c.Close()
+		}()
+	}
+
+	wg.Wait()
+}
