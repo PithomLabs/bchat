@@ -227,4 +227,14 @@ type Driver interface {
 	UpsertObservationLog(ctx context.Context, log *ObservationLog) (*ObservationLog, error)
 	GetObservationLog(ctx context.Context, sessionID string) (*ObservationLog, error)
 	GetObservationLogByResource(ctx context.Context, resourceID string) (*ObservationLog, error)
+
+	// Bridge HMAC authentication methods
+	CreateBridgeAuthKey(ctx context.Context, key *BridgeAuthKey) (*BridgeAuthKey, error)
+	GetBridgeAuthKey(ctx context.Context, tenantID int32, keyID string) (*BridgeAuthKey, error)
+	ListBridgeAuthKeys(ctx context.Context, tenantID int32) ([]*BridgeAuthKey, error)
+	UpdateBridgeAuthKeyLastUsed(ctx context.Context, tenantID int32, keyID string, now time.Time) error
+	RevokeBridgeAuthKey(ctx context.Context, tenantID int32, keyID string, now time.Time) error
+	StoreBridgeAuthNonce(ctx context.Context, nonce *BridgeAuthNonce) error
+	CleanupBridgeAuthNonces(ctx context.Context, now time.Time) error
 }
+

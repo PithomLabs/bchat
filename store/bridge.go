@@ -126,3 +126,73 @@ func (s *Store) FindActiveBridgeHandoff(ctx context.Context, tenantID int32, ses
 func (s *Store) UpdateBridgeHandoffRoutingModeCAS(ctx context.Context, tenantID int32, sessionID string, generation int, handoffID string, fromVersion int, fromMode, toMode BridgeRoutingMode, reason string, now time.Time) (*BridgeHandoff, error) {
 	return s.driver.UpdateBridgeHandoffRoutingModeCAS(ctx, tenantID, sessionID, generation, handoffID, fromVersion, fromMode, toMode, reason, now)
 }
+
+var (
+	ErrBridgeAuthReplay           = errors.New("bridge auth replay detected")
+	ErrBridgeAuthKeyNotFound       = errors.New("bridge auth key not found")
+	ErrBridgeAuthInactiveTenant   = errors.New("bridge auth tenant is inactive")
+	ErrBridgeAuthInvalidTimestamp = errors.New("bridge auth invalid timestamp")
+	ErrBridgeAuthSecretUnavailable = errors.New("bridge auth encryption service unavailable")
+	ErrBridgeAuthMalformedRequest = errors.New("bridge auth malformed request")
+	ErrBridgeAuthInvalidSignature = errors.New("bridge auth invalid signature")
+	ErrBridgeAuthKeyRevoked       = errors.New("bridge auth key is revoked")
+)
+
+type BridgeAuthKey struct {
+	ID                 int64      `json:"id"`
+	TenantID           int32      `json:"tenant_id"`
+	KeyID              string     `json:"key_id"`
+	Label              *string    `json:"label"`
+	SecretKeyEncrypted []byte     `json:"-"`
+	SecretKeyNonce     []byte     `json:"-"`
+	Status             string     `json:"status"` // "active" or "revoked"
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+	LastUsedAt         *time.Time `json:"last_used_at"`
+	RevokedAt          *time.Time `json:"revoked_at"`
+}
+
+type BridgeAuthNonce struct {
+	ID        int64     `json:"id"`
+	TenantID  int32     `json:"tenant_id"`
+	KeyID     string    `json:"key_id"`
+	Nonce     string    `json:"nonce"`
+	Timestamp int64     `json:"timestamp"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+type FindBridgeAuthKey struct {
+	TenantID int32
+	KeyID    *string
+	Status   *string
+}
+
+func (s *Store) CreateBridgeAuthKey(ctx context.Context, key *BridgeAuthKey) (*BridgeAuthKey, error) {
+	return s.driver.CreateBridgeAuthKey(ctx, key)
+}
+
+func (s *Store) GetBridgeAuthKey(ctx context.Context, tenantID int32, keyID string) (*BridgeAuthKey, error) {
+	return s.driver.GetBridgeAuthKey(ctx, tenantID, keyID)
+}
+
+func (s *Store) ListBridgeAuthKeys(ctx context.Context, tenantID int32) ([]*BridgeAuthKey, error) {
+	return s.driver.ListBridgeAuthKeys(ctx, tenantID)
+}
+
+func (s *Store) UpdateBridgeAuthKeyLastUsed(ctx context.Context, tenantID int32, keyID string, now time.Time) error {
+	return s.driver.UpdateBridgeAuthKeyLastUsed(ctx, tenantID, keyID, now)
+}
+
+func (s *Store) RevokeBridgeAuthKey(ctx context.Context, tenantID int32, keyID string, now time.Time) error {
+	return s.driver.RevokeBridgeAuthKey(ctx, tenantID, keyID, now)
+}
+
+func (s *Store) StoreBridgeAuthNonce(ctx context.Context, nonce *BridgeAuthNonce) error {
+	return s.driver.StoreBridgeAuthNonce(ctx, nonce)
+}
+
+func (s *Store) CleanupBridgeAuthNonces(ctx context.Context, now time.Time) error {
+	return s.driver.CleanupBridgeAuthNonces(ctx, now)
+}
+
