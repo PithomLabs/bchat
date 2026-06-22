@@ -3470,13 +3470,20 @@ type BridgeReplyRequest struct {
 	Text      string `json:"text"`
 }
 
-type BridgeReplyResponse struct {
-	Status         string `json:"status"`
-	ReplyID        string `json:"reply_id"`
-	HandoffID      string `json:"handoff_id"`
-	MessageID      string `json:"message_id"`
-	DeliveryStatus string `json:"delivery_status"`
+type BridgeReplyOutboxResponse struct {
+	Status   string `json:"status"`
+	OutboxID string `json:"outbox_id"`
 }
+
+type BridgeReplyResponse struct {
+	Status         string                     `json:"status"`
+	ReplyID        string                     `json:"reply_id"`
+	HandoffID      string                     `json:"handoff_id"`
+	MessageID      string                     `json:"message_id"`
+	DeliveryStatus string                     `json:"delivery_status"`
+	Outbox         *BridgeReplyOutboxResponse `json:"outbox,omitempty"`
+}
+
 
 type BridgeReleaseRequest struct {
 	SessionID string  `json:"session_id"`

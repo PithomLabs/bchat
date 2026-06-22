@@ -42,3 +42,12 @@ func (d *DB) CreateBridgeHandoffReplyIfActive(context.Context, *store.CreateBrid
 func (d *DB) GetBridgeHandoffReplyByClientMessageID(context.Context, int32, string, string, string) (*store.BridgeHandoffReply, error) {
 	return nil, store.ErrBridgeUnsupportedDatabase
 }
+
+func (d *DB) CreateBridgeHandoffReplyAndOutboxIfActive(context.Context, *store.CreateBridgeHandoffReply) (*store.BridgeHandoffReplyWithOutbox, error) {
+	return nil, store.ErrBridgeUnsupportedDatabase
+}
+
+func (d *DB) GetBridgeReplyOutboxByReplyID(context.Context, int32, string) (*store.BridgeReplyOutbox, error) {
+	return nil, store.ErrBridgeUnsupportedDatabase
+}
+

@@ -237,7 +237,7 @@ func (h *Handler) HandleBridgeReply(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
 	}
 
-	reply, err := h.store.CreateBridgeHandoffReplyIfActive(ctx, &store.CreateBridgeHandoffReply{
+	result, err := h.store.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
 		ReplyID:         uuid.NewString(),
 		TenantID:        tenant.ID,
 		SessionID:       req.SessionID,
@@ -261,10 +261,14 @@ func (h *Handler) HandleBridgeReply(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, BridgeReplyResponse{
 		Status:         "reply_persisted_not_delivered",
-		ReplyID:        reply.ReplyID,
-		HandoffID:      reply.HandoffID,
-		MessageID:      reply.ClientMessageID,
-		DeliveryStatus: reply.DeliveryStatus,
+		ReplyID:        result.Reply.ReplyID,
+		HandoffID:      result.Reply.HandoffID,
+		MessageID:      result.Reply.ClientMessageID,
+		DeliveryStatus: result.Reply.DeliveryStatus,
+		Outbox: &BridgeReplyOutboxResponse{
+			Status:   result.Outbox.Status,
+			OutboxID: result.Outbox.OutboxID,
+		},
 	})
 }
 

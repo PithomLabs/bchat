@@ -101,6 +101,23 @@ type CreateBridgeHandoffReply struct {
 	Now             int64
 }
 
+type BridgeReplyOutbox struct {
+	ID           int64
+	OutboxID     string
+	TenantID     int32
+	SessionID    string
+	HandoffID    string
+	ReplyID      string
+	Status       string
+	AttemptCount int
+	CreatedAt    int64
+}
+
+type BridgeHandoffReplyWithOutbox struct {
+	Reply  *BridgeHandoffReply
+	Outbox *BridgeReplyOutbox
+}
+
 func ValidateExternalSessionID(sessionID string) error {
 	if !externalSessionIDPattern.MatchString(sessionID) {
 		return fmt.Errorf("%w: must be 1-128 ASCII letters, digits, underscores, or hyphens", ErrInvalidExternalSessionID)
@@ -157,6 +174,14 @@ func (s *Store) GetBridgeHandoff(ctx context.Context, tenantID int32, sessionID 
 
 func (s *Store) CreateBridgeHandoffReplyIfActive(ctx context.Context, create *CreateBridgeHandoffReply) (*BridgeHandoffReply, error) {
 	return s.driver.CreateBridgeHandoffReplyIfActive(ctx, create)
+}
+
+func (s *Store) CreateBridgeHandoffReplyAndOutboxIfActive(ctx context.Context, create *CreateBridgeHandoffReply) (*BridgeHandoffReplyWithOutbox, error) {
+	return s.driver.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, create)
+}
+
+func (s *Store) GetBridgeReplyOutboxByReplyID(ctx context.Context, tenantID int32, replyID string) (*BridgeReplyOutbox, error) {
+	return s.driver.GetBridgeReplyOutboxByReplyID(ctx, tenantID, replyID)
 }
 
 func (s *Store) GetBridgeHandoffReplyByClientMessageID(ctx context.Context, tenantID int32, sessionID string, handoffID string, clientMessageID string) (*BridgeHandoffReply, error) {

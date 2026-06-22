@@ -573,3 +573,467 @@ func TestCreateBridgeHandoffReplyIfActiveDeliveryStatusConstraint(t *testing.T) 
 	require.Contains(t, err.Error(), "constraint failed")
 }
 
+func TestCreateBridgeHandoffReplyAndOutboxIfActivePersistsBoth(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "persist-both")
+	defer ts.Close()
+
+	now := time.Now().Unix()
+	res, err := ts.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "11111111-1111-1111-1111-111111111111",
+		TenantID:        tenant.ID,
+		SessionID:       session.SessionID,
+		HandoffID:       handoff.HandoffID,
+		ClientMessageID: "msg-1",
+		Text:            "Hello world",
+		Now:             now,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	require.NotNil(t, res.Reply)
+	require.NotNil(t, res.Outbox)
+
+	require.Equal(t, "11111111-1111-1111-1111-111111111111", res.Reply.ReplyID)
+	require.Equal(t, "msg-1", res.Reply.ClientMessageID)
+	require.Equal(t, "Hello world", res.Reply.Text)
+	require.Equal(t, "not_delivered", res.Reply.DeliveryStatus)
+
+	require.NotEmpty(t, res.Outbox.OutboxID)
+	require.Equal(t, "11111111-1111-1111-1111-111111111111", res.Outbox.ReplyID)
+	require.Equal(t, "pending", res.Outbox.Status)
+	require.Equal(t, 0, res.Outbox.AttemptCount)
+	require.Equal(t, now, res.Outbox.CreatedAt)
+
+	// Verify directly from SQLite
+	var replyCount, outboxCount int
+	err = ts.GetDriver().GetDB().QueryRowContext(ctx, "SELECT COUNT(1) FROM bridge_handoff_replies WHERE reply_id = ?", "11111111-1111-1111-1111-111111111111").Scan(&replyCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, replyCount)
+
+	err = ts.GetDriver().GetDB().QueryRowContext(ctx, "SELECT COUNT(1) FROM bridge_reply_outbox WHERE reply_id = ?", "11111111-1111-1111-1111-111111111111").Scan(&outboxCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, outboxCount)
+}
+
+func TestCreateBridgeHandoffReplyAndOutboxIfActiveIdempotentSameTextSameOutbox(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "idempotent-both")
+	defer ts.Close()
+
+	now := time.Now().Unix()
+	res1, err := ts.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "11111111-1111-1111-1111-111111111111",
+		TenantID:        tenant.ID,
+		SessionID:       session.SessionID,
+		HandoffID:       handoff.HandoffID,
+		ClientMessageID: "msg-1",
+		Text:            "Hello world",
+		Now:             now,
+	})
+	require.NoError(t, err)
+
+	res2, err := ts.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "22222222-2222-2222-2222-222222222222", // different reply ID proposed
+		TenantID:        tenant.ID,
+		SessionID:       session.SessionID,
+		HandoffID:       handoff.HandoffID,
+		ClientMessageID: "msg-1",
+		Text:            "Hello world",
+		Now:             now + 10,
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, res1.Reply.ReplyID, res2.Reply.ReplyID)
+	require.Equal(t, res1.Outbox.OutboxID, res2.Outbox.OutboxID)
+	require.Equal(t, res1.Outbox.CreatedAt, res2.Outbox.CreatedAt)
+
+	// Verify directly from SQLite
+	var replyCount, outboxCount int
+	err = ts.GetDriver().GetDB().QueryRowContext(ctx, "SELECT COUNT(1) FROM bridge_handoff_replies WHERE client_message_id = ?", "msg-1").Scan(&replyCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, replyCount)
+
+	err = ts.GetDriver().GetDB().QueryRowContext(ctx, "SELECT COUNT(1) FROM bridge_reply_outbox WHERE tenant_id = ? AND reply_id = ?", tenant.ID, res1.Reply.ReplyID).Scan(&outboxCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, outboxCount)
+}
+
+func TestCreateBridgeHandoffReplyAndOutboxIfActiveDifferentTextConflict(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "text-conflict")
+	defer ts.Close()
+
+	now := time.Now().Unix()
+	_, err := ts.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "11111111-1111-1111-1111-111111111111",
+		TenantID:        tenant.ID,
+		SessionID:       session.SessionID,
+		HandoffID:       handoff.HandoffID,
+		ClientMessageID: "msg-1",
+		Text:            "Hello world",
+		Now:             now,
+	})
+	require.NoError(t, err)
+
+	_, err = ts.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "22222222-2222-2222-2222-222222222222",
+		TenantID:        tenant.ID,
+		SessionID:       session.SessionID,
+		HandoffID:       handoff.HandoffID,
+		ClientMessageID: "msg-1",
+		Text:            "Different text",
+		Now:             now + 10,
+	})
+	require.ErrorIs(t, err, store.ErrBridgeHandoffReplyTextMismatch)
+}
+
+func TestCreateBridgeHandoffReplyAndOutboxIfActiveDuplicateMessageIDRaceSingleReplySingleOutbox(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "race-both")
+	defer ts.Close()
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	wg.Add(2)
+
+	for i := 0; i < 2; i++ {
+		go func(id int) {
+			defer wg.Done()
+			_, err := ts.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
+				ReplyID:         "77777777-7777-7777-7777-777777777777",
+				TenantID:        tenant.ID,
+				SessionID:       session.SessionID,
+				HandoffID:       handoff.HandoffID,
+				ClientMessageID: "msg-race",
+				Text:            "Race Text",
+				Now:             time.Now().Unix(),
+			})
+			errs <- err
+		}(i)
+	}
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	// Verify directly from SQLite
+	var replyCount, outboxCount int
+	err := ts.GetDriver().GetDB().QueryRowContext(ctx, "SELECT COUNT(1) FROM bridge_handoff_replies WHERE client_message_id = ?", "msg-race").Scan(&replyCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, replyCount)
+
+	err = ts.GetDriver().GetDB().QueryRowContext(ctx, "SELECT COUNT(1) FROM bridge_reply_outbox WHERE tenant_id = ?", tenant.ID).Scan(&outboxCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, outboxCount)
+}
+
+func TestCreateBridgeHandoffReplyAndOutboxIfActiveRaceWithRelease(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "race-release")
+	defer ts.Close()
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		time.Sleep(2 * time.Millisecond) // brief delay to increase chance of interleaving
+		_, err := ts.UpdateBridgeHandoffRoutingModeCAS(ctx, tenant.ID, session.SessionID, handoff.Generation, handoff.HandoffID, handoff.Version, store.BridgeRoutingModeHumanActive, store.BridgeRoutingModeClosed, "closed", time.Now())
+		errs <- err
+	}()
+
+	go func() {
+		defer wg.Done()
+		_, err := ts.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
+			ReplyID:         "11111111-1111-1111-1111-111111111111",
+			TenantID:        tenant.ID,
+			SessionID:       session.SessionID,
+			HandoffID:       handoff.HandoffID,
+			ClientMessageID: "msg-1",
+			Text:            "Hello world",
+			Now:             time.Now().Unix(),
+		})
+		errs <- err
+	}()
+
+	wg.Wait()
+	close(errs)
+
+	hasNoError := false
+	for err := range errs {
+		if err == nil {
+			hasNoError = true
+		} else {
+			require.True(t, errors.Is(err, store.ErrBridgeHandoffConflict) || errors.Is(err, store.ErrBridgeHandoffNotFound))
+		}
+	}
+	require.True(t, hasNoError)
+}
+
+func TestCreateBridgeReplyOutboxStatusConstraint(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "outbox-status-constraint")
+	defer ts.Close()
+
+	now := time.Now().Unix()
+	// Insert reply first
+	_, err := ts.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "11111111-1111-1111-1111-111111111111",
+		TenantID:        tenant.ID,
+		SessionID:       session.SessionID,
+		HandoffID:       handoff.HandoffID,
+		ClientMessageID: "msg-1",
+		Text:            "Hello",
+		Now:             now,
+	})
+	require.NoError(t, err)
+
+	// Try inserting outbox directly with invalid status
+	_, err = ts.GetDriver().GetDB().ExecContext(ctx, `
+		INSERT INTO bridge_reply_outbox (
+			outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at
+		) VALUES ('ffffffff-ffff-ffff-ffff-ffffffffffff', ?, ?, ?, '11111111-1111-1111-1111-111111111111', 'delivered', 0, ?)
+	`, tenant.ID, session.SessionID, handoff.HandoffID, now)
+	
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "constraint failed")
+}
+
+func TestCreateBridgeReplyOutboxAttemptCountConstraint(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "outbox-attempt-constraint")
+	defer ts.Close()
+
+	now := time.Now().Unix()
+	// Insert reply first
+	_, err := ts.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "11111111-1111-1111-1111-111111111111",
+		TenantID:        tenant.ID,
+		SessionID:       session.SessionID,
+		HandoffID:       handoff.HandoffID,
+		ClientMessageID: "msg-1",
+		Text:            "Hello",
+		Now:             now,
+	})
+	require.NoError(t, err)
+
+	// Try inserting outbox directly with invalid attempt_count
+	_, err = ts.GetDriver().GetDB().ExecContext(ctx, `
+		INSERT INTO bridge_reply_outbox (
+			outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at
+		) VALUES ('ffffffff-ffff-ffff-ffff-ffffffffffff', ?, ?, ?, '11111111-1111-1111-1111-111111111111', 'pending', 1, ?)
+	`, tenant.ID, session.SessionID, handoff.HandoffID, now)
+	
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "constraint failed")
+}
+
+func TestCreateBridgeReplyOutboxTenantIsolation(t *testing.T) {
+	ctx, ts, tenant1, session1, handoff1 := createHumanActiveHandoffFixture(t, "tenant-1")
+	defer ts.Close()
+
+	// Create a second tenant
+	tenant2, err := ts.CreateAgentTenant(ctx, &store.AgentTenant{
+		Slug:        "tenant-2",
+		CompanyName: "Tenant 2 Ltd",
+	})
+	require.NoError(t, err)
+
+	session2, _, err := ts.EnsureBridgeExternalSession(ctx, tenant2.ID, "session-2", time.Now(), time.Now().Add(24*time.Hour))
+	require.NoError(t, err)
+
+	handoff2, err := ts.CreateBridgeHandoff(ctx, tenant2.ID, session2.SessionID, time.Now())
+	require.NoError(t, err)
+
+	handoff2, err = ts.UpdateBridgeHandoffRoutingModeCAS(ctx, tenant2.ID, session2.SessionID, handoff2.Generation, handoff2.HandoffID, handoff2.Version, store.BridgeRoutingModeHandoffQueued, store.BridgeRoutingModeHumanActive, "takeover", time.Now())
+	require.NoError(t, err)
+
+	now := time.Now().Unix()
+	res1, err := ts.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "11111111-1111-1111-1111-111111111111",
+		TenantID:        tenant1.ID,
+		SessionID:       session1.SessionID,
+		HandoffID:       handoff1.HandoffID,
+		ClientMessageID: "msg-1",
+		Text:            "Hello Tenant 1",
+		Now:             now,
+	})
+	require.NoError(t, err)
+
+	res2, err := ts.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "22222222-2222-2222-2222-222222222222",
+		TenantID:        tenant2.ID,
+		SessionID:       session2.SessionID,
+		HandoffID:       handoff2.HandoffID,
+		ClientMessageID: "msg-1", // same client message ID, isolated by tenant
+		Text:            "Hello Tenant 2",
+		Now:             now,
+	})
+	require.NoError(t, err)
+
+	require.NotEqual(t, res1.Reply.ReplyID, res2.Reply.ReplyID)
+	require.NotEqual(t, res1.Outbox.OutboxID, res2.Outbox.OutboxID)
+}
+
+func TestCreateBridgeReplyOutboxSessionIsolation(t *testing.T) {
+	ctx, ts, tenant, session1, handoff1 := createHumanActiveHandoffFixture(t, "session-1")
+	defer ts.Close()
+
+	session2, _, err := ts.EnsureBridgeExternalSession(ctx, tenant.ID, "session-2", time.Now(), time.Now().Add(24*time.Hour))
+	require.NoError(t, err)
+
+	handoff2, err := ts.CreateBridgeHandoff(ctx, tenant.ID, session2.SessionID, time.Now())
+	require.NoError(t, err)
+
+	handoff2, err = ts.UpdateBridgeHandoffRoutingModeCAS(ctx, tenant.ID, session2.SessionID, handoff2.Generation, handoff2.HandoffID, handoff2.Version, store.BridgeRoutingModeHandoffQueued, store.BridgeRoutingModeHumanActive, "takeover", time.Now())
+	require.NoError(t, err)
+
+	now := time.Now().Unix()
+	res1, err := ts.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "11111111-1111-1111-1111-111111111111",
+		TenantID:        tenant.ID,
+		SessionID:       session1.SessionID,
+		HandoffID:       handoff1.HandoffID,
+		ClientMessageID: "msg-s1",
+		Text:            "Hello Session 1",
+		Now:             now,
+	})
+	require.NoError(t, err)
+
+	// Ensure cascade delete works on session
+	_, err = ts.GetDriver().GetDB().ExecContext(ctx, "DELETE FROM bridge_external_sessions WHERE tenant_id = ? AND session_id = ?", tenant.ID, session1.SessionID)
+	require.NoError(t, err)
+
+	// Verify reply and outbox are deleted Cascade
+	var replyCount, outboxCount int
+	err = ts.GetDriver().GetDB().QueryRowContext(ctx, "SELECT COUNT(1) FROM bridge_handoff_replies WHERE reply_id = ?", res1.Reply.ReplyID).Scan(&replyCount)
+	require.NoError(t, err)
+	require.Equal(t, 0, replyCount)
+
+	err = ts.GetDriver().GetDB().QueryRowContext(ctx, "SELECT COUNT(1) FROM bridge_reply_outbox WHERE outbox_id = ?", res1.Outbox.OutboxID).Scan(&outboxCount)
+	require.NoError(t, err)
+	require.Equal(t, 0, outboxCount)
+}
+
+func TestCreateBridgeHandoffReplyAndOutboxIfActiveLegacyRecovery(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "legacy-recovery")
+	defer ts.Close()
+
+	now := time.Now().Unix()
+	// Insert reply using old/direct insertion method, bypassing outbox creation
+	_, err := ts.CreateBridgeHandoffReplyIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		TenantID:        tenant.ID,
+		SessionID:       session.SessionID,
+		HandoffID:       handoff.HandoffID,
+		ClientMessageID: "msg-legacy",
+		Text:            "Legacy Text",
+		Now:             now,
+	})
+	require.NoError(t, err)
+
+	// Verify outbox row does NOT exist yet
+	ob, err := ts.GetBridgeReplyOutboxByReplyID(ctx, tenant.ID, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+	require.NoError(t, err)
+	require.Nil(t, ob)
+
+	// Call CreateBridgeHandoffReplyAndOutboxIfActive with same client message ID and same text
+	res, err := ts.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+		TenantID:        tenant.ID,
+		SessionID:       session.SessionID,
+		HandoffID:       handoff.HandoffID,
+		ClientMessageID: "msg-legacy",
+		Text:            "Legacy Text",
+		Now:             now,
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", res.Reply.ReplyID)
+	require.NotNil(t, res.Outbox)
+	require.NotEmpty(t, res.Outbox.OutboxID)
+	require.Equal(t, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", res.Outbox.ReplyID)
+	require.Equal(t, "pending", res.Outbox.Status)
+
+	// Verify database state: exactly 1 reply, exactly 1 outbox row
+	var replyCount, outboxCount int
+	err = ts.GetDriver().GetDB().QueryRowContext(ctx, "SELECT COUNT(1) FROM bridge_handoff_replies WHERE tenant_id = ?", tenant.ID).Scan(&replyCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, replyCount)
+
+	err = ts.GetDriver().GetDB().QueryRowContext(ctx, "SELECT COUNT(1) FROM bridge_reply_outbox WHERE tenant_id = ?", tenant.ID).Scan(&outboxCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, outboxCount)
+}
+
+func TestCreateBridgeHandoffReplyAndOutboxIfActiveAtomicRollbackOnOutboxFailure(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "atomic-rollback")
+	defer ts.Close()
+
+	now := time.Now().Unix()
+	// Disable foreign key checks temporarily in SQLite to insert a pre-existing outbox row
+	_, err := ts.GetDriver().GetDB().ExecContext(ctx, "PRAGMA foreign_keys = OFF")
+	require.NoError(t, err)
+	defer func() {
+		_, _ = ts.GetDriver().GetDB().ExecContext(ctx, "PRAGMA foreign_keys = ON")
+	}()
+
+	// Insert outbox row for "reply-atomic"
+	_, err = ts.GetDriver().GetDB().ExecContext(ctx, `
+		INSERT INTO bridge_reply_outbox (
+			outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at
+		) VALUES ('cccccccc-cccc-cccc-cccc-cccccccccccc', ?, ?, ?, 'dddddddd-dddd-dddd-dddd-dddddddddddd', 'pending', 0, ?)
+	`, tenant.ID, session.SessionID, handoff.HandoffID, now)
+	require.NoError(t, err)
+
+	// Re-enable foreign key constraints
+	_, err = ts.GetDriver().GetDB().ExecContext(ctx, "PRAGMA foreign_keys = ON")
+	require.NoError(t, err)
+
+	// Now try to create a reply with ReplyID = "reply-atomic".
+	// The reply insert will succeed (since "reply-atomic" doesn't exist in bridge_handoff_replies).
+	// But the outbox insert will fail with unique constraint violation.
+	// This will test the rollback!
+	_, err = ts.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "dddddddd-dddd-dddd-dddd-dddddddddddd",
+		TenantID:        tenant.ID,
+		SessionID:       session.SessionID,
+		HandoffID:       handoff.HandoffID,
+		ClientMessageID: "msg-atomic",
+		Text:            "Atomic rollback text",
+		Now:             now,
+	})
+	require.Error(t, err)
+
+	// Assert that "reply-atomic" was NOT committed to bridge_handoff_replies
+	var replyCount int
+	err = ts.GetDriver().GetDB().QueryRowContext(ctx, "SELECT COUNT(1) FROM bridge_handoff_replies WHERE reply_id = ?", "dddddddd-dddd-dddd-dddd-dddddddddddd").Scan(&replyCount)
+	require.NoError(t, err)
+	require.Equal(t, 0, replyCount)
+}
+
+func TestBridgeOutboxScopeNoDeliveryWorkerReadsOutbox(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "scope-test")
+	defer ts.Close()
+
+	now := time.Now().Unix()
+	res, err := ts.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         "11111111-1111-1111-1111-111111111111",
+		TenantID:        tenant.ID,
+		SessionID:       session.SessionID,
+		HandoffID:       handoff.HandoffID,
+		ClientMessageID: "msg-scope",
+		Text:            "Scope check",
+		Now:             now,
+	})
+	require.NoError(t, err)
+
+	// Wait a bit to simulate background process time
+	time.Sleep(50 * time.Millisecond)
+
+	// Retrieve the outbox row and verify status is still strictly pending and attempt_count is 0
+	ob, err := ts.GetBridgeReplyOutboxByReplyID(ctx, tenant.ID, res.Reply.ReplyID)
+	require.NoError(t, err)
+	require.NotNil(t, ob)
+	require.Equal(t, "pending", ob.Status)
+	require.Equal(t, 0, ob.AttemptCount)
+}
+
+

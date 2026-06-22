@@ -458,3 +458,232 @@ func (d *DB) GetBridgeHandoffReplyByClientMessageID(ctx context.Context, tenantI
 	return &reply, nil
 }
 
+func (d *DB) CreateBridgeHandoffReplyAndOutboxIfActive(ctx context.Context, create *store.CreateBridgeHandoffReply) (*store.BridgeHandoffReplyWithOutbox, error) {
+	conn, err := d.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get connection: %w", err)
+	}
+	defer conn.Close()
+
+	_, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE")
+	if err != nil {
+		return nil, fmt.Errorf("begin immediate transaction: %w", err)
+	}
+
+	rollback := func() {
+		_, _ = conn.ExecContext(ctx, "ROLLBACK")
+	}
+
+	var sessionID string
+	var active int
+	var routingMode string
+	var generation int64
+
+	err = conn.QueryRowContext(ctx, `
+		SELECT session_id, active, routing_mode, generation
+		FROM bridge_handoffs
+		WHERE tenant_id = ? AND handoff_id = ?
+	`, create.TenantID, create.HandoffID).Scan(&sessionID, &active, &routingMode, &generation)
+	if errors.Is(err, sql.ErrNoRows) {
+		rollback()
+		return nil, store.ErrBridgeHandoffNotFound
+	}
+	if err != nil {
+		rollback()
+		return nil, fmt.Errorf("query handoff in transaction: %w", err)
+	}
+
+	if sessionID != create.SessionID {
+		rollback()
+		return nil, store.ErrBridgeHandoffConflict
+	}
+
+	if active != 1 || routingMode != string(store.BridgeRoutingModeHumanActive) {
+		rollback()
+		return nil, store.ErrBridgeHandoffConflict
+	}
+
+	var finalReply *store.BridgeHandoffReply
+	var finalOutbox *store.BridgeReplyOutbox
+
+	// Try inserting the reply
+	_, err = conn.ExecContext(ctx, `
+		INSERT INTO bridge_handoff_replies (
+			reply_id, tenant_id, session_id, handoff_id, generation,
+			client_message_id, text, delivery_status, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, 'not_delivered', ?)
+	`, create.ReplyID, create.TenantID, create.SessionID, create.HandoffID, generation,
+		create.ClientMessageID, create.Text, create.Now)
+
+	if err == nil {
+		// Inserted reply successfully, now insert the outbox
+		outboxID := uuid.NewString()
+		_, err = conn.ExecContext(ctx, `
+			INSERT INTO bridge_reply_outbox (
+				outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at
+			) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?)
+		`, outboxID, create.TenantID, create.SessionID, create.HandoffID, create.ReplyID, create.Now)
+		if err != nil {
+			rollback()
+			return nil, fmt.Errorf("insert outbox: %w", err)
+		}
+
+		finalReply = &store.BridgeHandoffReply{
+			ReplyID:         create.ReplyID,
+			TenantID:        create.TenantID,
+			SessionID:       create.SessionID,
+			HandoffID:       create.HandoffID,
+			Generation:      generation,
+			ClientMessageID: create.ClientMessageID,
+			Text:            create.Text,
+			DeliveryStatus:  "not_delivered",
+			CreatedAt:       create.Now,
+		}
+		finalOutbox = &store.BridgeReplyOutbox{
+			OutboxID:     outboxID,
+			TenantID:     create.TenantID,
+			SessionID:    create.SessionID,
+			HandoffID:    create.HandoffID,
+			ReplyID:      create.ReplyID,
+			Status:       "pending",
+			AttemptCount: 0,
+			CreatedAt:    create.Now,
+		}
+	} else if isSQLiteConstraint(err) {
+		// Unique constraint failed. Retrieve existing reply.
+		var existingReplyID string
+		var existingText string
+		var existingDeliveryStatus string
+		var existingCreatedAt int64
+		var existingGeneration int64
+
+		errQuery := conn.QueryRowContext(ctx, `
+			SELECT reply_id, text, delivery_status, created_at, generation
+			FROM bridge_handoff_replies
+			WHERE tenant_id = ? AND session_id = ? AND handoff_id = ? AND client_message_id = ?
+		`, create.TenantID, create.SessionID, create.HandoffID, create.ClientMessageID).Scan(
+			&existingReplyID, &existingText, &existingDeliveryStatus, &existingCreatedAt, &existingGeneration,
+		)
+		if errQuery != nil {
+			rollback()
+			return nil, fmt.Errorf("query existing reply on constraint violation: %w", errQuery)
+		}
+
+		if existingText != create.Text {
+			rollback()
+			return nil, store.ErrBridgeHandoffReplyTextMismatch
+		}
+
+		finalReply = &store.BridgeHandoffReply{
+			ReplyID:         existingReplyID,
+			TenantID:        create.TenantID,
+			SessionID:       create.SessionID,
+			HandoffID:       create.HandoffID,
+			Generation:      existingGeneration,
+			ClientMessageID: create.ClientMessageID,
+			Text:            existingText,
+			DeliveryStatus:  existingDeliveryStatus,
+			CreatedAt:       existingCreatedAt,
+		}
+
+		// Now check if outbox row exists for this reply_id
+		var ob store.BridgeReplyOutbox
+		var obID int64
+		var obCreatedAt int64
+		errOutbox := conn.QueryRowContext(ctx, `
+			SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at
+			FROM bridge_reply_outbox
+			WHERE tenant_id = ? AND reply_id = ?
+		`, create.TenantID, existingReplyID).Scan(
+			&obID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &obCreatedAt,
+		)
+
+		if errOutbox == nil {
+			// Found existing outbox row, reuse it
+			ob.ID = obID
+			ob.CreatedAt = obCreatedAt
+			finalOutbox = &ob
+		} else if errors.Is(errOutbox, sql.ErrNoRows) {
+			// Legacy recovery path: insert new outbox row
+			outboxID := uuid.NewString()
+			_, err = conn.ExecContext(ctx, `
+				INSERT INTO bridge_reply_outbox (
+					outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at
+				) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?)
+			`, outboxID, create.TenantID, create.SessionID, create.HandoffID, existingReplyID, create.Now)
+			if err != nil {
+				// Check if another concurrent call inserted the outbox
+				if isSQLiteConstraint(err) {
+					errOutboxRetry := conn.QueryRowContext(ctx, `
+						SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at
+						FROM bridge_reply_outbox
+						WHERE tenant_id = ? AND reply_id = ?
+					`, create.TenantID, existingReplyID).Scan(
+						&obID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &obCreatedAt,
+					)
+					if errOutboxRetry == nil {
+						ob.ID = obID
+						ob.CreatedAt = obCreatedAt
+						finalOutbox = &ob
+					} else {
+						rollback()
+						return nil, fmt.Errorf("recover legacy outbox concurrency fallback: %w", errOutboxRetry)
+					}
+				} else {
+					rollback()
+					return nil, fmt.Errorf("insert legacy recovery outbox: %w", err)
+				}
+			} else {
+				finalOutbox = &store.BridgeReplyOutbox{
+					OutboxID:     outboxID,
+					TenantID:     create.TenantID,
+					SessionID:    create.SessionID,
+					HandoffID:    create.HandoffID,
+					ReplyID:      existingReplyID,
+					Status:       "pending",
+					AttemptCount: 0,
+					CreatedAt:    create.Now,
+				}
+			}
+		} else {
+			rollback()
+			return nil, fmt.Errorf("query outbox: %w", errOutbox)
+		}
+	} else {
+		rollback()
+		return nil, fmt.Errorf("insert reply failed: %w", err)
+	}
+
+	_, err = conn.ExecContext(ctx, "COMMIT")
+	if err != nil {
+		rollback()
+		return nil, fmt.Errorf("commit transaction: %w", err)
+	}
+
+	return &store.BridgeHandoffReplyWithOutbox{
+		Reply:  finalReply,
+		Outbox: finalOutbox,
+	}, nil
+}
+
+func (d *DB) GetBridgeReplyOutboxByReplyID(ctx context.Context, tenantID int32, replyID string) (*store.BridgeReplyOutbox, error) {
+	var ob store.BridgeReplyOutbox
+	var createdAt int64
+	err := d.db.QueryRowContext(ctx, `
+		SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at
+		FROM bridge_reply_outbox
+		WHERE tenant_id = ? AND reply_id = ?
+	`, tenantID, replyID).Scan(
+		&ob.ID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &createdAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get bridge reply outbox by reply id: %w", err)
+	}
+	ob.CreatedAt = createdAt
+	return &ob, nil
+}
+
+
