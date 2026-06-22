@@ -3471,7 +3471,11 @@ type BridgeReplyRequest struct {
 }
 
 type BridgeReplyResponse struct {
-	Status string `json:"status"`
+	Status         string `json:"status"`
+	ReplyID        string `json:"reply_id"`
+	HandoffID      string `json:"handoff_id"`
+	MessageID      string `json:"message_id"`
+	DeliveryStatus string `json:"delivery_status"`
 }
 
 type BridgeReleaseRequest struct {

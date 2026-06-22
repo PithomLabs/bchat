@@ -610,7 +610,7 @@ func TestBridgeReleaseNoActiveHandoffSemantics(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec4.Code)
 }
 
-func TestBridgeReplySuccessValidationOnly(t *testing.T) {
+func TestBridgeReplySuccessPersisted(t *testing.T) {
 	ctx := context.Background()
 	ts, tenant, _, enc := setupMiddlewareTestStore(t, ctx, "reply-success", true)
 	defer ts.Close()
@@ -666,7 +666,7 @@ func TestBridgeReplySuccessValidationOnly(t *testing.T) {
 	require.NoError(t, err)
 
 	// 2. Call reply with valid handoff_id/message_id/text
-	bodyReply := []byte(fmt.Sprintf(`{"session_id": "session_reply_success", "handoff_id": "%s", "message_id": "msg_reply_success", "text": "validation only text"}`, handoffID))
+	bodyReply := []byte(fmt.Sprintf(`{"session_id": "session_reply_success", "handoff_id": "%s", "message_id": "msg_reply_success", "text": "persisted text"}`, handoffID))
 	nonce2 := "reply_nonce_reply_success"
 	sig2 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/reply-success/bridge/reply", "application/json", now, nonce2, bodyReply)
 
@@ -685,11 +685,22 @@ func TestBridgeReplySuccessValidationOnly(t *testing.T) {
 	err = json.Unmarshal(rec2.Body.Bytes(), &respReply)
 	require.NoError(t, err)
 
-	// Assert response status exactly reply_validated_not_persisted_not_delivered
-	require.Equal(t, "reply_validated_not_persisted_not_delivered", respReply.Status)
+	// Assert response fields
+	require.Equal(t, "reply_persisted_not_delivered", respReply.Status)
+	require.NotEmpty(t, respReply.ReplyID)
+	require.Equal(t, handoffID, respReply.HandoffID)
+	require.Equal(t, "msg_reply_success", respReply.MessageID)
+	require.Equal(t, "not_delivered", respReply.DeliveryStatus)
 
-	// Assert no database state side effects:
-	// Verify session and handoff did not change
+	// Verify reply row in the database
+	var dbReplyText string
+	var dbReplyStatus string
+	err = dbConn.QueryRowContext(ctx, "SELECT text, delivery_status FROM bridge_handoff_replies WHERE reply_id = ?", respReply.ReplyID).Scan(&dbReplyText, &dbReplyStatus)
+	require.NoError(t, err)
+	require.Equal(t, "persisted text", dbReplyText)
+	require.Equal(t, "not_delivered", dbReplyStatus)
+
+	// Assert no database state side effects for unrelated tables
 	sessionAfter, err := ts.FindBridgeExternalSession(ctx, tenant.ID, "session_reply_success")
 	require.NoError(t, err)
 	require.Equal(t, sessionBefore.Status, sessionAfter.Status)
@@ -720,6 +731,377 @@ func TestBridgeReplySuccessValidationOnly(t *testing.T) {
 	}
 	require.Empty(t, tableNames, "Expected no delivery/outbox/message tables to exist in SQLite schema, but found: %v", tableNames)
 }
+
+func TestBridgeReplyDuplicateMessageIDSameTextIdempotent(t *testing.T) {
+	ctx := context.Background()
+	ts, tenant, _, enc := setupMiddlewareTestStore(t, ctx, "reply-idem-same-handler", true)
+	defer ts.Close()
+
+	e := echo.New()
+	prof := &profile.Profile{Mode: "dev", EncryptionMasterKey: "super-secure-master-key-12345"}
+	svc := NewService(ts, prof)
+	svc.encryptionService = enc
+	handler := NewHandler(svc, ts)
+
+	e.POST("/api/v1/agent/:slug/bridge/takeover", handler.HandleBridgeTakeover, RequireBridgeHMAC(ts, enc))
+	e.POST("/api/v1/agent/:slug/bridge/reply", handler.HandleBridgeReply, RequireBridgeHMAC(ts, enc))
+
+	// Takeover
+	bodyTakeover := []byte(`{"session_id": "session_reply"}`)
+	now := time.Now().Unix()
+	nonce1 := "takeover_nonce_12345"
+	sig1 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/reply-idem-same-handler/bridge/takeover", "application/json", now, nonce1, bodyTakeover)
+
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/reply-idem-same-handler/bridge/takeover", bytes.NewReader(bodyTakeover))
+	req1.Header.Set("Content-Type", "application/json")
+	req1.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req1.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req1.Header.Set("X-Bridge-Nonce", nonce1)
+	req1.Header.Set("X-Bridge-Signature", sig1)
+	rec1 := httptest.NewRecorder()
+	e.ServeHTTP(rec1, req1)
+	require.Equal(t, http.StatusOK, rec1.Code)
+
+	var respTakeover BridgeTakeoverResponse
+	require.NoError(t, json.Unmarshal(rec1.Body.Bytes(), &respTakeover))
+	handoffID := respTakeover.HandoffID
+
+	// First reply request
+	bodyReply := []byte(fmt.Sprintf(`{"session_id": "session_reply", "handoff_id": "%s", "message_id": "msg_idem", "text": "some text"}`, handoffID))
+	nonce2 := "reply_nonce_12345_1"
+	sig2 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/reply-idem-same-handler/bridge/reply", "application/json", now, nonce2, bodyReply)
+
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/reply-idem-same-handler/bridge/reply", bytes.NewReader(bodyReply))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req2.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req2.Header.Set("X-Bridge-Nonce", nonce2)
+	req2.Header.Set("X-Bridge-Signature", sig2)
+	rec2 := httptest.NewRecorder()
+	e.ServeHTTP(rec2, req2)
+	require.Equal(t, http.StatusOK, rec2.Code)
+
+	var respReply1 BridgeReplyResponse
+	require.NoError(t, json.Unmarshal(rec2.Body.Bytes(), &respReply1))
+	require.Equal(t, "reply_persisted_not_delivered", respReply1.Status)
+	require.NotEmpty(t, respReply1.ReplyID)
+
+	// Second reply request with same message_id and same text
+	nonce3 := "reply_nonce_12345_2"
+	sig3 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/reply-idem-same-handler/bridge/reply", "application/json", now, nonce3, bodyReply)
+
+	req3 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/reply-idem-same-handler/bridge/reply", bytes.NewReader(bodyReply))
+	req3.Header.Set("Content-Type", "application/json")
+	req3.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req3.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req3.Header.Set("X-Bridge-Nonce", nonce3)
+	req3.Header.Set("X-Bridge-Signature", sig3)
+	rec3 := httptest.NewRecorder()
+	e.ServeHTTP(rec3, req3)
+	require.Equal(t, http.StatusOK, rec3.Code)
+
+	var respReply2 BridgeReplyResponse
+	require.NoError(t, json.Unmarshal(rec3.Body.Bytes(), &respReply2))
+	require.Equal(t, respReply1.ReplyID, respReply2.ReplyID) // Must return same reply_id
+}
+
+func TestBridgeReplyDuplicateMessageIDDifferentTextConflict(t *testing.T) {
+	ctx := context.Background()
+	ts, tenant, _, enc := setupMiddlewareTestStore(t, ctx, "reply-idem-diff-handler", true)
+	defer ts.Close()
+
+	e := echo.New()
+	prof := &profile.Profile{Mode: "dev", EncryptionMasterKey: "super-secure-master-key-12345"}
+	svc := NewService(ts, prof)
+	svc.encryptionService = enc
+	handler := NewHandler(svc, ts)
+
+	e.POST("/api/v1/agent/:slug/bridge/takeover", handler.HandleBridgeTakeover, RequireBridgeHMAC(ts, enc))
+	e.POST("/api/v1/agent/:slug/bridge/reply", handler.HandleBridgeReply, RequireBridgeHMAC(ts, enc))
+
+	// Takeover
+	bodyTakeover := []byte(`{"session_id": "session_reply"}`)
+	now := time.Now().Unix()
+	nonce1 := "takeover_nonce_12345"
+	sig1 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/reply-idem-diff-handler/bridge/takeover", "application/json", now, nonce1, bodyTakeover)
+
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/reply-idem-diff-handler/bridge/takeover", bytes.NewReader(bodyTakeover))
+	req1.Header.Set("Content-Type", "application/json")
+	req1.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req1.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req1.Header.Set("X-Bridge-Nonce", nonce1)
+	req1.Header.Set("X-Bridge-Signature", sig1)
+	rec1 := httptest.NewRecorder()
+	e.ServeHTTP(rec1, req1)
+	require.Equal(t, http.StatusOK, rec1.Code)
+
+	var respTakeover BridgeTakeoverResponse
+	require.NoError(t, json.Unmarshal(rec1.Body.Bytes(), &respTakeover))
+	handoffID := respTakeover.HandoffID
+
+	// First reply request
+	bodyReply := []byte(fmt.Sprintf(`{"session_id": "session_reply", "handoff_id": "%s", "message_id": "msg_idem", "text": "original text"}`, handoffID))
+	nonce2 := "reply_nonce_12345_1"
+	sig2 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/reply-idem-diff-handler/bridge/reply", "application/json", now, nonce2, bodyReply)
+
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/reply-idem-diff-handler/bridge/reply", bytes.NewReader(bodyReply))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req2.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req2.Header.Set("X-Bridge-Nonce", nonce2)
+	req2.Header.Set("X-Bridge-Signature", sig2)
+	rec2 := httptest.NewRecorder()
+	e.ServeHTTP(rec2, req2)
+	require.Equal(t, http.StatusOK, rec2.Code)
+
+	// Second reply request with same message_id but DIFFERENT text
+	bodyReplyDiff := []byte(fmt.Sprintf(`{"session_id": "session_reply", "handoff_id": "%s", "message_id": "msg_idem", "text": "different text"}`, handoffID))
+	nonce3 := "reply_nonce_12345_2"
+	sig3 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/reply-idem-diff-handler/bridge/reply", "application/json", now, nonce3, bodyReplyDiff)
+
+	req3 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/reply-idem-diff-handler/bridge/reply", bytes.NewReader(bodyReplyDiff))
+	req3.Header.Set("Content-Type", "application/json")
+	req3.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req3.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req3.Header.Set("X-Bridge-Nonce", nonce3)
+	req3.Header.Set("X-Bridge-Signature", sig3)
+	rec3 := httptest.NewRecorder()
+	e.ServeHTTP(rec3, req3)
+	require.Equal(t, http.StatusConflict, rec3.Code) // Must return 409 Conflict
+}
+
+func TestBridgeReplyRejectsQueuedHandoff(t *testing.T) {
+	// HandleBridgeTakeover always promotes handoff_queued → human_active in a single call.
+	// To test the reply handler's rejection of a handoff_queued row, we must create
+	// the handoff directly via the store, leaving it in handoff_queued state.
+	ctx := context.Background()
+	ts, tenant, _, enc := setupMiddlewareTestStore(t, ctx, "reply-queued-handler", true)
+	defer ts.Close()
+
+	e := echo.New()
+	prof := &profile.Profile{Mode: "dev", EncryptionMasterKey: "super-secure-master-key-12345"}
+	svc := NewService(ts, prof)
+	svc.encryptionService = enc
+	handler := NewHandler(svc, ts)
+
+	e.POST("/api/v1/agent/:slug/bridge/reply", handler.HandleBridgeReply, RequireBridgeHMAC(ts, enc))
+
+	// Create session and handoff_queued row directly via the store (not via HandleBridgeTakeover).
+	now := time.Now()
+	_, _, err := ts.EnsureBridgeExternalSession(ctx, tenant.ID, "session_queued", now, now.Add(24*time.Hour))
+	require.NoError(t, err)
+	queuedHandoff, err := ts.CreateBridgeHandoff(ctx, tenant.ID, "session_queued", now)
+	require.NoError(t, err)
+	require.Equal(t, store.BridgeRoutingModeHandoffQueued, queuedHandoff.RoutingMode)
+
+	// Reply against a handoff that is handoff_queued (not human_active) must be rejected.
+	tsUnix := now.Unix()
+	bodyReply := []byte(fmt.Sprintf(`{"session_id": "session_queued", "handoff_id": "%s", "message_id": "msg_queued", "text": "hello"}`, queuedHandoff.HandoffID))
+	nonce := "reply_nonce_queued123"
+	sig := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/reply-queued-handler/bridge/reply", "application/json", tsUnix, nonce, bodyReply)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/reply-queued-handler/bridge/reply", bytes.NewReader(bodyReply))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(tsUnix, 10))
+	req.Header.Set("X-Bridge-Nonce", nonce)
+	req.Header.Set("X-Bridge-Signature", sig)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusConflict, rec.Code) // 409: handoff not in human_active state
+}
+
+
+func TestBridgeReplyRejectsClosedHandoff(t *testing.T) {
+	ctx := context.Background()
+	ts, tenant, _, enc := setupMiddlewareTestStore(t, ctx, "reply-closed-handler", true)
+	defer ts.Close()
+
+	e := echo.New()
+	prof := &profile.Profile{Mode: "dev", EncryptionMasterKey: "super-secure-master-key-12345"}
+	svc := NewService(ts, prof)
+	svc.encryptionService = enc
+	handler := NewHandler(svc, ts)
+
+	e.POST("/api/v1/agent/:slug/bridge/takeover", handler.HandleBridgeTakeover, RequireBridgeHMAC(ts, enc))
+	e.POST("/api/v1/agent/:slug/bridge/reply", handler.HandleBridgeReply, RequireBridgeHMAC(ts, enc))
+	e.POST("/api/v1/agent/:slug/bridge/release", handler.HandleBridgeRelease, RequireBridgeHMAC(ts, enc))
+
+	// Takeover
+	bodyTakeover := []byte(`{"session_id": "session_closed"}`)
+	now := time.Now().Unix()
+	nonce1 := "takeover_nonce_12345"
+	sig1 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/reply-closed-handler/bridge/takeover", "application/json", now, nonce1, bodyTakeover)
+
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/reply-closed-handler/bridge/takeover", bytes.NewReader(bodyTakeover))
+	req1.Header.Set("Content-Type", "application/json")
+	req1.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req1.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req1.Header.Set("X-Bridge-Nonce", nonce1)
+	req1.Header.Set("X-Bridge-Signature", sig1)
+	rec1 := httptest.NewRecorder()
+	e.ServeHTTP(rec1, req1)
+	require.Equal(t, http.StatusOK, rec1.Code)
+
+	var respTakeover BridgeTakeoverResponse
+	require.NoError(t, json.Unmarshal(rec1.Body.Bytes(), &respTakeover))
+	handoffID := respTakeover.HandoffID
+
+	// Release
+	bodyRelease := []byte(fmt.Sprintf(`{"session_id": "session_closed", "handoff_id": "%s"}`, handoffID))
+	nonce2 := "release_nonce_12345"
+	sig2 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/reply-closed-handler/bridge/release", "application/json", now, nonce2, bodyRelease)
+
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/reply-closed-handler/bridge/release", bytes.NewReader(bodyRelease))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req2.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req2.Header.Set("X-Bridge-Nonce", nonce2)
+	req2.Header.Set("X-Bridge-Signature", sig2)
+	rec2 := httptest.NewRecorder()
+	e.ServeHTTP(rec2, req2)
+	require.Equal(t, http.StatusOK, rec2.Code)
+
+	// Try to reply
+	bodyReply := []byte(fmt.Sprintf(`{"session_id": "session_closed", "handoff_id": "%s", "message_id": "msg_closed", "text": "hello"}`, handoffID))
+	nonce3 := "reply_nonce_12345"
+	sig3 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/reply-closed-handler/bridge/reply", "application/json", now, nonce3, bodyReply)
+
+	req3 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/reply-closed-handler/bridge/reply", bytes.NewReader(bodyReply))
+	req3.Header.Set("Content-Type", "application/json")
+	req3.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req3.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req3.Header.Set("X-Bridge-Nonce", nonce3)
+	req3.Header.Set("X-Bridge-Signature", sig3)
+	rec3 := httptest.NewRecorder()
+	e.ServeHTTP(rec3, req3)
+	require.Equal(t, http.StatusConflict, rec3.Code) // Rejected with 409
+}
+
+func TestBridgeReplyRejectsNoActiveHandoffUnknownID(t *testing.T) {
+	ctx := context.Background()
+	ts, tenant, _, enc := setupMiddlewareTestStore(t, ctx, "reply-unknown-handler", true)
+	defer ts.Close()
+
+	e := echo.New()
+	prof := &profile.Profile{Mode: "dev", EncryptionMasterKey: "super-secure-master-key-12345"}
+	svc := NewService(ts, prof)
+	svc.encryptionService = enc
+	handler := NewHandler(svc, ts)
+
+	e.POST("/api/v1/agent/:slug/bridge/reply", handler.HandleBridgeReply, RequireBridgeHMAC(ts, enc))
+
+	// No active handoff has been created yet.
+	// Try to reply.
+	bodyReply := []byte(`{"session_id": "session_unknown", "handoff_id": "unknown-id-9999", "message_id": "msg_unknown", "text": "hello"}`)
+	now := time.Now().Unix()
+	nonce := "reply_nonce_12345"
+	sig := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/reply-unknown-handler/bridge/reply", "application/json", now, nonce, bodyReply)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/reply-unknown-handler/bridge/reply", bytes.NewReader(bodyReply))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req.Header.Set("X-Bridge-Nonce", nonce)
+	req.Header.Set("X-Bridge-Signature", sig)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusNotFound, rec.Code) // Rejected with 404
+}
+
+func TestBridgeReplyRejectsOversizedMessageID(t *testing.T) {
+	ctx := context.Background()
+	ts, tenant, _, enc := setupMiddlewareTestStore(t, ctx, "reply-oversized-id", true)
+	defer ts.Close()
+
+	e := echo.New()
+	prof := &profile.Profile{Mode: "dev", EncryptionMasterKey: "super-secure-master-key-12345"}
+	svc := NewService(ts, prof)
+	svc.encryptionService = enc
+	handler := NewHandler(svc, ts)
+
+	e.POST("/api/v1/agent/:slug/bridge/reply", handler.HandleBridgeReply, RequireBridgeHMAC(ts, enc))
+
+	// 129 characters client message ID
+	msgID := strings.Repeat("a", 129)
+	bodyReply := []byte(fmt.Sprintf(`{"session_id": "session_oversized", "handoff_id": "handoff-1", "message_id": "%s", "text": "hello"}`, msgID))
+	now := time.Now().Unix()
+	nonce := "reply_nonce_12345"
+	sig := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/reply-oversized-id/bridge/reply", "application/json", now, nonce, bodyReply)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/reply-oversized-id/bridge/reply", bytes.NewReader(bodyReply))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req.Header.Set("X-Bridge-Nonce", nonce)
+	req.Header.Set("X-Bridge-Signature", sig)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code) // Rejected with 400
+}
+
+func TestBridgeReplyRejectsUnsafeMessageID(t *testing.T) {
+	ctx := context.Background()
+	ts, tenant, _, enc := setupMiddlewareTestStore(t, ctx, "reply-unsafe-id", true)
+	defer ts.Close()
+
+	e := echo.New()
+	prof := &profile.Profile{Mode: "dev", EncryptionMasterKey: "super-secure-master-key-12345"}
+	svc := NewService(ts, prof)
+	svc.encryptionService = enc
+	handler := NewHandler(svc, ts)
+
+	e.POST("/api/v1/agent/:slug/bridge/reply", handler.HandleBridgeReply, RequireBridgeHMAC(ts, enc))
+
+	// Message ID with whitespace/special chars
+	msgID := "msg id unsafe!"
+	bodyReply := []byte(fmt.Sprintf(`{"session_id": "session_unsafe", "handoff_id": "handoff-1", "message_id": "%s", "text": "hello"}`, msgID))
+	now := time.Now().Unix()
+	nonce := "reply_nonce_12345"
+	sig := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/reply-unsafe-id/bridge/reply", "application/json", now, nonce, bodyReply)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/reply-unsafe-id/bridge/reply", bytes.NewReader(bodyReply))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req.Header.Set("X-Bridge-Nonce", nonce)
+	req.Header.Set("X-Bridge-Signature", sig)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code) // Rejected with 400
+}
+
+func TestBridgeReplyRejectsOversizedText(t *testing.T) {
+	ctx := context.Background()
+	ts, tenant, _, enc := setupMiddlewareTestStore(t, ctx, "reply-oversized-text", true)
+	defer ts.Close()
+
+	e := echo.New()
+	prof := &profile.Profile{Mode: "dev", EncryptionMasterKey: "super-secure-master-key-12345"}
+	svc := NewService(ts, prof)
+	svc.encryptionService = enc
+	handler := NewHandler(svc, ts)
+
+	e.POST("/api/v1/agent/:slug/bridge/reply", handler.HandleBridgeReply, RequireBridgeHMAC(ts, enc))
+
+	// 2001 characters text
+	text := strings.Repeat("x", 2001)
+	bodyReply := []byte(fmt.Sprintf(`{"session_id": "session_text", "handoff_id": "handoff-1", "message_id": "msg_id", "text": "%s"}`, text))
+	now := time.Now().Unix()
+	nonce := "reply_nonce_12345"
+	sig := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/reply-oversized-text/bridge/reply", "application/json", now, nonce, bodyReply)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/reply-oversized-text/bridge/reply", bytes.NewReader(bodyReply))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req.Header.Set("X-Bridge-Nonce", nonce)
+	req.Header.Set("X-Bridge-Signature", sig)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code) // Rejected with 400
+}
+
 
 func TestBridgeEndpointsDoNotRegisterSSE(t *testing.T) {
 	content, err := os.ReadFile("../v1.go")

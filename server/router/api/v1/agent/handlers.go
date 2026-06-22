@@ -11,11 +11,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
 	"github.com/usememos/memos/store"
@@ -200,7 +202,9 @@ func (h *Handler) HandleBridgeTakeover(c echo.Context) error {
 	})
 }
 
-// HandleBridgeReply validates a reply message for an active human handoff.
+var clientMessageIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+
+// HandleBridgeReply validates and persists a reply message for an active human handoff.
 func (h *Handler) HandleBridgeReply(c echo.Context) error {
 	ctx := c.Request().Context()
 	slug := c.Param("slug")
@@ -212,7 +216,10 @@ func (h *Handler) HandleBridgeReply(c echo.Context) error {
 	if req.SessionID == "" || req.HandoffID == "" || req.MessageID == "" || req.Text == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, store.ErrBridgeAuthMalformedRequest.Error())
 	}
-	if len(req.MessageID) > 128 || len(req.Text) > 2000 {
+	if len(req.Text) > 2000 {
+		return echo.NewHTTPError(http.StatusBadRequest, store.ErrBridgeAuthMalformedRequest.Error())
+	}
+	if !clientMessageIDPattern.MatchString(req.MessageID) {
 		return echo.NewHTTPError(http.StatusBadRequest, store.ErrBridgeAuthMalformedRequest.Error())
 	}
 	if err := store.ValidateExternalSessionID(req.SessionID); err != nil {
@@ -230,38 +237,34 @@ func (h *Handler) HandleBridgeReply(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
 	}
 
-	activeHandoff, err := h.store.FindActiveBridgeHandoff(ctx, tenant.ID, req.SessionID)
+	reply, err := h.store.CreateBridgeHandoffReplyIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         uuid.NewString(),
+		TenantID:        tenant.ID,
+		SessionID:       req.SessionID,
+		HandoffID:       req.HandoffID,
+		ClientMessageID: req.MessageID,
+		Text:            req.Text,
+		Now:             time.Now().Unix(),
+	})
 	if err != nil {
 		if errors.Is(err, store.ErrBridgeUnsupportedDatabase) {
 			return echo.NewHTTPError(http.StatusNotImplemented, store.ErrBridgeUnsupportedDatabase.Error())
 		}
+		if errors.Is(err, store.ErrBridgeHandoffNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, store.ErrBridgeHandoffNotFound.Error())
+		}
+		if errors.Is(err, store.ErrBridgeHandoffConflict) || errors.Is(err, store.ErrBridgeHandoffReplyTextMismatch) {
+			return echo.NewHTTPError(http.StatusConflict, err.Error())
+		}
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
-	if activeHandoff == nil {
-		// Verify if a stale handoff exists or if it's completely missing
-		_, err := h.store.GetBridgeHandoff(ctx, tenant.ID, req.SessionID, req.HandoffID)
-		if err != nil {
-			if errors.Is(err, store.ErrBridgeHandoffNotFound) {
-				return echo.NewHTTPError(http.StatusNotFound, store.ErrBridgeHandoffNotFound.Error())
-			}
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-		}
-		// Found handoff but it's not active anymore (already closed/stale) -> 409
-		return echo.NewHTTPError(http.StatusConflict, store.ErrBridgeHandoffConflict.Error())
-	}
-
-	// If active handoff is found, verify its handoff ID matches
-	if activeHandoff.HandoffID != req.HandoffID {
-		return echo.NewHTTPError(http.StatusConflict, store.ErrBridgeHandoffConflict.Error())
-	}
-
-	if activeHandoff.RoutingMode != store.BridgeRoutingModeHumanActive {
-		return echo.NewHTTPError(http.StatusConflict, "Active handoff is not human_active")
-	}
-
 	return c.JSON(http.StatusOK, BridgeReplyResponse{
-		Status: "reply_validated_not_persisted_not_delivered",
+		Status:         "reply_persisted_not_delivered",
+		ReplyID:        reply.ReplyID,
+		HandoffID:      reply.HandoffID,
+		MessageID:      reply.ClientMessageID,
+		DeliveryStatus: reply.DeliveryStatus,
 	})
 }
 
