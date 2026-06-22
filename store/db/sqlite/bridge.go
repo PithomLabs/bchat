@@ -304,6 +304,21 @@ func nullableStringPtr(value sql.NullString) *string {
 	return &result
 }
 
+func (d *DB) GetBridgeHandoff(ctx context.Context, tenantID int32, sessionID string, handoffID string) (*store.BridgeHandoff, error) {
+	if err := store.ValidateExternalSessionID(sessionID); err != nil {
+		return nil, err
+	}
+	row := d.db.QueryRowContext(ctx, bridgeHandoffSelect+` WHERE tenant_id = ? AND session_id = ? AND handoff_id = ?`, tenantID, sessionID, handoffID)
+	handoff, err := scanBridgeHandoff(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, store.ErrBridgeHandoffNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get bridge handoff: %w", err)
+	}
+	return handoff, nil
+}
+
 func isSQLiteConstraint(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "constraint failed")
 }

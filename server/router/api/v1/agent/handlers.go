@@ -93,6 +93,268 @@ func (h *Handler) HandleValidateTenant(c echo.Context) error {
 	})
 }
 
+// HandleBridgeTakeover starts or promotes a human handoff for a session.
+func (h *Handler) HandleBridgeTakeover(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	var req BridgeTakeoverRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, store.ErrBridgeAuthMalformedRequest.Error())
+	}
+	if req.SessionID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, store.ErrBridgeAuthMalformedRequest.Error())
+	}
+	if err := store.ValidateExternalSessionID(req.SessionID); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, store.ErrBridgeAuthMalformedRequest.Error())
+	}
+
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil {
+		if errors.Is(err, store.ErrBridgeUnsupportedDatabase) {
+			return echo.NewHTTPError(http.StatusNotImplemented, store.ErrBridgeUnsupportedDatabase.Error())
+		}
+		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
+	}
+	if tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
+	}
+
+	now := time.Now()
+	expiresAt := now.Add(24 * time.Hour)
+	_, _, err = h.store.EnsureBridgeExternalSession(ctx, tenant.ID, req.SessionID, now, expiresAt)
+	if err != nil {
+		if errors.Is(err, store.ErrBridgeUnsupportedDatabase) {
+			return echo.NewHTTPError(http.StatusNotImplemented, store.ErrBridgeUnsupportedDatabase.Error())
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to ensure external session: "+err.Error())
+	}
+
+	// 1. Fetch active handoff
+	activeHandoff, err := h.store.FindActiveBridgeHandoff(ctx, tenant.ID, req.SessionID)
+	if err != nil {
+		if errors.Is(err, store.ErrBridgeUnsupportedDatabase) {
+			return echo.NewHTTPError(http.StatusNotImplemented, store.ErrBridgeUnsupportedDatabase.Error())
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	// 2. Idempotency Check: if exactly one active human handoff exists and is human_active
+	if activeHandoff != nil {
+		if activeHandoff.RoutingMode == store.BridgeRoutingModeHumanActive {
+			return c.JSON(http.StatusOK, BridgeTakeoverResponse{
+				Status:    "success",
+				HandoffID: activeHandoff.HandoffID,
+				Handoff:   activeHandoff,
+			})
+		}
+		if activeHandoff.RoutingMode == store.BridgeRoutingModeHandoffQueued {
+			// promote
+			updated, err := h.store.UpdateBridgeHandoffRoutingModeCAS(
+				ctx, tenant.ID, req.SessionID, activeHandoff.Generation, activeHandoff.HandoffID,
+				activeHandoff.Version, store.BridgeRoutingModeHandoffQueued, store.BridgeRoutingModeHumanActive,
+				"takeover", now,
+			)
+			if err != nil {
+				if errors.Is(err, store.ErrBridgeHandoffConflict) {
+					return echo.NewHTTPError(http.StatusConflict, store.ErrBridgeHandoffConflict.Error())
+				}
+				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+			}
+			return c.JSON(http.StatusOK, BridgeTakeoverResponse{
+				Status:    "success",
+				HandoffID: updated.HandoffID,
+				Handoff:   updated,
+			})
+		}
+		// Conflicting mode
+		return echo.NewHTTPError(http.StatusConflict, store.ErrBridgeHandoffConflict.Error())
+	}
+
+	// 3. No active handoff: create one (starts in handoff_queued)
+	created, err := h.store.CreateBridgeHandoff(ctx, tenant.ID, req.SessionID, now)
+	if err != nil {
+		if errors.Is(err, store.ErrBridgeHandoffConflict) {
+			return echo.NewHTTPError(http.StatusConflict, store.ErrBridgeHandoffConflict.Error())
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	// Promote created handoff to human_active
+	updated, err := h.store.UpdateBridgeHandoffRoutingModeCAS(
+		ctx, tenant.ID, req.SessionID, created.Generation, created.HandoffID,
+		created.Version, store.BridgeRoutingModeHandoffQueued, store.BridgeRoutingModeHumanActive,
+		"takeover", now,
+	)
+	if err != nil {
+		if errors.Is(err, store.ErrBridgeHandoffConflict) {
+			return echo.NewHTTPError(http.StatusConflict, store.ErrBridgeHandoffConflict.Error())
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(http.StatusOK, BridgeTakeoverResponse{
+		Status:    "success",
+		HandoffID: updated.HandoffID,
+		Handoff:   updated,
+	})
+}
+
+// HandleBridgeReply validates a reply message for an active human handoff.
+func (h *Handler) HandleBridgeReply(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	var req BridgeReplyRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, store.ErrBridgeAuthMalformedRequest.Error())
+	}
+	if req.SessionID == "" || req.HandoffID == "" || req.MessageID == "" || req.Text == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, store.ErrBridgeAuthMalformedRequest.Error())
+	}
+	if len(req.MessageID) > 128 || len(req.Text) > 2000 {
+		return echo.NewHTTPError(http.StatusBadRequest, store.ErrBridgeAuthMalformedRequest.Error())
+	}
+	if err := store.ValidateExternalSessionID(req.SessionID); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, store.ErrBridgeAuthMalformedRequest.Error())
+	}
+
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil {
+		if errors.Is(err, store.ErrBridgeUnsupportedDatabase) {
+			return echo.NewHTTPError(http.StatusNotImplemented, store.ErrBridgeUnsupportedDatabase.Error())
+		}
+		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
+	}
+	if tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
+	}
+
+	activeHandoff, err := h.store.FindActiveBridgeHandoff(ctx, tenant.ID, req.SessionID)
+	if err != nil {
+		if errors.Is(err, store.ErrBridgeUnsupportedDatabase) {
+			return echo.NewHTTPError(http.StatusNotImplemented, store.ErrBridgeUnsupportedDatabase.Error())
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	if activeHandoff == nil {
+		// Verify if a stale handoff exists or if it's completely missing
+		_, err := h.store.GetBridgeHandoff(ctx, tenant.ID, req.SessionID, req.HandoffID)
+		if err != nil {
+			if errors.Is(err, store.ErrBridgeHandoffNotFound) {
+				return echo.NewHTTPError(http.StatusNotFound, store.ErrBridgeHandoffNotFound.Error())
+			}
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		// Found handoff but it's not active anymore (already closed/stale) -> 409
+		return echo.NewHTTPError(http.StatusConflict, store.ErrBridgeHandoffConflict.Error())
+	}
+
+	// If active handoff is found, verify its handoff ID matches
+	if activeHandoff.HandoffID != req.HandoffID {
+		return echo.NewHTTPError(http.StatusConflict, store.ErrBridgeHandoffConflict.Error())
+	}
+
+	if activeHandoff.RoutingMode != store.BridgeRoutingModeHumanActive {
+		return echo.NewHTTPError(http.StatusConflict, "Active handoff is not human_active")
+	}
+
+	return c.JSON(http.StatusOK, BridgeReplyResponse{
+		Status: "reply_validated_not_persisted_not_delivered",
+	})
+}
+
+// HandleBridgeRelease transitions an active human handoff to closed.
+func (h *Handler) HandleBridgeRelease(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	var req BridgeReleaseRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, store.ErrBridgeAuthMalformedRequest.Error())
+	}
+	if req.SessionID == "" || req.HandoffID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, store.ErrBridgeAuthMalformedRequest.Error())
+	}
+	if req.Reason != nil && len(*req.Reason) > 512 {
+		return echo.NewHTTPError(http.StatusBadRequest, store.ErrBridgeAuthMalformedRequest.Error())
+	}
+	if err := store.ValidateExternalSessionID(req.SessionID); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, store.ErrBridgeAuthMalformedRequest.Error())
+	}
+
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil {
+		if errors.Is(err, store.ErrBridgeUnsupportedDatabase) {
+			return echo.NewHTTPError(http.StatusNotImplemented, store.ErrBridgeUnsupportedDatabase.Error())
+		}
+		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
+	}
+	if tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
+	}
+
+	activeHandoff, err := h.store.FindActiveBridgeHandoff(ctx, tenant.ID, req.SessionID)
+	if err != nil {
+		if errors.Is(err, store.ErrBridgeUnsupportedDatabase) {
+			return echo.NewHTTPError(http.StatusNotImplemented, store.ErrBridgeUnsupportedDatabase.Error())
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	now := time.Now()
+	reason := ""
+	if req.Reason != nil {
+		reason = *req.Reason
+	}
+
+	if activeHandoff == nil {
+		// Fetch the handoff by handoffID to verify if it was closed or does not exist
+		handoff, err := h.store.GetBridgeHandoff(ctx, tenant.ID, req.SessionID, req.HandoffID)
+		if err != nil {
+			if errors.Is(err, store.ErrBridgeHandoffNotFound) {
+				return echo.NewHTTPError(http.StatusNotFound, store.ErrBridgeHandoffNotFound.Error())
+			}
+			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		}
+		if handoff.RoutingMode == store.BridgeRoutingModeClosed {
+			// Idempotent success: it is already closed
+			return c.JSON(http.StatusOK, BridgeReleaseResponse{
+				Status: "success",
+			})
+		}
+		// If found but in a different state, return 409 Conflict
+		return echo.NewHTTPError(http.StatusConflict, store.ErrBridgeHandoffConflict.Error())
+	}
+
+	// Active handoff exists. Verify ID matches.
+	if activeHandoff.HandoffID != req.HandoffID {
+		return echo.NewHTTPError(http.StatusConflict, store.ErrBridgeHandoffConflict.Error())
+	}
+
+	if activeHandoff.RoutingMode != store.BridgeRoutingModeHumanActive {
+		return echo.NewHTTPError(http.StatusConflict, "Active handoff is not human_active")
+	}
+
+	// Transition routing mode from human_active to closed
+	_, err = h.store.UpdateBridgeHandoffRoutingModeCAS(
+		ctx, tenant.ID, req.SessionID, activeHandoff.Generation, activeHandoff.HandoffID,
+		activeHandoff.Version, store.BridgeRoutingModeHumanActive, store.BridgeRoutingModeClosed,
+		reason, now,
+	)
+	if err != nil {
+		if errors.Is(err, store.ErrBridgeHandoffConflict) {
+			return echo.NewHTTPError(http.StatusConflict, store.ErrBridgeHandoffConflict.Error())
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(http.StatusOK, BridgeReleaseResponse{
+		Status: "success",
+	})
+}
+
 // HandleChatExternal handles external (anonymous) chat requests.
 // POST /api/v1/agent/:slug/chat/ext
 func (h *Handler) HandleChatExternal(c echo.Context) error {

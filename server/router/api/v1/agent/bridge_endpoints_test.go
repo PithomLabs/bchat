@@ -1,0 +1,787 @@
+package agent
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
+
+	"strings"
+
+	"github.com/labstack/echo/v4"
+	"github.com/stretchr/testify/require"
+	"github.com/usememos/memos/internal/profile"
+	"github.com/usememos/memos/store"
+)
+
+func TestBridgeEndpointsHMACSecurity(t *testing.T) {
+	ctx := context.Background()
+	ts, tenant, _, enc := setupMiddlewareTestStore(t, ctx, "hmac-security", true)
+	defer ts.Close()
+
+	e := echo.New()
+	prof := &profile.Profile{
+		Mode:                "dev",
+		EncryptionMasterKey: "super-secure-master-key-12345",
+	}
+	svc := NewService(ts, prof)
+	svc.encryptionService = enc
+	handler := NewHandler(svc, ts)
+
+	// Setup routes
+	e.POST("/api/v1/agent/:slug/bridge/takeover", handler.HandleBridgeTakeover, RequireBridgeHMAC(ts, enc))
+	e.POST("/api/v1/agent/:slug/bridge/reply", handler.HandleBridgeReply, RequireBridgeHMAC(ts, enc))
+	e.POST("/api/v1/agent/:slug/bridge/release", handler.HandleBridgeRelease, RequireBridgeHMAC(ts, enc))
+
+	endpoints := []struct {
+		path string
+		body []byte
+	}{
+		{
+			path: "/api/v1/agent/hmac-security/bridge/takeover",
+			body: []byte(`{"session_id": "session_1"}`),
+		},
+		{
+			path: "/api/v1/agent/hmac-security/bridge/reply",
+			body: []byte(`{"session_id": "session_1", "handoff_id": "handoff_1", "message_id": "msg_1", "text": "hello"}`),
+		},
+		{
+			path: "/api/v1/agent/hmac-security/bridge/release",
+			body: []byte(`{"session_id": "session_1", "handoff_id": "handoff_1"}`),
+		},
+	}
+
+	for _, ep := range endpoints {
+		t.Run("no_auth_"+ep.path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, ep.path, bytes.NewReader(ep.body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusUnauthorized, rec.Code)
+		})
+
+		t.Run("invalid_sig_"+ep.path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, ep.path, bytes.NewReader(ep.body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer my-test-key-id-123")
+			req.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(time.Now().Unix(), 10))
+			req.Header.Set("X-Bridge-Nonce", "nonce_1234567890123")
+			req.Header.Set("X-Bridge-Signature", "v1=invalid")
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Logf("Response body for %s: %s", ep.path, rec.Body.String())
+			}
+			require.Equal(t, http.StatusUnauthorized, rec.Code)
+		})
+
+		t.Run("replay_nonce_"+ep.path, func(t *testing.T) {
+			now := time.Now().Unix()
+			nonce := "replay_nonce_" + strings.ReplaceAll(ep.path, "/", "_")
+
+			// Dynamically use correct handoff ID if active handoff exists
+			body := ep.body
+			active, _ := ts.FindActiveBridgeHandoff(ctx, tenant.ID, "session_1")
+			if active != nil {
+				if strings.Contains(ep.path, "reply") {
+					reqObj := BridgeReplyRequest{
+						SessionID: "session_1",
+						HandoffID: active.HandoffID,
+						MessageID: "msg_1",
+						Text:      "hello",
+					}
+					body, _ = json.Marshal(reqObj)
+				} else if strings.Contains(ep.path, "release") {
+					reason := "release reason"
+					reqObj := BridgeReleaseRequest{
+						SessionID: "session_1",
+						HandoffID: active.HandoffID,
+						Reason:    &reason,
+					}
+					body, _ = json.Marshal(reqObj)
+				}
+			}
+
+			sig := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, ep.path, "application/json", now, nonce, body)
+
+			// First request should work (or fail with handler error but NOT 409)
+			req1 := httptest.NewRequest(http.MethodPost, ep.path, bytes.NewReader(body))
+			req1.Header.Set("Content-Type", "application/json")
+			req1.Header.Set("Authorization", "Bearer my-test-key-id-123")
+			req1.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+			req1.Header.Set("X-Bridge-Nonce", nonce)
+			req1.Header.Set("X-Bridge-Signature", sig)
+			rec1 := httptest.NewRecorder()
+			e.ServeHTTP(rec1, req1)
+			if rec1.Code == http.StatusConflict || rec1.Code == http.StatusBadRequest {
+				t.Logf("Replay nonce first request body for %s: %s (status=%d)", ep.path, rec1.Body.String(), rec1.Code)
+			}
+			require.NotEqual(t, http.StatusConflict, rec1.Code)
+
+			// Second request with same nonce must be 409
+			req2 := httptest.NewRequest(http.MethodPost, ep.path, bytes.NewReader(body))
+			req2.Header.Set("Content-Type", "application/json")
+			req2.Header.Set("Authorization", "Bearer my-test-key-id-123")
+			req2.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+			req2.Header.Set("X-Bridge-Nonce", nonce)
+			req2.Header.Set("X-Bridge-Signature", sig)
+			rec2 := httptest.NewRecorder()
+			e.ServeHTTP(rec2, req2)
+			if rec2.Code != http.StatusConflict {
+				t.Logf("Replay nonce second request body for %s: %s (status=%d)", ep.path, rec2.Body.String(), rec2.Code)
+			}
+			require.Equal(t, http.StatusConflict, rec2.Code)
+		})
+
+		t.Run("wrong_path_"+ep.path, func(t *testing.T) {
+			now := time.Now().Unix()
+			nonce := "nonce_wrong_path_" + strings.ReplaceAll(ep.path, "/", "_")
+
+			// Dynamically use correct handoff ID if active handoff exists
+			body := ep.body
+			active, _ := ts.FindActiveBridgeHandoff(ctx, tenant.ID, "session_1")
+			if active != nil {
+				if strings.Contains(ep.path, "reply") {
+					reqObj := BridgeReplyRequest{
+						SessionID: "session_1",
+						HandoffID: active.HandoffID,
+						MessageID: "msg_1",
+						Text:      "hello",
+					}
+					body, _ = json.Marshal(reqObj)
+				} else if strings.Contains(ep.path, "release") {
+					reason := "release reason"
+					reqObj := BridgeReleaseRequest{
+						SessionID: "session_1",
+						HandoffID: active.HandoffID,
+						Reason:    &reason,
+					}
+					body, _ = json.Marshal(reqObj)
+				}
+			}
+
+			// Compute signature over a different path
+			sig := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, ep.path+"/wrong", "application/json", now, nonce, body)
+
+			req := httptest.NewRequest(http.MethodPost, ep.path, bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer my-test-key-id-123")
+			req.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+			req.Header.Set("X-Bridge-Nonce", nonce)
+			req.Header.Set("X-Bridge-Signature", sig)
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Logf("Wrong path response body for %s: %s (status=%d)", ep.path, rec.Body.String(), rec.Code)
+			}
+			require.Equal(t, http.StatusUnauthorized, rec.Code)
+		})
+
+		t.Run("wrong_method_"+ep.path, func(t *testing.T) {
+			now := time.Now().Unix()
+			nonce := "nonce_wrong_method_" + strings.ReplaceAll(ep.path, "/", "_")
+
+			// Dynamically use correct handoff ID if active handoff exists
+			body := ep.body
+			active, _ := ts.FindActiveBridgeHandoff(ctx, tenant.ID, "session_1")
+			if active != nil {
+				if strings.Contains(ep.path, "reply") {
+					reqObj := BridgeReplyRequest{
+						SessionID: "session_1",
+						HandoffID: active.HandoffID,
+						MessageID: "msg_1",
+						Text:      "hello",
+					}
+					body, _ = json.Marshal(reqObj)
+				} else if strings.Contains(ep.path, "release") {
+					reason := "release reason"
+					reqObj := BridgeReleaseRequest{
+						SessionID: "session_1",
+						HandoffID: active.HandoffID,
+						Reason:    &reason,
+					}
+					body, _ = json.Marshal(reqObj)
+				}
+			}
+
+			// Compute signature over GET
+			sig := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodGet, ep.path, "application/json", now, nonce, body)
+
+			req := httptest.NewRequest(http.MethodPost, ep.path, bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer my-test-key-id-123")
+			req.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+			req.Header.Set("X-Bridge-Nonce", nonce)
+			req.Header.Set("X-Bridge-Signature", sig)
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Logf("Wrong method response body for %s: %s (status=%d)", ep.path, rec.Body.String(), rec.Code)
+			}
+			require.Equal(t, http.StatusUnauthorized, rec.Code)
+		})
+
+		t.Run("query_param_rejection_"+ep.path, func(t *testing.T) {
+			now := time.Now().Unix()
+			nonce := "query_nonce_" + strings.ReplaceAll(strings.ReplaceAll(ep.path, "/", "_"), "-", "_")
+			if len(nonce) < 16 {
+				nonce = nonce + strings.Repeat("x", 16-len(nonce))
+			}
+
+			// Dynamically use correct handoff ID if active handoff exists
+			body := ep.body
+			active, _ := ts.FindActiveBridgeHandoff(ctx, tenant.ID, "session_1")
+			if active != nil {
+				if strings.Contains(ep.path, "reply") {
+					reqObj := BridgeReplyRequest{
+						SessionID: "session_1",
+						HandoffID: active.HandoffID,
+						MessageID: "msg_1",
+						Text:      "hello",
+					}
+					body, _ = json.Marshal(reqObj)
+				} else if strings.Contains(ep.path, "release") {
+					reason := "release reason"
+					reqObj := BridgeReleaseRequest{
+						SessionID: "session_1",
+						HandoffID: active.HandoffID,
+						Reason:    &reason,
+					}
+					body, _ = json.Marshal(reqObj)
+				}
+			}
+
+			sig := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, ep.path, "application/json", now, nonce, body)
+
+			for _, paramName := range []string{"key_id", "bridge_key", "bridge_client_id", "client_id", "api_key", "signature", "nonce"} {
+				req := httptest.NewRequest(http.MethodPost, ep.path+"?"+paramName+"=some-val", bytes.NewReader(body))
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Authorization", "Bearer my-test-key-id-123")
+				req.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+				req.Header.Set("X-Bridge-Nonce", nonce)
+				req.Header.Set("X-Bridge-Signature", sig)
+				rec := httptest.NewRecorder()
+				e.ServeHTTP(rec, req)
+				if rec.Code != http.StatusBadRequest {
+					t.Logf("Query param rejection (%s) response body: %s (status=%d)", paramName, rec.Body.String(), rec.Code)
+				}
+				require.Equal(t, http.StatusBadRequest, rec.Code)
+			}
+		})
+	}
+}
+
+func TestBridgeTakeoverConcurrentSameSessionSingleActiveHandoff(t *testing.T) {
+	ctx := context.Background()
+	ts, tenant, _, enc := setupMiddlewareTestStore(t, ctx, "concurrent-takeover", true)
+	defer ts.Close()
+
+	e := echo.New()
+	prof := &profile.Profile{
+		Mode:                "dev",
+		EncryptionMasterKey: "super-secure-master-key-12345",
+	}
+	svc := NewService(ts, prof)
+	svc.encryptionService = enc
+	handler := NewHandler(svc, ts)
+
+	e.POST("/api/v1/agent/:slug/bridge/takeover", handler.HandleBridgeTakeover, RequireBridgeHMAC(ts, enc))
+
+	body := []byte(`{"session_id": "session_concurrent"}`)
+	now := time.Now().Unix()
+
+	// Perform 10 concurrent requests to takeover the same session
+	var wg sync.WaitGroup
+	results := make(chan *httptest.ResponseRecorder, 10)
+
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/concurrent-takeover/bridge/takeover", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer my-test-key-id-123")
+			req.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+			req.Header.Set("X-Bridge-Nonce", fmt.Sprintf("takeover_nonce_%d", index))
+			sig := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/concurrent-takeover/bridge/takeover", "application/json", now, fmt.Sprintf("takeover_nonce_%d", index), body)
+			req.Header.Set("X-Bridge-Signature", sig)
+
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+			results <- rec
+		}(i)
+	}
+
+	wg.Wait()
+	close(results)
+
+	successCount := 0
+	conflictCount := 0
+
+	for rec := range results {
+		if rec.Code == http.StatusOK {
+			var resp BridgeTakeoverResponse
+			err := json.Unmarshal(rec.Body.Bytes(), &resp)
+			require.NoError(t, err)
+			require.Equal(t, "success", resp.Status)
+			require.NotEmpty(t, resp.HandoffID)
+			successCount++
+		} else if rec.Code == http.StatusConflict {
+			conflictCount++
+		} else {
+			t.Errorf("Unexpected status code %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+
+	// At least one should succeed to create/takeover
+	require.GreaterOrEqual(t, successCount, 1)
+	require.Equal(t, 10, successCount+conflictCount)
+
+	// In SQLite with proper isolation, we should end up with exactly one active handoff in the database
+	activeHandoff, err := ts.FindActiveBridgeHandoff(ctx, tenant.ID, "session_concurrent")
+	require.NoError(t, err)
+	require.NotNil(t, activeHandoff)
+	require.Equal(t, store.BridgeRoutingModeHumanActive, activeHandoff.RoutingMode)
+}
+
+func TestBridgeReplyRejectsStaleHandoffID(t *testing.T) {
+	ctx := context.Background()
+	ts, tenant, _, enc := setupMiddlewareTestStore(t, ctx, "stale-reply", true)
+	defer ts.Close()
+
+	e := echo.New()
+	prof := &profile.Profile{
+		Mode:                "dev",
+		EncryptionMasterKey: "super-secure-master-key-12345",
+	}
+	svc := NewService(ts, prof)
+	svc.encryptionService = enc
+	handler := NewHandler(svc, ts)
+	e.POST("/api/v1/agent/:slug/bridge/takeover", handler.HandleBridgeTakeover, RequireBridgeHMAC(ts, enc))
+	e.POST("/api/v1/agent/:slug/bridge/reply", handler.HandleBridgeReply, RequireBridgeHMAC(ts, enc))
+	e.POST("/api/v1/agent/:slug/bridge/release", handler.HandleBridgeRelease, RequireBridgeHMAC(ts, enc))
+
+	// 1. Takeover session -> creates handoff 1
+	bodyTakeover := []byte(`{"session_id": "session_stale"}`)
+	now := time.Now().Unix()
+	nonce1 := "takeover_nonce_1"
+	sig1 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/stale-reply/bridge/takeover", "application/json", now, nonce1, bodyTakeover)
+
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/stale-reply/bridge/takeover", bytes.NewReader(bodyTakeover))
+	req1.Header.Set("Content-Type", "application/json")
+	req1.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req1.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req1.Header.Set("X-Bridge-Nonce", nonce1)
+	req1.Header.Set("X-Bridge-Signature", sig1)
+	rec1 := httptest.NewRecorder()
+	e.ServeHTTP(rec1, req1)
+	require.Equal(t, http.StatusOK, rec1.Code)
+
+	var resp1 BridgeTakeoverResponse
+	err := json.Unmarshal(rec1.Body.Bytes(), &resp1)
+	require.NoError(t, err)
+	handoffID1 := resp1.HandoffID
+
+	// 2. Release handoff 1
+	bodyRelease := []byte(fmt.Sprintf(`{"session_id": "session_stale", "handoff_id": "%s"}`, handoffID1))
+	nonce2 := "release_nonce_12"
+	sig2 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/stale-reply/bridge/release", "application/json", now, nonce2, bodyRelease)
+
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/stale-reply/bridge/release", bytes.NewReader(bodyRelease))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req2.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req2.Header.Set("X-Bridge-Nonce", nonce2)
+	req2.Header.Set("X-Bridge-Signature", sig2)
+	rec2 := httptest.NewRecorder()
+	e.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Logf("stale-reply step 2 response body: %s", rec2.Body.String())
+	}
+	require.Equal(t, http.StatusOK, rec2.Code)
+
+	// 3. Takeover session again -> creates handoff 2 (active)
+	nonce3 := "takeover_nonce_2"
+	sig3 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/stale-reply/bridge/takeover", "application/json", now, nonce3, bodyTakeover)
+
+	req3 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/stale-reply/bridge/takeover", bytes.NewReader(bodyTakeover))
+	req3.Header.Set("Content-Type", "application/json")
+	req3.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req3.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req3.Header.Set("X-Bridge-Nonce", nonce3)
+	req3.Header.Set("X-Bridge-Signature", sig3)
+	rec3 := httptest.NewRecorder()
+	e.ServeHTTP(rec3, req3)
+	require.Equal(t, http.StatusOK, rec3.Code)
+
+	// 4. Try to reply using handoffID1 (stale) while handoff 2 is active
+	bodyReply := []byte(fmt.Sprintf(`{"session_id": "session_stale", "handoff_id": "%s", "message_id": "msg_stale", "text": "stale message"}`, handoffID1))
+	nonce4 := "reply_nonce_1234"
+	sig4 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/stale-reply/bridge/reply", "application/json", now, nonce4, bodyReply)
+
+	req4 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/stale-reply/bridge/reply", bytes.NewReader(bodyReply))
+	req4.Header.Set("Content-Type", "application/json")
+	req4.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req4.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req4.Header.Set("X-Bridge-Nonce", nonce4)
+	req4.Header.Set("X-Bridge-Signature", sig4)
+	rec4 := httptest.NewRecorder()
+	e.ServeHTTP(rec4, req4)
+	// Must fail with 409 Conflict due to mismatched/stale handoffID
+	require.Equal(t, http.StatusConflict, rec4.Code)
+}
+
+func TestBridgeReleaseRejectsStaleHandoffID(t *testing.T) {
+	ctx := context.Background()
+	ts, tenant, _, enc := setupMiddlewareTestStore(t, ctx, "stale-release", true)
+	defer ts.Close()
+
+	e := echo.New()
+	prof := &profile.Profile{
+		Mode:                "dev",
+		EncryptionMasterKey: "super-secure-master-key-12345",
+	}
+	svc := NewService(ts, prof)
+	svc.encryptionService = enc
+	handler := NewHandler(svc, ts)
+	e.POST("/api/v1/agent/:slug/bridge/takeover", handler.HandleBridgeTakeover, RequireBridgeHMAC(ts, enc))
+	e.POST("/api/v1/agent/:slug/bridge/release", handler.HandleBridgeRelease, RequireBridgeHMAC(ts, enc))
+
+	// 1. Takeover session -> creates handoff 1
+	bodyTakeover := []byte(`{"session_id": "session_stale_release"}`)
+	now := time.Now().Unix()
+	nonce1 := "takeover_nonce_1"
+	sig1 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/stale-release/bridge/takeover", "application/json", now, nonce1, bodyTakeover)
+
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/stale-release/bridge/takeover", bytes.NewReader(bodyTakeover))
+	req1.Header.Set("Content-Type", "application/json")
+	req1.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req1.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req1.Header.Set("X-Bridge-Nonce", nonce1)
+	req1.Header.Set("X-Bridge-Signature", sig1)
+	rec1 := httptest.NewRecorder()
+	e.ServeHTTP(rec1, req1)
+	require.Equal(t, http.StatusOK, rec1.Code)
+
+	var resp1 BridgeTakeoverResponse
+	err := json.Unmarshal(rec1.Body.Bytes(), &resp1)
+	require.NoError(t, err)
+	handoffID1 := resp1.HandoffID
+
+	// 2. Release handoff 1
+	bodyRelease1 := []byte(fmt.Sprintf(`{"session_id": "session_stale_release", "handoff_id": "%s"}`, handoffID1))
+	nonce2 := "release_nonce_12"
+	sig2 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/stale-release/bridge/release", "application/json", now, nonce2, bodyRelease1)
+
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/stale-release/bridge/release", bytes.NewReader(bodyRelease1))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req2.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req2.Header.Set("X-Bridge-Nonce", nonce2)
+	req2.Header.Set("X-Bridge-Signature", sig2)
+	rec2 := httptest.NewRecorder()
+	e.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Logf("stale-release step 2 response body: %s", rec2.Body.String())
+	}
+	require.Equal(t, http.StatusOK, rec2.Code)
+
+	// 3. Takeover session again -> creates handoff 2 (active)
+	nonce3 := "takeover_nonce_2"
+	sig3 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/stale-release/bridge/takeover", "application/json", now, nonce3, bodyTakeover)
+
+	req3 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/stale-release/bridge/takeover", bytes.NewReader(bodyTakeover))
+	req3.Header.Set("Content-Type", "application/json")
+	req3.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req3.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req3.Header.Set("X-Bridge-Nonce", nonce3)
+	req3.Header.Set("X-Bridge-Signature", sig3)
+	rec3 := httptest.NewRecorder()
+	e.ServeHTTP(rec3, req3)
+	require.Equal(t, http.StatusOK, rec3.Code)
+
+	// 4. Try to release using handoffID1 (stale) while handoff 2 is active
+	nonce4 := "release_nonce_22"
+	sig4 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/stale-release/bridge/release", "application/json", now, nonce4, bodyRelease1)
+
+	req4 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/stale-release/bridge/release", bytes.NewReader(bodyRelease1))
+	req4.Header.Set("Content-Type", "application/json")
+	req4.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req4.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req4.Header.Set("X-Bridge-Nonce", nonce4)
+	req4.Header.Set("X-Bridge-Signature", sig4)
+	rec4 := httptest.NewRecorder()
+	e.ServeHTTP(rec4, req4)
+	// Must fail with 409 Conflict due to mismatched/stale handoffID
+	require.Equal(t, http.StatusConflict, rec4.Code)
+}
+
+func TestBridgeReleaseNoActiveHandoffSemantics(t *testing.T) {
+	ctx := context.Background()
+	ts, tenant, _, enc := setupMiddlewareTestStore(t, ctx, "no-active", true)
+	defer ts.Close()
+
+	e := echo.New()
+	prof := &profile.Profile{
+		Mode:                "dev",
+		EncryptionMasterKey: "super-secure-master-key-12345",
+	}
+	svc := NewService(ts, prof)
+	svc.encryptionService = enc
+	handler := NewHandler(svc, ts)
+	e.POST("/api/v1/agent/:slug/bridge/takeover", handler.HandleBridgeTakeover, RequireBridgeHMAC(ts, enc))
+	e.POST("/api/v1/agent/:slug/bridge/release", handler.HandleBridgeRelease, RequireBridgeHMAC(ts, enc))
+
+	// 1. Call release with nonexistent handoff ID
+	bodyReleaseNonexistent := []byte(`{"session_id": "session_no_active", "handoff_id": "nonexistent_handoff"}`)
+	now := time.Now().Unix()
+	nonce1 := "release_nonce_12"
+	sig1 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/no-active/bridge/release", "application/json", now, nonce1, bodyReleaseNonexistent)
+
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/no-active/bridge/release", bytes.NewReader(bodyReleaseNonexistent))
+	req1.Header.Set("Content-Type", "application/json")
+	req1.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req1.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req1.Header.Set("X-Bridge-Nonce", nonce1)
+	req1.Header.Set("X-Bridge-Signature", sig1)
+	rec1 := httptest.NewRecorder()
+	e.ServeHTTP(rec1, req1)
+	// Must return 404 since there is no active handoff and GetBridgeHandoff returns ErrBridgeHandoffNotFound
+	require.Equal(t, http.StatusNotFound, rec1.Code)
+
+	// 2. Takeover session -> creates active handoff
+	bodyTakeover := []byte(`{"session_id": "session_no_active"}`)
+	nonce2 := "takeover_nonce_1"
+	sig2 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/no-active/bridge/takeover", "application/json", now, nonce2, bodyTakeover)
+
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/no-active/bridge/takeover", bytes.NewReader(bodyTakeover))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req2.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req2.Header.Set("X-Bridge-Nonce", nonce2)
+	req2.Header.Set("X-Bridge-Signature", sig2)
+	rec2 := httptest.NewRecorder()
+	e.ServeHTTP(rec2, req2)
+	require.Equal(t, http.StatusOK, rec2.Code)
+
+	var resp2 BridgeTakeoverResponse
+	err := json.Unmarshal(rec2.Body.Bytes(), &resp2)
+	require.NoError(t, err)
+	handoffID := resp2.HandoffID
+
+	// 3. Release first time -> should transition successfully
+	bodyRelease := []byte(fmt.Sprintf(`{"session_id": "session_no_active", "handoff_id": "%s"}`, handoffID))
+	nonce3 := "release_nonce_22"
+	sig3 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/no-active/bridge/release", "application/json", now, nonce3, bodyRelease)
+
+	req3 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/no-active/bridge/release", bytes.NewReader(bodyRelease))
+	req3.Header.Set("Content-Type", "application/json")
+	req3.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req3.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req3.Header.Set("X-Bridge-Nonce", nonce3)
+	req3.Header.Set("X-Bridge-Signature", sig3)
+	rec3 := httptest.NewRecorder()
+	e.ServeHTTP(rec3, req3)
+	if rec3.Code != http.StatusOK {
+		t.Logf("no-active step 3 response body: %s", rec3.Body.String())
+	}
+	require.Equal(t, http.StatusOK, rec3.Code)
+
+	// 4. Release second time (idempotency check) -> no active handoff exists, but GetBridgeHandoff finds it and is in Closed state.
+	nonce4 := "release_nonce_32"
+	sig4 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/no-active/bridge/release", "application/json", now, nonce4, bodyRelease)
+
+	req4 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/no-active/bridge/release", bytes.NewReader(bodyRelease))
+	req4.Header.Set("Content-Type", "application/json")
+	req4.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req4.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req4.Header.Set("X-Bridge-Nonce", nonce4)
+	req4.Header.Set("X-Bridge-Signature", sig4)
+	rec4 := httptest.NewRecorder()
+	e.ServeHTTP(rec4, req4)
+	// Must return 200 OK (idempotent success)
+	require.Equal(t, http.StatusOK, rec4.Code)
+}
+
+func TestBridgeReplySuccessValidationOnly(t *testing.T) {
+	ctx := context.Background()
+	ts, tenant, _, enc := setupMiddlewareTestStore(t, ctx, "reply-success", true)
+	defer ts.Close()
+
+	e := echo.New()
+	prof := &profile.Profile{
+		Mode:                "dev",
+		EncryptionMasterKey: "super-secure-master-key-12345",
+	}
+	svc := NewService(ts, prof)
+	svc.encryptionService = enc
+	handler := NewHandler(svc, ts)
+
+	e.POST("/api/v1/agent/:slug/bridge/takeover", handler.HandleBridgeTakeover, RequireBridgeHMAC(ts, enc))
+	e.POST("/api/v1/agent/:slug/bridge/reply", handler.HandleBridgeReply, RequireBridgeHMAC(ts, enc))
+
+	dbConn := ts.GetDriver().GetDB()
+
+	// 1. Create takeover / active handoff
+	bodyTakeover := []byte(`{"session_id": "session_reply_success"}`)
+	now := time.Now().Unix()
+	nonce1 := "takeover_nonce_reply_success"
+	sig1 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/reply-success/bridge/takeover", "application/json", now, nonce1, bodyTakeover)
+
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/reply-success/bridge/takeover", bytes.NewReader(bodyTakeover))
+	req1.Header.Set("Content-Type", "application/json")
+	req1.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req1.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req1.Header.Set("X-Bridge-Nonce", nonce1)
+	req1.Header.Set("X-Bridge-Signature", sig1)
+
+	rec1 := httptest.NewRecorder()
+	e.ServeHTTP(rec1, req1)
+	require.Equal(t, http.StatusOK, rec1.Code)
+
+	var respTakeover BridgeTakeoverResponse
+	err := json.Unmarshal(rec1.Body.Bytes(), &respTakeover)
+	require.NoError(t, err)
+	require.NotEmpty(t, respTakeover.HandoffID)
+	handoffID := respTakeover.HandoffID
+
+	// Query state before reply to ensure no side effects
+	sessionBefore, err := ts.FindBridgeExternalSession(ctx, tenant.ID, "session_reply_success")
+	require.NoError(t, err)
+	require.NotNil(t, sessionBefore)
+
+	handoffBefore, err := ts.GetBridgeHandoff(ctx, tenant.ID, "session_reply_success", handoffID)
+	require.NoError(t, err)
+	require.NotNil(t, handoffBefore)
+
+	var memoCountBefore int
+	err = dbConn.QueryRowContext(ctx, "SELECT COUNT(*) FROM memo").Scan(&memoCountBefore)
+	require.NoError(t, err)
+
+	// 2. Call reply with valid handoff_id/message_id/text
+	bodyReply := []byte(fmt.Sprintf(`{"session_id": "session_reply_success", "handoff_id": "%s", "message_id": "msg_reply_success", "text": "validation only text"}`, handoffID))
+	nonce2 := "reply_nonce_reply_success"
+	sig2 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/reply-success/bridge/reply", "application/json", now, nonce2, bodyReply)
+
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/reply-success/bridge/reply", bytes.NewReader(bodyReply))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req2.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req2.Header.Set("X-Bridge-Nonce", nonce2)
+	req2.Header.Set("X-Bridge-Signature", sig2)
+
+	rec2 := httptest.NewRecorder()
+	e.ServeHTTP(rec2, req2)
+	require.Equal(t, http.StatusOK, rec2.Code)
+
+	var respReply BridgeReplyResponse
+	err = json.Unmarshal(rec2.Body.Bytes(), &respReply)
+	require.NoError(t, err)
+
+	// Assert response status exactly reply_validated_not_persisted_not_delivered
+	require.Equal(t, "reply_validated_not_persisted_not_delivered", respReply.Status)
+
+	// Assert no database state side effects:
+	// Verify session and handoff did not change
+	sessionAfter, err := ts.FindBridgeExternalSession(ctx, tenant.ID, "session_reply_success")
+	require.NoError(t, err)
+	require.Equal(t, sessionBefore.Status, sessionAfter.Status)
+	require.Equal(t, sessionBefore.UpdatedAt.Unix(), sessionAfter.UpdatedAt.Unix())
+
+	handoffAfter, err := ts.GetBridgeHandoff(ctx, tenant.ID, "session_reply_success", handoffID)
+	require.NoError(t, err)
+	require.Equal(t, handoffBefore.RoutingMode, handoffAfter.RoutingMode)
+	require.Equal(t, handoffBefore.Active, handoffAfter.Active)
+	require.Equal(t, handoffBefore.Version, handoffAfter.Version)
+
+	// Verify no new memos/chat messages were appended to the DB
+	var memoCountAfter int
+	err = dbConn.QueryRowContext(ctx, "SELECT COUNT(*) FROM memo").Scan(&memoCountAfter)
+	require.NoError(t, err)
+	require.Equal(t, memoCountBefore, memoCountAfter, "Expected no new memos/chat messages to be appended to the DB")
+
+	// Verify no delivery/outbox/message tables exist in SQLite schema
+	rows, err := dbConn.QueryContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE '%bridge_outbox%' OR name LIKE '%bridge_message%' OR name LIKE '%delivery%')")
+	require.NoError(t, err)
+	defer rows.Close()
+	var tableNames []string
+	for rows.Next() {
+		var name string
+		err = rows.Scan(&name)
+		require.NoError(t, err)
+		tableNames = append(tableNames, name)
+	}
+	require.Empty(t, tableNames, "Expected no delivery/outbox/message tables to exist in SQLite schema, but found: %v", tableNames)
+}
+
+func TestBridgeEndpointsDoNotRegisterSSE(t *testing.T) {
+	content, err := os.ReadFile("../v1.go")
+	require.NoError(t, err)
+	contentStr := string(content)
+	require.NotContains(t, contentStr, "bridge/stream")
+	require.NotContains(t, contentStr, "bridge/sse")
+}
+
+func TestBridgeEndpointsDoNotAddOutbox(t *testing.T) {
+	content, err := os.ReadFile("../../../../../store/migration/sqlite/LATEST.sql")
+	require.NoError(t, err)
+	contentStr := strings.ToLower(string(content))
+	require.NotContains(t, contentStr, "bridge_outbox")
+	require.NotContains(t, contentStr, "bridge_messages")
+	require.NotContains(t, contentStr, "bridge_message")
+}
+
+func TestBridgeEndpointsDoNotChangeChatExternalBehavior(t *testing.T) {
+	content, err := os.ReadFile("service.go")
+	require.NoError(t, err)
+	contentStr := string(content)
+
+	// Locate ChatExternal function
+	idx := strings.Index(contentStr, "func (s *Service) ChatExternal(")
+	require.Greater(t, idx, -1, "Could not find ChatExternal function in service.go")
+
+	// Grab next 1500 characters to cover the entire function body
+	funcBody := contentStr[idx : idx+1500]
+	// Assert it doesn't contain "handoff" or "takeover"
+	require.NotContains(t, funcBody, "handoff")
+	require.NotContains(t, funcBody, "takeover")
+}
+
+func TestBridgeEndpointsDoNotAddHermesTelegramTicketMutation(t *testing.T) {
+	// Assert no files contain "hermes" or "telegram" in the server/router/api/v1/agent/ directory
+	files, err := os.ReadDir(".")
+	require.NoError(t, err)
+	for _, file := range files {
+		name := strings.ToLower(file.Name())
+		require.NotContains(t, name, "hermes")
+		require.NotContains(t, name, "telegram")
+	}
+
+	// Read handlers.go and search for HandleBridge endpoints.
+	// Ensure that they do not contain references to hermes, telegram, UpdateTicket, CreateTicket.
+	content, err := os.ReadFile("handlers.go")
+	require.NoError(t, err)
+	contentStr := string(content)
+
+	// Let's find each bridge handler and check its body.
+	bridgeHandlers := []string{"HandleBridgeTakeover", "HandleBridgeReply", "HandleBridgeRelease"}
+	for _, handlerName := range bridgeHandlers {
+		idx := strings.Index(contentStr, "func (h *Handler) "+handlerName)
+		require.Greater(t, idx, -1, "Could not find "+handlerName)
+		
+		// Grab the next 1500 characters to cover the handler body
+		handlerBody := contentStr[idx : idx+1500]
+		// Let's assert it doesn't contain "hermes", "telegram", "UpdateTicket", "CreateTicket"
+		require.NotContains(t, strings.ToLower(handlerBody), "hermes")
+		require.NotContains(t, strings.ToLower(handlerBody), "telegram")
+		require.NotContains(t, handlerBody, "UpdateTicket")
+		require.NotContains(t, handlerBody, "CreateTicket")
+	}
+}
