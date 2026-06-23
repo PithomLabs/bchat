@@ -43,6 +43,8 @@ var (
 	ErrBridgeUnsupportedDatabase     = errors.New("bridge runtime unsupported for database")
 	ErrBridgeHandoffReplyTextMismatch = errors.New("bridge handoff reply text mismatch")
 	ErrBridgeInvalidArgument          = errors.New("bridge invalid argument")
+	ErrBridgeOutboxNotFound          = errors.New("bridge outbox not found")
+	ErrBridgeOutboxConflict          = errors.New("bridge outbox conflict")
 
 	externalSessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 )
@@ -102,6 +104,15 @@ type CreateBridgeHandoffReply struct {
 	Now             int64
 }
 
+type BridgeReplyOutboxStatus string
+
+const (
+	BridgeReplyOutboxStatusPending   BridgeReplyOutboxStatus = "pending"
+	BridgeReplyOutboxStatusClaimed   BridgeReplyOutboxStatus = "claimed"
+	BridgeReplyOutboxStatusCompleted BridgeReplyOutboxStatus = "completed"
+	BridgeReplyOutboxStatusFailed    BridgeReplyOutboxStatus = "failed"
+)
+
 type BridgeReplyOutbox struct {
 	ID             int64
 	OutboxID       string
@@ -116,6 +127,26 @@ type BridgeReplyOutbox struct {
 	ClaimedBy      *string
 	ClaimedAt      *int64
 	ClaimExpiresAt *int64
+	CompletedAt    *int64
+	FailedAt       *int64
+	FailureCode    *string
+	FailureMessage *string
+}
+
+type CompleteBridgeReplyOutbox struct {
+	TenantID   int32
+	OutboxID   string
+	ClaimToken string
+	Now        int64
+}
+
+type FailBridgeReplyOutbox struct {
+	TenantID       int32
+	OutboxID       string
+	ClaimToken     string
+	Now            int64
+	FailureCode    string
+	FailureMessage string
 }
 
 type BridgeHandoffReplyWithOutbox struct {
@@ -195,6 +226,14 @@ func (s *Store) ClaimPendingBridgeReplyOutbox(ctx context.Context, tenantID int3
 
 func (s *Store) GetBridgeHandoffReplyByClientMessageID(ctx context.Context, tenantID int32, sessionID string, handoffID string, clientMessageID string) (*BridgeHandoffReply, error) {
 	return s.driver.GetBridgeHandoffReplyByClientMessageID(ctx, tenantID, sessionID, handoffID, clientMessageID)
+}
+
+func (s *Store) CompleteClaimedBridgeReplyOutbox(ctx context.Context, complete *CompleteBridgeReplyOutbox) (*BridgeReplyOutbox, error) {
+	return s.driver.CompleteClaimedBridgeReplyOutbox(ctx, complete)
+}
+
+func (s *Store) FailClaimedBridgeReplyOutbox(ctx context.Context, fail *FailBridgeReplyOutbox) (*BridgeReplyOutbox, error) {
+	return s.driver.FailClaimedBridgeReplyOutbox(ctx, fail)
 }
 
 var (

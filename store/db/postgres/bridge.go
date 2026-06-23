@@ -54,3 +54,11 @@ func (d *DB) GetBridgeReplyOutboxByReplyID(ctx context.Context, tenantID int32, 
 func (d *DB) ClaimPendingBridgeReplyOutbox(ctx context.Context, tenantID int32, limit int, claimedBy string, now time.Time, claimDurationSeconds int64) ([]*store.BridgeReplyOutbox, error) {
 	return nil, store.ErrBridgeUnsupportedDatabase
 }
+
+func (d *DB) CompleteClaimedBridgeReplyOutbox(ctx context.Context, complete *store.CompleteBridgeReplyOutbox) (*store.BridgeReplyOutbox, error) {
+	return nil, store.ErrBridgeUnsupportedDatabase
+}
+
+func (d *DB) FailClaimedBridgeReplyOutbox(ctx context.Context, fail *store.FailBridgeReplyOutbox) (*store.BridgeReplyOutbox, error) {
+	return nil, store.ErrBridgeUnsupportedDatabase
+}

@@ -1291,3 +1291,68 @@ func TestBridgeDeliveryDoesNotAddBackgroundWorker(t *testing.T) {
 		}
 	}
 }
+
+func TestBridgeSettlementDoesNotRegisterSettlementEndpoint(t *testing.T) {
+	var content string
+	paths := []string{
+		"../v1.go",
+		"v1.go",
+		"server/router/api/v1/v1.go",
+		"../../../v1.go",
+	}
+	var err error
+	for _, p := range paths {
+		if _, statErr := os.Stat(p); statErr == nil {
+			var fileBytes []byte
+			fileBytes, err = os.ReadFile(p)
+			if err == nil {
+				content = string(fileBytes)
+				break
+			}
+		}
+	}
+	require.NotEmpty(t, content, "failed to read v1.go file: %v", err)
+
+	forbiddenRoutes := []string{
+		"/bridge/complete",
+		"/bridge/fail",
+		"/bridge/settle",
+		"/bridge/delivery",
+	}
+
+	for _, route := range forbiddenRoutes {
+		require.NotContains(t, content, route, "v1.go contains forbidden route: %s", route)
+	}
+}
+
+func TestBridgeSettlementDoesNotRegisterSSEOrPolling(t *testing.T) {
+	var content string
+	paths := []string{
+		"../v1.go",
+		"v1.go",
+		"server/router/api/v1/v1.go",
+		"../../../v1.go",
+	}
+	var err error
+	for _, p := range paths {
+		if _, statErr := os.Stat(p); statErr == nil {
+			var fileBytes []byte
+			fileBytes, err = os.ReadFile(p)
+			if err == nil {
+				content = string(fileBytes)
+				break
+			}
+		}
+	}
+	require.NotEmpty(t, content, "failed to read v1.go file: %v", err)
+
+	forbiddenRoutes := []string{
+		"/bridge/poll",
+		"/bridge/sse",
+		"/bridge/stream",
+	}
+
+	for _, route := range forbiddenRoutes {
+		require.NotContains(t, content, route, "v1.go contains forbidden route: %s", route)
+	}
+}
