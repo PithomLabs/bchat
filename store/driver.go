@@ -157,7 +157,8 @@ type Driver interface {
 	GetBridgeReplyOutboxByReplyID(ctx context.Context, tenantID int32, replyID string) (*BridgeReplyOutbox, error)
 	ClaimPendingBridgeReplyOutbox(ctx context.Context, tenantID int32, limit int, claimedBy string, now time.Time, claimDurationSeconds int64) ([]*BridgeReplyOutbox, error)
 	GetBridgeHandoffReplyByClientMessageID(ctx context.Context, tenantID int32, sessionID string, handoffID string, clientMessageID string) (*BridgeHandoffReply, error)
-
+	CompleteClaimedBridgeReplyOutbox(ctx context.Context, complete *CompleteBridgeReplyOutbox) (*BridgeReplyOutbox, error)
+	FailClaimedBridgeReplyOutbox(ctx context.Context, fail *FailBridgeReplyOutbox) (*BridgeReplyOutbox, error)
 	UpsertAgentSourceFile(ctx context.Context, file *AgentSourceFile) (*AgentSourceFile, error)
 	GetAgentSourceFile(ctx context.Context, find *FindAgentSourceFile) (*AgentSourceFile, error)
 	ListAgentSourceFiles(ctx context.Context, find *FindAgentSourceFile) ([]*AgentSourceFile, error)

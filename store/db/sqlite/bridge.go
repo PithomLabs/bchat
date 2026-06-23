@@ -592,11 +592,11 @@ func (d *DB) CreateBridgeHandoffReplyAndOutboxIfActive(ctx context.Context, crea
 		var obID int64
 		var obCreatedAt int64
 		errOutbox := conn.QueryRowContext(ctx, `
-			SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at
+			SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at, completed_at, failed_at, failure_code, failure_message
 			FROM bridge_reply_outbox
 			WHERE tenant_id = ? AND reply_id = ?
 		`, create.TenantID, existingReplyID).Scan(
-			&obID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &obCreatedAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt,
+			&obID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &obCreatedAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt, &ob.CompletedAt, &ob.FailedAt, &ob.FailureCode, &ob.FailureMessage,
 		)
 
 		if errOutbox == nil {
@@ -617,11 +617,11 @@ func (d *DB) CreateBridgeHandoffReplyAndOutboxIfActive(ctx context.Context, crea
 				// Check if another concurrent call inserted the outbox
 				if isSQLiteConstraint(err) {
 					errOutboxRetry := conn.QueryRowContext(ctx, `
-						SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at
+						SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at, completed_at, failed_at, failure_code, failure_message
 						FROM bridge_reply_outbox
 						WHERE tenant_id = ? AND reply_id = ?
 					`, create.TenantID, existingReplyID).Scan(
-						&obID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &obCreatedAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt,
+						&obID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &obCreatedAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt, &ob.CompletedAt, &ob.FailedAt, &ob.FailureCode, &ob.FailureMessage,
 					)
 					if errOutboxRetry == nil {
 						ob.ID = obID
@@ -672,11 +672,11 @@ func (d *DB) GetBridgeReplyOutboxByReplyID(ctx context.Context, tenantID int32, 
 	var ob store.BridgeReplyOutbox
 	var createdAt int64
 	err := d.db.QueryRowContext(ctx, `
-		SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at
+		SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at, completed_at, failed_at, failure_code, failure_message
 		FROM bridge_reply_outbox
 		WHERE tenant_id = ? AND reply_id = ?
 	`, tenantID, replyID).Scan(
-		&ob.ID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &createdAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt,
+		&ob.ID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &createdAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt, &ob.CompletedAt, &ob.FailedAt, &ob.FailureCode, &ob.FailureMessage,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -718,7 +718,7 @@ func (d *DB) ClaimPendingBridgeReplyOutbox(ctx context.Context, tenantID int32, 
 	}
 
 	rows, err := conn.QueryContext(ctx, `
-		SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at
+		SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at, completed_at, failed_at, failure_code, failure_message
 		FROM bridge_reply_outbox
 		WHERE tenant_id = ? AND status = 'pending'
 		ORDER BY created_at ASC, id ASC
@@ -733,7 +733,7 @@ func (d *DB) ClaimPendingBridgeReplyOutbox(ctx context.Context, tenantID int32, 
 	for rows.Next() {
 		var ob store.BridgeReplyOutbox
 		var createdAt int64
-		err = rows.Scan(&ob.ID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &createdAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt)
+		err = rows.Scan(&ob.ID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &createdAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt, &ob.CompletedAt, &ob.FailedAt, &ob.FailureCode, &ob.FailureMessage)
 		if err != nil {
 			rows.Close()
 			rollback()
@@ -795,4 +795,208 @@ func (d *DB) ClaimPendingBridgeReplyOutbox(ctx context.Context, tenantID int32, 
 	return claimed, nil
 }
 
+func (d *DB) CompleteClaimedBridgeReplyOutbox(ctx context.Context, complete *store.CompleteBridgeReplyOutbox) (*store.BridgeReplyOutbox, error) {
+	// Settlement is claim-token based. claim_expires_at is recorded for future recovery
+	// workflows, but BRIDGE-DELIVERY-0008 intentionally does not enforce claim
+	// expiration or recycle expired claims.
+	if complete.TenantID <= 0 || len(complete.OutboxID) != 36 || len(complete.ClaimToken) != 36 || complete.Now <= 0 {
+		return nil, store.ErrBridgeInvalidArgument
+	}
 
+	conn, err := d.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get connection: %w", err)
+	}
+	defer conn.Close()
+
+	_, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE")
+	if err != nil {
+		return nil, fmt.Errorf("begin immediate transaction: %w", err)
+	}
+
+	rollback := func() {
+		_, _ = conn.ExecContext(ctx, "ROLLBACK")
+	}
+
+	var ob store.BridgeReplyOutbox
+	var createdAt int64
+	err = conn.QueryRowContext(ctx, `
+		SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at, completed_at, failed_at, failure_code, failure_message
+		FROM bridge_reply_outbox
+		WHERE tenant_id = ? AND outbox_id = ?
+	`, complete.TenantID, complete.OutboxID).Scan(
+		&ob.ID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &createdAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt, &ob.CompletedAt, &ob.FailedAt, &ob.FailureCode, &ob.FailureMessage,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		rollback()
+		return nil, store.ErrBridgeOutboxNotFound
+	}
+	if err != nil {
+		rollback()
+		return nil, fmt.Errorf("query outbox: %w", err)
+	}
+
+	if ob.ClaimedAt == nil {
+		rollback()
+		return nil, store.ErrBridgeOutboxConflict
+	}
+	if complete.Now < *ob.ClaimedAt {
+		rollback()
+		return nil, store.ErrBridgeInvalidArgument
+	}
+
+	res, err := conn.ExecContext(ctx, `
+		UPDATE bridge_reply_outbox
+		SET status='completed', completed_at=?
+		WHERE tenant_id=? AND outbox_id=? AND claim_token=? AND status='claimed'
+	`, complete.Now, complete.TenantID, complete.OutboxID, complete.ClaimToken)
+	if err != nil {
+		rollback()
+		return nil, fmt.Errorf("update complete: %w", err)
+	}
+
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		rollback()
+		return nil, fmt.Errorf("check complete rows affected: %w", err)
+	}
+
+	if rowsAffected == 1 {
+		_, err = conn.ExecContext(ctx, "COMMIT")
+		if err != nil {
+			rollback()
+			return nil, fmt.Errorf("commit transaction: %w", err)
+		}
+		ob.CreatedAt = createdAt
+		ob.Status = "completed"
+		ob.CompletedAt = &complete.Now
+		return &ob, nil
+	}
+
+	// Idempotency / conflict check
+	if ob.Status == "completed" && ob.ClaimToken != nil && *ob.ClaimToken == complete.ClaimToken {
+		_, err = conn.ExecContext(ctx, "COMMIT")
+		if err != nil {
+			rollback()
+			return nil, fmt.Errorf("commit transaction on idempotent complete: %w", err)
+		}
+		ob.CreatedAt = createdAt
+		return &ob, nil
+	}
+
+	rollback()
+	return nil, store.ErrBridgeOutboxConflict
+}
+
+func (d *DB) FailClaimedBridgeReplyOutbox(ctx context.Context, fail *store.FailBridgeReplyOutbox) (*store.BridgeReplyOutbox, error) {
+	// Settlement is claim-token based. claim_expires_at is recorded for future recovery
+	// workflows, but BRIDGE-DELIVERY-0008 intentionally does not enforce claim
+	// expiration or recycle expired claims.
+	if fail.TenantID <= 0 || len(fail.OutboxID) != 36 || len(fail.ClaimToken) != 36 || fail.Now <= 0 {
+		return nil, store.ErrBridgeInvalidArgument
+	}
+	if len(fail.FailureCode) < 1 || len(fail.FailureCode) > 64 {
+		return nil, store.ErrBridgeInvalidArgument
+	}
+	for _, r := range fail.FailureCode {
+		if !((r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.') {
+			return nil, store.ErrBridgeInvalidArgument
+		}
+	}
+	if len(fail.FailureMessage) < 1 || len(fail.FailureMessage) > 1000 {
+		return nil, store.ErrBridgeInvalidArgument
+	}
+	for _, r := range fail.FailureMessage {
+		if r < 32 && r != '\n' && r != '\r' && r != '\t' {
+			return nil, store.ErrBridgeInvalidArgument
+		}
+	}
+
+	conn, err := d.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get connection: %w", err)
+	}
+	defer conn.Close()
+
+	_, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE")
+	if err != nil {
+		return nil, fmt.Errorf("begin immediate transaction: %w", err)
+	}
+
+	rollback := func() {
+		_, _ = conn.ExecContext(ctx, "ROLLBACK")
+	}
+
+	var ob store.BridgeReplyOutbox
+	var createdAt int64
+	err = conn.QueryRowContext(ctx, `
+		SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at, completed_at, failed_at, failure_code, failure_message
+		FROM bridge_reply_outbox
+		WHERE tenant_id = ? AND outbox_id = ?
+	`, fail.TenantID, fail.OutboxID).Scan(
+		&ob.ID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &createdAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt, &ob.CompletedAt, &ob.FailedAt, &ob.FailureCode, &ob.FailureMessage,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		rollback()
+		return nil, store.ErrBridgeOutboxNotFound
+	}
+	if err != nil {
+		rollback()
+		return nil, fmt.Errorf("query outbox: %w", err)
+	}
+
+	if ob.ClaimedAt == nil {
+		rollback()
+		return nil, store.ErrBridgeOutboxConflict
+	}
+	if fail.Now < *ob.ClaimedAt {
+		rollback()
+		return nil, store.ErrBridgeInvalidArgument
+	}
+
+	res, err := conn.ExecContext(ctx, `
+		UPDATE bridge_reply_outbox
+		SET status='failed', failed_at=?, failure_code=?, failure_message=?
+		WHERE tenant_id=? AND outbox_id=? AND claim_token=? AND status='claimed'
+	`, fail.Now, fail.FailureCode, fail.FailureMessage, fail.TenantID, fail.OutboxID, fail.ClaimToken)
+	if err != nil {
+		rollback()
+		return nil, fmt.Errorf("update fail: %w", err)
+	}
+
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		rollback()
+		return nil, fmt.Errorf("check fail rows affected: %w", err)
+	}
+
+	if rowsAffected == 1 {
+		_, err = conn.ExecContext(ctx, "COMMIT")
+		if err != nil {
+			rollback()
+			return nil, fmt.Errorf("commit transaction: %w", err)
+		}
+		ob.CreatedAt = createdAt
+		ob.Status = "failed"
+		ob.FailedAt = &fail.Now
+		ob.FailureCode = &fail.FailureCode
+		ob.FailureMessage = &fail.FailureMessage
+		return &ob, nil
+	}
+
+	// Idempotency / conflict check
+	if ob.Status == "failed" && ob.ClaimToken != nil && *ob.ClaimToken == fail.ClaimToken &&
+		ob.FailureCode != nil && *ob.FailureCode == fail.FailureCode &&
+		ob.FailureMessage != nil && *ob.FailureMessage == fail.FailureMessage {
+		_, err = conn.ExecContext(ctx, "COMMIT")
+		if err != nil {
+			rollback()
+			return nil, fmt.Errorf("commit transaction on idempotent fail: %w", err)
+		}
+		ob.CreatedAt = createdAt
+		return &ob, nil
+	}
+
+	rollback()
+	return nil, store.ErrBridgeOutboxConflict
+}

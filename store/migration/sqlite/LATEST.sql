@@ -857,12 +857,19 @@ CREATE TABLE IF NOT EXISTS bridge_reply_outbox (
 
   status TEXT NOT NULL DEFAULT 'pending',
   attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
-  created_at INTEGER NOT NULL,
 
   claim_token TEXT UNIQUE CHECK(claim_token IS NULL OR length(claim_token) = 36),
   claimed_by TEXT CHECK(claimed_by IS NULL OR length(claimed_by) BETWEEN 1 AND 128),
   claimed_at INTEGER CHECK(claimed_at IS NULL OR claimed_at > 0),
   claim_expires_at INTEGER CHECK(claim_expires_at IS NULL OR claim_expires_at > 0),
+
+  completed_at INTEGER CHECK(completed_at IS NULL OR completed_at > 0),
+
+  failed_at INTEGER CHECK(failed_at IS NULL OR failed_at > 0),
+  failure_code TEXT CHECK(failure_code IS NULL OR length(failure_code) BETWEEN 1 AND 64),
+  failure_message TEXT CHECK(failure_message IS NULL OR length(failure_message) BETWEEN 1 AND 1000),
+
+  created_at INTEGER NOT NULL,
 
   UNIQUE(tenant_id, reply_id),
 
@@ -884,14 +891,46 @@ CREATE TABLE IF NOT EXISTS bridge_reply_outbox (
       AND claim_token IS NULL
       AND claimed_by IS NULL
       AND claimed_at IS NULL
-      AND claim_expires_at IS NULL)
+      AND claim_expires_at IS NULL
+      AND completed_at IS NULL
+      AND failed_at IS NULL
+      AND failure_code IS NULL
+      AND failure_message IS NULL)
     OR
     (status = 'claimed'
       AND claim_token IS NOT NULL
       AND claimed_by IS NOT NULL
       AND claimed_at IS NOT NULL
       AND claim_expires_at IS NOT NULL
-      AND claim_expires_at > claimed_at)
+      AND claim_expires_at > claimed_at
+      AND completed_at IS NULL
+      AND failed_at IS NULL
+      AND failure_code IS NULL
+      AND failure_message IS NULL)
+    OR
+    (status = 'completed'
+      AND claim_token IS NOT NULL
+      AND claimed_by IS NOT NULL
+      AND claimed_at IS NOT NULL
+      AND claim_expires_at IS NOT NULL
+      AND claim_expires_at > claimed_at
+      AND completed_at IS NOT NULL
+      AND completed_at >= claimed_at
+      AND failed_at IS NULL
+      AND failure_code IS NULL
+      AND failure_message IS NULL)
+    OR
+    (status = 'failed'
+      AND claim_token IS NOT NULL
+      AND claimed_by IS NOT NULL
+      AND claimed_at IS NOT NULL
+      AND claim_expires_at IS NOT NULL
+      AND claim_expires_at > claimed_at
+      AND completed_at IS NULL
+      AND failed_at IS NOT NULL
+      AND failed_at >= claimed_at
+      AND failure_code IS NOT NULL
+      AND failure_message IS NOT NULL)
   )
 );
 
