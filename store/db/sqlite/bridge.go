@@ -520,8 +520,9 @@ func (d *DB) CreateBridgeHandoffReplyAndOutboxIfActive(ctx context.Context, crea
 		outboxID := uuid.NewString()
 		_, err = conn.ExecContext(ctx, `
 			INSERT INTO bridge_reply_outbox (
-				outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at
-			) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?)
+				outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at,
+				claim_token, claimed_by, claimed_at, claim_expires_at
+			) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, NULL, NULL, NULL, NULL)
 		`, outboxID, create.TenantID, create.SessionID, create.HandoffID, create.ReplyID, create.Now)
 		if err != nil {
 			rollback()
@@ -591,11 +592,11 @@ func (d *DB) CreateBridgeHandoffReplyAndOutboxIfActive(ctx context.Context, crea
 		var obID int64
 		var obCreatedAt int64
 		errOutbox := conn.QueryRowContext(ctx, `
-			SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at
+			SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at
 			FROM bridge_reply_outbox
 			WHERE tenant_id = ? AND reply_id = ?
 		`, create.TenantID, existingReplyID).Scan(
-			&obID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &obCreatedAt,
+			&obID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &obCreatedAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt,
 		)
 
 		if errOutbox == nil {
@@ -608,18 +609,19 @@ func (d *DB) CreateBridgeHandoffReplyAndOutboxIfActive(ctx context.Context, crea
 			outboxID := uuid.NewString()
 			_, err = conn.ExecContext(ctx, `
 				INSERT INTO bridge_reply_outbox (
-					outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at
-				) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?)
+					outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at,
+					claim_token, claimed_by, claimed_at, claim_expires_at
+				) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, NULL, NULL, NULL, NULL)
 			`, outboxID, create.TenantID, create.SessionID, create.HandoffID, existingReplyID, create.Now)
 			if err != nil {
 				// Check if another concurrent call inserted the outbox
 				if isSQLiteConstraint(err) {
 					errOutboxRetry := conn.QueryRowContext(ctx, `
-						SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at
+						SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at
 						FROM bridge_reply_outbox
 						WHERE tenant_id = ? AND reply_id = ?
 					`, create.TenantID, existingReplyID).Scan(
-						&obID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &obCreatedAt,
+						&obID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &obCreatedAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt,
 					)
 					if errOutboxRetry == nil {
 						ob.ID = obID
@@ -670,11 +672,11 @@ func (d *DB) GetBridgeReplyOutboxByReplyID(ctx context.Context, tenantID int32, 
 	var ob store.BridgeReplyOutbox
 	var createdAt int64
 	err := d.db.QueryRowContext(ctx, `
-		SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at
+		SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at
 		FROM bridge_reply_outbox
 		WHERE tenant_id = ? AND reply_id = ?
 	`, tenantID, replyID).Scan(
-		&ob.ID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &createdAt,
+		&ob.ID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &createdAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -684,6 +686,113 @@ func (d *DB) GetBridgeReplyOutboxByReplyID(ctx context.Context, tenantID int32, 
 	}
 	ob.CreatedAt = createdAt
 	return &ob, nil
+}
+
+func (d *DB) ClaimPendingBridgeReplyOutbox(ctx context.Context, tenantID int32, limit int, claimedBy string, now time.Time, claimDurationSeconds int64) ([]*store.BridgeReplyOutbox, error) {
+	if tenantID <= 0 || limit < 1 || limit > 100 || len(claimedBy) < 1 || len(claimedBy) > 128 {
+		return nil, store.ErrBridgeInvalidArgument
+	}
+	for _, r := range claimedBy {
+		if r < 32 || r > 126 {
+			return nil, store.ErrBridgeInvalidArgument
+		}
+	}
+	nowUnix := now.Unix()
+	if nowUnix <= 0 || claimDurationSeconds <= 0 {
+		return nil, store.ErrBridgeInvalidArgument
+	}
+
+	conn, err := d.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get connection: %w", err)
+	}
+	defer conn.Close()
+
+	_, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE")
+	if err != nil {
+		return nil, fmt.Errorf("begin immediate transaction: %w", err)
+	}
+
+	rollback := func() {
+		_, _ = conn.ExecContext(ctx, "ROLLBACK")
+	}
+
+	rows, err := conn.QueryContext(ctx, `
+		SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at
+		FROM bridge_reply_outbox
+		WHERE tenant_id = ? AND status = 'pending'
+		ORDER BY created_at ASC, id ASC
+		LIMIT ?
+	`, tenantID, limit)
+	if err != nil {
+		rollback()
+		return nil, fmt.Errorf("query pending rows: %w", err)
+	}
+
+	var candidates []*store.BridgeReplyOutbox
+	for rows.Next() {
+		var ob store.BridgeReplyOutbox
+		var createdAt int64
+		err = rows.Scan(&ob.ID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &createdAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt)
+		if err != nil {
+			rows.Close()
+			rollback()
+			return nil, fmt.Errorf("scan pending row: %w", err)
+		}
+		ob.CreatedAt = createdAt
+		candidates = append(candidates, &ob)
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		rollback()
+		return nil, fmt.Errorf("iterate pending rows: %w", err)
+	}
+
+	var claimed []*store.BridgeReplyOutbox
+	expiresAt := nowUnix + claimDurationSeconds
+
+	for _, ob := range candidates {
+		claimToken := uuid.NewString()
+
+		res, err := conn.ExecContext(ctx, `
+			UPDATE bridge_reply_outbox
+			SET status='claimed',
+			    claim_token=?,
+			    claimed_by=?,
+			    claimed_at=?,
+			    claim_expires_at=?,
+			    attempt_count=attempt_count+1
+			WHERE id=? AND tenant_id=? AND status='pending'
+		`, claimToken, claimedBy, nowUnix, expiresAt, ob.ID, tenantID)
+		if err != nil {
+			rollback()
+			return nil, fmt.Errorf("update claim: %w", err)
+		}
+
+		rowsAffected, err := res.RowsAffected()
+		if err != nil {
+			rollback()
+			return nil, fmt.Errorf("check rows affected: %w", err)
+		}
+
+		if rowsAffected == 1 {
+			ob.Status = "claimed"
+			ob.ClaimToken = &claimToken
+			ob.ClaimedBy = &claimedBy
+			ob.ClaimedAt = &nowUnix
+			ob.ClaimExpiresAt = &expiresAt
+			ob.AttemptCount++
+			claimed = append(claimed, ob)
+		}
+	}
+
+	_, err = conn.ExecContext(ctx, "COMMIT")
+	if err != nil {
+		rollback()
+		return nil, fmt.Errorf("commit transaction: %w", err)
+	}
+
+	return claimed, nil
 }
 
 

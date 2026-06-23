@@ -47,7 +47,10 @@ func (d *DB) CreateBridgeHandoffReplyAndOutboxIfActive(context.Context, *store.C
 	return nil, store.ErrBridgeUnsupportedDatabase
 }
 
-func (d *DB) GetBridgeReplyOutboxByReplyID(context.Context, int32, string) (*store.BridgeReplyOutbox, error) {
+func (d *DB) GetBridgeReplyOutboxByReplyID(ctx context.Context, tenantID int32, replyID string) (*store.BridgeReplyOutbox, error) {
 	return nil, store.ErrBridgeUnsupportedDatabase
 }
 
+func (d *DB) ClaimPendingBridgeReplyOutbox(ctx context.Context, tenantID int32, limit int, claimedBy string, now time.Time, claimDurationSeconds int64) ([]*store.BridgeReplyOutbox, error) {
+	return nil, store.ErrBridgeUnsupportedDatabase
+}

@@ -42,6 +42,7 @@ var (
 	ErrBridgeHandoffConflict         = errors.New("bridge handoff conflict")
 	ErrBridgeUnsupportedDatabase     = errors.New("bridge runtime unsupported for database")
 	ErrBridgeHandoffReplyTextMismatch = errors.New("bridge handoff reply text mismatch")
+	ErrBridgeInvalidArgument          = errors.New("bridge invalid argument")
 
 	externalSessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 )
@@ -102,15 +103,19 @@ type CreateBridgeHandoffReply struct {
 }
 
 type BridgeReplyOutbox struct {
-	ID           int64
-	OutboxID     string
-	TenantID     int32
-	SessionID    string
-	HandoffID    string
-	ReplyID      string
-	Status       string
-	AttemptCount int
-	CreatedAt    int64
+	ID             int64
+	OutboxID       string
+	TenantID       int32
+	SessionID      string
+	HandoffID      string
+	ReplyID        string
+	Status         string
+	AttemptCount   int
+	CreatedAt      int64
+	ClaimToken     *string
+	ClaimedBy      *string
+	ClaimedAt      *int64
+	ClaimExpiresAt *int64
 }
 
 type BridgeHandoffReplyWithOutbox struct {
@@ -182,6 +187,10 @@ func (s *Store) CreateBridgeHandoffReplyAndOutboxIfActive(ctx context.Context, c
 
 func (s *Store) GetBridgeReplyOutboxByReplyID(ctx context.Context, tenantID int32, replyID string) (*BridgeReplyOutbox, error) {
 	return s.driver.GetBridgeReplyOutboxByReplyID(ctx, tenantID, replyID)
+}
+
+func (s *Store) ClaimPendingBridgeReplyOutbox(ctx context.Context, tenantID int32, limit int, claimedBy string, now time.Time, claimDurationSeconds int64) ([]*BridgeReplyOutbox, error) {
+	return s.driver.ClaimPendingBridgeReplyOutbox(ctx, tenantID, limit, claimedBy, now, claimDurationSeconds)
 }
 
 func (s *Store) GetBridgeHandoffReplyByClientMessageID(ctx context.Context, tenantID int32, sessionID string, handoffID string, clientMessageID string) (*BridgeHandoffReply, error) {
