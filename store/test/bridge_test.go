@@ -3,10 +3,12 @@ package teststore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/usememos/memos/store"
 )
@@ -1034,6 +1036,269 @@ func TestBridgeOutboxScopeNoDeliveryWorkerReadsOutbox(t *testing.T) {
 	require.NotNil(t, ob)
 	require.Equal(t, "pending", ob.Status)
 	require.Equal(t, 0, ob.AttemptCount)
+}
+
+func TestBridgeReplyOutbox_ClaimSuccess(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "claim-success")
+	defer ts.Close()
+
+	now := time.Now().Unix()
+
+	for i := 0; i < 3; i++ {
+		_, err := ts.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
+			ReplyID:         uuid.NewString(),
+			TenantID:        tenant.ID,
+			SessionID:       session.SessionID,
+			HandoffID:       handoff.HandoffID,
+			ClientMessageID: fmt.Sprintf("msg-claim-%d", i),
+			Text:            "text",
+			Now:             now,
+		})
+		require.NoError(t, err)
+	}
+
+	claimedBy := "worker-1"
+	claimDuration := int64(300)
+	claimedRows, err := ts.ClaimPendingBridgeReplyOutbox(ctx, tenant.ID, 2, claimedBy, time.Now(), claimDuration)
+	require.NoError(t, err)
+	require.Len(t, claimedRows, 2)
+
+	for _, ob := range claimedRows {
+		require.Equal(t, "claimed", ob.Status)
+		require.NotNil(t, ob.ClaimToken)
+		require.Equal(t, 36, len(*ob.ClaimToken))
+		require.NotNil(t, ob.ClaimedBy)
+		require.Equal(t, claimedBy, *ob.ClaimedBy)
+		require.NotNil(t, ob.ClaimedAt)
+		require.NotNil(t, ob.ClaimExpiresAt)
+		require.True(t, *ob.ClaimExpiresAt > *ob.ClaimedAt)
+		require.Equal(t, 1, ob.AttemptCount)
+	}
+
+	claimedRows2, err := ts.ClaimPendingBridgeReplyOutbox(ctx, tenant.ID, 2, claimedBy, time.Now(), claimDuration)
+	require.NoError(t, err)
+	require.Len(t, claimedRows2, 1) // Only 1 left
+}
+
+func TestBridgeReplyOutbox_ClaimEmpty(t *testing.T) {
+	ctx, ts, tenant, _, _ := createHumanActiveHandoffFixture(t, "claim-empty")
+	defer ts.Close()
+
+	claimedRows, err := ts.ClaimPendingBridgeReplyOutbox(ctx, tenant.ID, 5, "worker-1", time.Now(), 300)
+	require.NoError(t, err)
+	require.Empty(t, claimedRows)
+}
+
+func TestBridgeReplyOutbox_ClaimConcurrency(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "claim-race")
+	defer ts.Close()
+
+	now := time.Now().Unix()
+
+	for i := 0; i < 20; i++ {
+		_, err := ts.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
+			ReplyID:         uuid.NewString(),
+			TenantID:        tenant.ID,
+			SessionID:       session.SessionID,
+			HandoffID:       handoff.HandoffID,
+			ClientMessageID: fmt.Sprintf("msg-race-%d", i),
+			Text:            "text",
+			Now:             now,
+		})
+		require.NoError(t, err)
+	}
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	claimedMap := make(map[string]string)
+	errorCount := 0
+
+	workerCount := 10
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		workerID := fmt.Sprintf("worker-%d", i)
+		go func() {
+			defer wg.Done()
+			claimedRows, err := ts.ClaimPendingBridgeReplyOutbox(ctx, tenant.ID, 5, workerID, time.Now(), 300)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				errorCount++
+			} else {
+				for _, ob := range claimedRows {
+					if existing, ok := claimedMap[ob.OutboxID]; ok {
+						t.Errorf("Outbox %s claimed twice! Existing: %s, New: %s", ob.OutboxID, existing, workerID)
+					}
+					claimedMap[ob.OutboxID] = workerID
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+	require.Equal(t, 0, errorCount)
+	require.Len(t, claimedMap, 20)
+}
+
+func TestBridgeReplyOutbox_CrossTenantIsolation(t *testing.T) {
+	ctx, ts, tenant1, session1, handoff1 := createHumanActiveHandoffFixture(t, "claim-iso-1")
+	defer ts.Close()
+
+	tenant2 := createBridgeTenant(t, ctx, ts, "claim-iso-2")
+	now2 := time.Now()
+	session2, _, err := ts.EnsureBridgeExternalSession(ctx, tenant2.ID, "session", now2, now2.Add(time.Minute))
+	require.NoError(t, err)
+	handoff2, err := ts.CreateBridgeHandoff(ctx, tenant2.ID, session2.SessionID, now2)
+	require.NoError(t, err)
+	handoff2, err = ts.UpdateBridgeHandoffRoutingModeCAS(ctx, tenant2.ID, session2.SessionID, handoff2.Generation, handoff2.HandoffID, handoff2.Version, store.BridgeRoutingModeHandoffQueued, store.BridgeRoutingModeHumanActive, "accepted", time.Now())
+	require.NoError(t, err)
+
+	now := time.Now().Unix()
+
+	_, err = ts.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         uuid.NewString(),
+		TenantID:        tenant1.ID,
+		SessionID:       session1.SessionID,
+		HandoffID:       handoff1.HandoffID,
+		ClientMessageID: "msg-iso-1",
+		Text:            "t1",
+		Now:             now,
+	})
+	require.NoError(t, err)
+
+	_, err = ts.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         uuid.NewString(),
+		TenantID:        tenant2.ID,
+		SessionID:       session2.SessionID,
+		HandoffID:       handoff2.HandoffID,
+		ClientMessageID: "msg-iso-2",
+		Text:            "t2",
+		Now:             now,
+	})
+	require.NoError(t, err)
+
+	claimedRows, err := ts.ClaimPendingBridgeReplyOutbox(ctx, tenant1.ID, 5, "worker-1", time.Now(), 300)
+	require.NoError(t, err)
+	require.Len(t, claimedRows, 1)
+	require.Equal(t, tenant1.ID, claimedRows[0].TenantID)
+}
+
+func TestBridgeReplyOutbox_ExpiredClaimNotReclaimed(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "claim-expired")
+	defer ts.Close()
+
+	now := time.Now().Unix()
+
+	res, err := ts.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         uuid.NewString(),
+		TenantID:        tenant.ID,
+		SessionID:       session.SessionID,
+		HandoffID:       handoff.HandoffID,
+		ClientMessageID: "msg-exp",
+		Text:            "t",
+		Now:             now,
+	})
+	require.NoError(t, err)
+
+	claimedRows, err := ts.ClaimPendingBridgeReplyOutbox(ctx, tenant.ID, 1, "worker-1", time.Now(), 1) // 1 second expiry
+	require.NoError(t, err)
+	require.Len(t, claimedRows, 1)
+
+	// wait for expiry
+	time.Sleep(1200 * time.Millisecond)
+
+	// Since we do not have an expired claim recycling loop/query, a second call should NOT pick it up
+	claimedRows2, err := ts.ClaimPendingBridgeReplyOutbox(ctx, tenant.ID, 1, "worker-2", time.Now(), 300)
+	require.NoError(t, err)
+	require.Empty(t, claimedRows2)
+
+	// Verify status is still claimed
+	ob, err := ts.GetBridgeReplyOutboxByReplyID(ctx, tenant.ID, res.Reply.ReplyID)
+	require.NoError(t, err)
+	require.Equal(t, "claimed", ob.Status)
+}
+
+func TestBridgeReplyOutbox_RejectsInvalidLimit(t *testing.T) {
+	ctx, ts, tenant, _, _ := createHumanActiveHandoffFixture(t, "claim-inv-limit")
+	defer ts.Close()
+
+	_, err := ts.ClaimPendingBridgeReplyOutbox(ctx, tenant.ID, 0, "worker", time.Now(), 300)
+	require.ErrorIs(t, err, store.ErrBridgeInvalidArgument)
+
+	_, err = ts.ClaimPendingBridgeReplyOutbox(ctx, tenant.ID, 101, "worker", time.Now(), 300)
+	require.ErrorIs(t, err, store.ErrBridgeInvalidArgument)
+}
+
+func TestBridgeReplyOutbox_RejectsInvalidClaimedBy(t *testing.T) {
+	ctx, ts, tenant, _, _ := createHumanActiveHandoffFixture(t, "claim-inv-by")
+	defer ts.Close()
+
+	_, err := ts.ClaimPendingBridgeReplyOutbox(ctx, tenant.ID, 5, "", time.Now(), 300)
+	require.ErrorIs(t, err, store.ErrBridgeInvalidArgument)
+
+	tooLong := ""
+	for i := 0; i < 130; i++ {
+		tooLong += "a"
+	}
+	_, err = ts.ClaimPendingBridgeReplyOutbox(ctx, tenant.ID, 5, tooLong, time.Now(), 300)
+	require.ErrorIs(t, err, store.ErrBridgeInvalidArgument)
+
+	_, err = ts.ClaimPendingBridgeReplyOutbox(ctx, tenant.ID, 5, "hello\nworld", time.Now(), 300)
+	require.ErrorIs(t, err, store.ErrBridgeInvalidArgument)
+}
+
+func TestBridgeReplyOutbox_RejectsInvalidNow(t *testing.T) {
+	ctx, ts, tenant, _, _ := createHumanActiveHandoffFixture(t, "claim-inv-now")
+	defer ts.Close()
+
+	_, err := ts.ClaimPendingBridgeReplyOutbox(ctx, tenant.ID, 5, "worker", time.Time{}, 300)
+	require.ErrorIs(t, err, store.ErrBridgeInvalidArgument)
+}
+
+func TestBridgeReplyOutbox_RejectsInvalidClaimDuration(t *testing.T) {
+	ctx, ts, tenant, _, _ := createHumanActiveHandoffFixture(t, "claim-inv-dur")
+	defer ts.Close()
+
+	_, err := ts.ClaimPendingBridgeReplyOutbox(ctx, tenant.ID, 5, "worker", time.Now(), 0)
+	require.ErrorIs(t, err, store.ErrBridgeInvalidArgument)
+
+	_, err = ts.ClaimPendingBridgeReplyOutbox(ctx, tenant.ID, 5, "worker", time.Now(), -1)
+	require.ErrorIs(t, err, store.ErrBridgeInvalidArgument)
+}
+
+func TestBridgeReplyOutbox_ClaimDeterministicOrder(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "claim-order")
+	defer ts.Close()
+
+	// Seed 3+ pending rows with distinct created_at/id
+	now := time.Now().Unix()
+	var replies []string
+	for i := 0; i < 4; i++ {
+		replyID := uuid.NewString()
+		replies = append(replies, replyID)
+		_, err := ts.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
+			ReplyID:         replyID,
+			TenantID:        tenant.ID,
+			SessionID:       session.SessionID,
+			HandoffID:       handoff.HandoffID,
+			ClientMessageID: fmt.Sprintf("msg-order-%d", i),
+			Text:            fmt.Sprintf("text %d", i),
+			Now:             now + int64(i),
+		})
+		require.NoError(t, err)
+		// Small sleep to ensure distinct physical insertion time if created_at uses current_timestamp
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Claim limit=2
+	claimedRows, err := ts.ClaimPendingBridgeReplyOutbox(ctx, tenant.ID, 2, "worker", time.Now(), 300)
+	require.NoError(t, err)
+	require.Len(t, claimedRows, 2)
+
+	// Assert returned order is created_at ASC, id ASC
+	// The oldest should be claimed first (i=0, then i=1)
+	require.Equal(t, replies[0], claimedRows[0].ReplyID)
+	require.Equal(t, replies[1], claimedRows[1].ReplyID)
 }
 
 

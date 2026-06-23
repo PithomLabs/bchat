@@ -841,8 +841,7 @@ CREATE INDEX IF NOT EXISTS idx_bridge_handoff_replies_lookup
 ON bridge_handoff_replies(tenant_id, session_id, handoff_id, client_message_id);
 
 -- bridge_reply_outbox is a durable preparation table only.
--- No consumer, delivery worker, transport adapter, SSE, polling, or ChatExternal delivery
--- is implemented in BRIDGE-OUTBOX-0006.
+-- The claim layer has no delivery worker, no adapter, no endpoint, and no ChatExternal consumer.
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_bridge_handoff_replies_tenant_reply
 ON bridge_handoff_replies(tenant_id, reply_id);
@@ -856,9 +855,14 @@ CREATE TABLE IF NOT EXISTS bridge_reply_outbox (
   handoff_id TEXT NOT NULL CHECK(length(handoff_id) > 0),
   reply_id TEXT NOT NULL CHECK(length(reply_id) = 36),
 
-  status TEXT NOT NULL DEFAULT 'pending' CHECK(status = 'pending'),
-  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count = 0),
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
   created_at INTEGER NOT NULL,
+
+  claim_token TEXT UNIQUE CHECK(claim_token IS NULL OR length(claim_token) = 36),
+  claimed_by TEXT CHECK(claimed_by IS NULL OR length(claimed_by) BETWEEN 1 AND 128),
+  claimed_at INTEGER CHECK(claimed_at IS NULL OR claimed_at > 0),
+  claim_expires_at INTEGER CHECK(claim_expires_at IS NULL OR claim_expires_at > 0),
 
   UNIQUE(tenant_id, reply_id),
 
@@ -872,9 +876,24 @@ CREATE TABLE IF NOT EXISTS bridge_reply_outbox (
 
   FOREIGN KEY (tenant_id, reply_id)
     REFERENCES bridge_handoff_replies(tenant_id, reply_id)
-    ON DELETE CASCADE
+    ON DELETE CASCADE,
+
+  -- Strict State Machine Constraints
+  CHECK(
+    (status = 'pending'
+      AND claim_token IS NULL
+      AND claimed_by IS NULL
+      AND claimed_at IS NULL
+      AND claim_expires_at IS NULL)
+    OR
+    (status = 'claimed'
+      AND claim_token IS NOT NULL
+      AND claimed_by IS NOT NULL
+      AND claimed_at IS NOT NULL
+      AND claim_expires_at IS NOT NULL
+      AND claim_expires_at > claimed_at)
+  )
 );
 
 CREATE INDEX IF NOT EXISTS idx_bridge_reply_outbox_pending ON bridge_reply_outbox(tenant_id, status);
-
 

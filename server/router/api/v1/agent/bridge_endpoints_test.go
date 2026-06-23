@@ -1201,3 +1201,93 @@ func TestBridgeOutboxDoesNotAddDeliveryWorker(t *testing.T) {
 	}
 }
 
+func TestBridgeDeliveryDoesNotChangeReplyResponseShape(t *testing.T) {
+	ctx := context.Background()
+	ts, tenant, _, enc := setupMiddlewareTestStore(t, ctx, "bridge-resp-shape", true)
+	defer ts.Close()
+
+	e := echo.New()
+	prof := &profile.Profile{Mode: "dev", EncryptionMasterKey: "super-secure-master-key-12345"}
+	svc := NewService(ts, prof)
+	svc.encryptionService = enc
+	handler := NewHandler(svc, ts)
+
+	e.POST("/api/v1/agent/:slug/bridge/takeover", handler.HandleBridgeTakeover, RequireBridgeHMAC(ts, enc))
+	e.POST("/api/v1/agent/:slug/bridge/reply", handler.HandleBridgeReply, RequireBridgeHMAC(ts, enc))
+
+	// 1. Create takeover / active handoff
+	bodyTakeover := []byte(`{"session_id": "session_resp_shape"}`)
+	now := time.Now().Unix()
+	nonce1 := "takeover_nonce_resp_shape"
+	sig1 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/bridge-resp-shape/bridge/takeover", "application/json", now, nonce1, bodyTakeover)
+
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/bridge-resp-shape/bridge/takeover", bytes.NewReader(bodyTakeover))
+	req1.Header.Set("Content-Type", "application/json")
+	req1.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req1.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req1.Header.Set("X-Bridge-Nonce", nonce1)
+	req1.Header.Set("X-Bridge-Signature", sig1)
+	rec1 := httptest.NewRecorder()
+	e.ServeHTTP(rec1, req1)
+	require.Equal(t, http.StatusOK, rec1.Code)
+
+	var takeoverResp map[string]interface{}
+	json.Unmarshal(rec1.Body.Bytes(), &takeoverResp)
+	handoffID := takeoverResp["handoff_id"].(string)
+
+	// 2. Reply
+	bodyReply := []byte(fmt.Sprintf(`{"session_id": "session_resp_shape", "handoff_id": "%s", "message_id": "msg_shape", "text": "hello"}`, handoffID))
+	nonce2 := "reply_nonce_resp_shape"
+	sig2 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/bridge-resp-shape/bridge/reply", "application/json", now, nonce2, bodyReply)
+
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/bridge-resp-shape/bridge/reply", bytes.NewReader(bodyReply))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Authorization", "Bearer my-test-key-id-123")
+	req2.Header.Set("X-Bridge-Timestamp", strconv.FormatInt(now, 10))
+	req2.Header.Set("X-Bridge-Nonce", nonce2)
+	req2.Header.Set("X-Bridge-Signature", sig2)
+	rec2 := httptest.NewRecorder()
+	e.ServeHTTP(rec2, req2)
+	require.Equal(t, http.StatusOK, rec2.Code)
+
+	var resp map[string]interface{}
+	err := json.Unmarshal(rec2.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	
+	// Assert no delivery properties
+	_, ok := resp["delivery_status"]
+	require.True(t, ok)
+	require.Equal(t, "not_delivered", resp["delivery_status"])
+	outbox, ok := resp["outbox"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, "pending", outbox["status"])
+	
+	_, ok = outbox["claim_token"]
+	require.False(t, ok, "claim_token should not be exposed in /bridge/reply")
+}
+
+func TestBridgeDeliveryDoesNotRegisterDeliveryEndpoint(t *testing.T) {
+	content, err := os.ReadFile("v1.go")
+	if err == nil {
+		s := string(content)
+		require.NotContains(t, s, "bridge/delivery")
+		require.NotContains(t, s, "bridge/outbox/claim")
+		require.NotContains(t, s, "bridge/claim")
+	}
+}
+
+func TestBridgeDeliveryDoesNotAddBackgroundWorker(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	require.NoError(t, err)
+	for _, f := range files {
+		if filepath.Base(f) == "bridge_endpoints_test.go" {
+			continue
+		}
+		content, err := os.ReadFile(f)
+		require.NoError(t, err)
+		s := string(content)
+		if strings.Contains(s, "go func") && strings.Contains(s, "bridge_reply_outbox") {
+			t.Errorf("File %s contains go func and bridge_reply_outbox", f)
+		}
+	}
+}

@@ -155,6 +155,7 @@ type Driver interface {
 	CreateBridgeHandoffReplyIfActive(ctx context.Context, create *CreateBridgeHandoffReply) (*BridgeHandoffReply, error)
 	CreateBridgeHandoffReplyAndOutboxIfActive(ctx context.Context, create *CreateBridgeHandoffReply) (*BridgeHandoffReplyWithOutbox, error)
 	GetBridgeReplyOutboxByReplyID(ctx context.Context, tenantID int32, replyID string) (*BridgeReplyOutbox, error)
+	ClaimPendingBridgeReplyOutbox(ctx context.Context, tenantID int32, limit int, claimedBy string, now time.Time, claimDurationSeconds int64) ([]*BridgeReplyOutbox, error)
 	GetBridgeHandoffReplyByClientMessageID(ctx context.Context, tenantID int32, sessionID string, handoffID string, clientMessageID string) (*BridgeHandoffReply, error)
 
 	UpsertAgentSourceFile(ctx context.Context, file *AgentSourceFile) (*AgentSourceFile, error)
