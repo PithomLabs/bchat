@@ -45,6 +45,12 @@ export interface Message {
   timestamp: Date;
 }
 
+export interface BridgeState {
+  status: string;
+  handoff_id: string;
+  routing_mode: string;
+}
+
 /**
  * Widget state
  */
@@ -55,6 +61,7 @@ export interface WidgetState {
   messages: Message[];
   sessionId: string | null;
   error: string | null;
+  bridge: BridgeState | null;
 }
 
 /**
@@ -67,6 +74,7 @@ export const INITIAL_STATE: WidgetState = {
   messages: [],
   sessionId: null,
   error: null,
+  bridge: null,
 };
 
 /**
@@ -75,7 +83,7 @@ export const INITIAL_STATE: WidgetState = {
 export interface ChatResponse {
   session_id: string;
   message: {
-    role: 'assistant';
+    role: 'assistant' | 'user';
     content: string;
     timestamp: string;
   };
@@ -83,6 +91,7 @@ export interface ChatResponse {
     intent?: string;
     confidence?: number;
   };
+  bridge?: BridgeState;
 }
 
 /**

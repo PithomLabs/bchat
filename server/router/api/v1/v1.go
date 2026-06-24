@@ -186,6 +186,7 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	// Public routes (no auth required) - CORS handled globally
 	publicGroup := echoServer.Group("/api/v1/agent")
 	publicGroup.POST("/:slug/chat/ext", s.agentHandler.HandleChatExternal)
+	publicGroup.GET("/:slug/chat/ext/transcript", s.agentHandler.HandleGetExternalTranscript)
 	publicGroup.GET("/:slug/widget.js", s.agentHandler.HandleWidget) // Legacy - inline JS
 
 	// Bridge routes (HMAC authenticated)

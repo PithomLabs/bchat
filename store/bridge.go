@@ -45,6 +45,8 @@ var (
 	ErrBridgeInvalidArgument          = errors.New("bridge invalid argument")
 	ErrBridgeOutboxNotFound          = errors.New("bridge outbox not found")
 	ErrBridgeOutboxConflict          = errors.New("bridge outbox conflict")
+	ErrBridgeOutboxAlreadyCompleted  = errors.New("bridge outbox already completed")
+	ErrBridgeOutboxAlreadyFailed     = errors.New("bridge outbox already failed")
 
 	externalSessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 )
@@ -226,6 +228,14 @@ func (s *Store) ClaimPendingBridgeReplyOutbox(ctx context.Context, tenantID int3
 
 func (s *Store) GetBridgeHandoffReplyByClientMessageID(ctx context.Context, tenantID int32, sessionID string, handoffID string, clientMessageID string) (*BridgeHandoffReply, error) {
 	return s.driver.GetBridgeHandoffReplyByClientMessageID(ctx, tenantID, sessionID, handoffID, clientMessageID)
+}
+
+func (s *Store) GetBridgeHandoffReplyByReplyID(ctx context.Context, tenantID int32, replyID string) (*BridgeHandoffReply, error) {
+	return s.driver.GetBridgeHandoffReplyByReplyID(ctx, tenantID, replyID)
+}
+
+func (s *Store) ClaimBridgeReplyOutboxByOutboxID(ctx context.Context, tenantID int32, outboxID string, claimedBy string, now time.Time, claimDurationSeconds int64) (*BridgeReplyOutbox, error) {
+	return s.driver.ClaimBridgeReplyOutboxByOutboxID(ctx, tenantID, outboxID, claimedBy, now, claimDurationSeconds)
 }
 
 func (s *Store) CompleteClaimedBridgeReplyOutbox(ctx context.Context, complete *CompleteBridgeReplyOutbox) (*BridgeReplyOutbox, error) {
