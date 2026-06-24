@@ -187,7 +187,7 @@ export function getStyles(config: WidgetConfig): string {
     #acw-messages {
       flex: 1;
       overflow-y: auto;
-      padding: 16px;
+      padding: 0;
       display: flex;
       flex-direction: column;
       gap: 12px;
@@ -257,26 +257,27 @@ export function getStyles(config: WidgetConfig): string {
 
     /* Message Bubble */
     .acw-msg-bubble {
-      max-width: 85%;
-      padding: 12px;
+      min-width: 120px;
+      padding: 14px 16px;
       border-radius: 8px;
       font-size: 14px;
-      line-height: 1.6;
+      line-height: 1.75;
+      text-align: left;
       word-wrap: break-word;
       white-space: pre-wrap;
     }
 
     /* Customer (User) Bubble Specifics */
     .acw-msg-user .acw-msg-bubble {
-      background-color: #172554;
-      border: 1px solid #1e3a8a;
+      background-color: #1e3a5f;
+      border: 1px solid #2563eb;
       color: #e4e4e7;
     }
 
     /* Agent (Assistant) Bubble Specifics */
     .acw-msg-assistant .acw-msg-bubble {
-      background-color: #27272a;
-      border: 1px solid #3f3f46;
+      background-color: #3f3f46;
+      border: 1px solid #52525b;
       color: #e4e4e7;
     }
 
@@ -285,7 +286,7 @@ export function getStyles(config: WidgetConfig): string {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 6px;
+      margin-bottom: 4px;
     }
 
     /* Role label */
@@ -387,10 +388,10 @@ export function getStyles(config: WidgetConfig): string {
       display: flex;
       align-items: flex-end;
       gap: 8px;
-      background: #27272a;
-      border: 1px solid #3f3f46;
+      background: #3f3f46;
+      border: 1px solid #52525b;
       border-radius: 8px;
-      padding: 8px 10px 8px 14px;
+      padding: 14px 16px;
       transition: border-color 0.2s ease;
     }
 
@@ -403,12 +404,12 @@ export function getStyles(config: WidgetConfig): string {
       border: none;
       background: transparent;
       font-size: 14px;
-      line-height: 1.5;
+      line-height: 1.75;
       resize: none;
       outline: none;
       min-height: 24px;
       max-height: 100px;
-      padding: 4px 0;
+      padding: 0;
       color: #e4e4e7;
     }
 
