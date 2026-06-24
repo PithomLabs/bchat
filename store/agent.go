@@ -260,6 +260,8 @@ type AgentMessage struct {
 	Role      string    `json:"role"`
 	Content   string    `json:"content"`
 	Timestamp time.Time `json:"timestamp"`
+	Source    string    `json:"source,omitempty"`
+	SourceID  string    `json:"source_id,omitempty"`
 }
 
 // FindAgentSession contains filters for finding sessions.

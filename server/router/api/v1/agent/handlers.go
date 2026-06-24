@@ -259,6 +259,35 @@ func (h *Handler) HandleBridgeReply(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 
+	var deliveryStatus *WebChatDeliveryStatus
+	if result != nil && result.Outbox != nil {
+		deliveryStatus = &WebChatDeliveryStatus{
+			Attempted: true,
+			Status:    "failed",
+		}
+		dErr := h.service.DeliverWebChatReply(ctx, tenant.ID, result.Outbox.OutboxID)
+		if dErr == nil {
+			deliveryStatus.Status = "completed"
+		} else if errors.Is(dErr, store.ErrBridgeOutboxAlreadyCompleted) {
+			deliveryStatus.Status = "skipped_completed"
+		} else if errors.Is(dErr, store.ErrBridgeOutboxAlreadyFailed) {
+			deliveryStatus.Status = "skipped_failed"
+		} else if errors.Is(dErr, store.ErrBridgeOutboxConflict) {
+			deliveryStatus.Status = "skipped_claimed_or_conflict"
+		} else {
+			deliveryStatus.Status = "failed"
+			slog.Error("webchat delivery failed during bridge reply", "outbox_id", result.Outbox.OutboxID, "error", dErr)
+		}
+	}
+
+	// Update the outbox status representation returned to operator
+	outboxStatus := result.Outbox.Status
+	if deliveryStatus != nil && (deliveryStatus.Status == "completed" || deliveryStatus.Status == "skipped_completed") {
+		outboxStatus = "completed"
+	} else if deliveryStatus != nil && (deliveryStatus.Status == "failed" || deliveryStatus.Status == "skipped_failed") {
+		outboxStatus = "failed"
+	}
+
 	return c.JSON(http.StatusOK, BridgeReplyResponse{
 		Status:         "reply_persisted_not_delivered",
 		ReplyID:        result.Reply.ReplyID,
@@ -266,9 +295,10 @@ func (h *Handler) HandleBridgeReply(c echo.Context) error {
 		MessageID:      result.Reply.ClientMessageID,
 		DeliveryStatus: result.Reply.DeliveryStatus,
 		Outbox: &BridgeReplyOutboxResponse{
-			Status:   result.Outbox.Status,
+			Status:   outboxStatus,
 			OutboxID: result.Outbox.OutboxID,
 		},
+		WebChatDelivery: deliveryStatus,
 	})
 }
 
@@ -422,6 +452,94 @@ func (h *Handler) HandleChatExternal(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, response)
+}
+
+type VisitorMessage struct {
+	Role      string    `json:"role"`
+	Content   string    `json:"content"`
+	Timestamp time.Time `json:"timestamp"`
+	Kind      string    `json:"kind,omitempty"`
+}
+
+type VisitorBridgeState struct {
+	Status      string `json:"status"`
+	RoutingMode string `json:"routing_mode"`
+}
+
+// HandleGetExternalTranscript retrieves the transcript for a visitor chat session.
+// GET /api/v1/agent/:slug/chat/ext/transcript?session_id=...
+func (h *Handler) HandleGetExternalTranscript(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+	sessionID := c.QueryParam("session_id")
+
+	if sessionID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "session_id is required")
+	}
+
+	sessionID, _, err := NormalizeExternalSessionID(sessionID)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid session_id")
+	}
+
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil || !tenant.IsActive {
+		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
+	}
+
+	session := h.service.memorySessions.Get(tenant.ID, sessionID)
+	if session == nil {
+		transcript, err := h.store.GetAgentTranscript(ctx, &store.FindAgentTranscript{
+			SessionID: &sessionID,
+			TenantID:  &tenant.ID,
+		})
+		if err != nil {
+			slog.Error("failed to get transcript", "tenantID", tenant.ID, "error", err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to load transcript")
+		}
+		if transcript == nil {
+			return echo.NewHTTPError(http.StatusNotFound, "Session not found")
+		}
+		session = h.service.rebuildMemorySession(ctx, tenant.ID, sessionID, transcript)
+	}
+
+	// Fetch active handoff state
+	activeHandoff, err := h.store.FindActiveBridgeHandoff(ctx, tenant.ID, sessionID)
+	if err != nil && !errors.Is(err, store.ErrBridgeUnsupportedDatabase) {
+		slog.Error("failed to find active bridge handoff", "tenantID", tenant.ID, "error", err)
+	}
+
+	var bridgeState *VisitorBridgeState
+	if activeHandoff != nil {
+		status := "human_handoff_active"
+		if activeHandoff.RoutingMode == store.BridgeRoutingModeHandoffQueued {
+			status = "human_handoff_queued"
+		}
+		bridgeState = &VisitorBridgeState{
+			Status:      status,
+			RoutingMode: string(activeHandoff.RoutingMode),
+		}
+	}
+
+	// Map to visitor-safe DTO
+	visitorMessages := make([]VisitorMessage, 0, len(session.Messages))
+	for _, m := range session.Messages {
+		kind := ""
+		if m.Source == "bridge_human_reply" {
+			kind = "human_agent"
+		}
+		visitorMessages = append(visitorMessages, VisitorMessage{
+			Role:      m.Role,
+			Content:   m.Content,
+			Timestamp: m.Timestamp,
+			Kind:      kind,
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"messages": visitorMessages,
+		"bridge":   bridgeState,
+	})
 }
 
 // HandleChatInternal handles internal (authenticated) chat requests.

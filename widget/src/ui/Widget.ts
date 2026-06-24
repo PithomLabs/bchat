@@ -19,9 +19,11 @@ export class Widget {
   private messagesContainer: HTMLDivElement;
   private inputArea: HTMLDivElement;
 
+  private pollInterval: any = null;
+
   constructor(config: WidgetConfig) {
     this.config = config;
-    this.state = new StateManager();
+    this.state = new StateManager(config.tenant);
 
     // Create widget container
     this.container = document.createElement('div');
@@ -52,7 +54,10 @@ export class Widget {
     this.container.appendChild(this.panel);
 
     // Subscribe to state changes
-    this.state.subscribe((state) => this.render(state));
+    this.state.subscribe((state) => {
+      this.render(state);
+      this.handlePollingLifecycle(state);
+    });
   }
 
   /**
@@ -70,12 +75,80 @@ export class Widget {
 
     // Initial render
     this.render(this.state.getState());
+
+    // Load initial transcript if session exists in localStorage
+    this.initSession();
+  }
+
+  private async initSession(): Promise<void> {
+    const key = `bchat_session_id:${this.config.tenant}`;
+    const savedSessionId = localStorage.getItem(key);
+    if (savedSessionId) {
+      this.state.setSessionId(savedSessionId);
+      await this.fetchTranscript(savedSessionId);
+    }
+  }
+
+  private async fetchTranscript(sessionId: string): Promise<void> {
+    try {
+      const url = `${this.config.baseUrl}/api/v1/agent/${this.config.tenant}/chat/ext/transcript?session_id=${sessionId}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.messages) {
+          const messages = data.messages.map((m: any) => ({
+            role: m.role === 'user' ? 'user' : 'assistant',
+            content: m.content,
+            timestamp: new Date(m.timestamp),
+          }));
+          this.state.setMessages(messages);
+        }
+        if (data.bridge) {
+          this.state.setBridge(data.bridge);
+        } else {
+          this.state.setBridge(null);
+        }
+      }
+    } catch (e) {
+      console.error('[AgentChatWidget] Failed to load transcript:', e);
+    }
+  }
+
+  private startPolling(): void {
+    if (this.pollInterval) return;
+    this.pollInterval = setInterval(async () => {
+      const state = this.state.getState();
+      if (!state.sessionId || !state.isOpen || state.isMinimized) {
+        this.stopPolling();
+        return;
+      }
+      await this.fetchTranscript(state.sessionId);
+    }, 3000);
+  }
+
+  private stopPolling(): void {
+    if (this.pollInterval) {
+      clearInterval(this.pollInterval);
+      this.pollInterval = null;
+    }
+  }
+
+  private handlePollingLifecycle(state: WidgetState): void {
+    const isHandoffActive = state.bridge && (state.bridge.status === 'human_handoff_active' || state.bridge.status === 'human_handoff_queued');
+    const shouldPoll = state.isOpen && !state.isMinimized && state.sessionId && isHandoffActive;
+
+    if (shouldPoll) {
+      this.startPolling();
+    } else {
+      this.stopPolling();
+    }
   }
 
   /**
    * Unmount widget from the DOM
    */
   unmount(): void {
+    this.stopPolling();
     const styleEl = document.getElementById('acw-styles');
     if (styleEl) {
       styleEl.remove();
@@ -169,9 +242,12 @@ export class Widget {
       // Update session ID
       this.state.setSessionId(response.session_id);
 
+      // Update bridge state
+      this.state.setBridge(response.bridge || null);
+
       // Add assistant message
       this.state.addMessage({
-        role: 'assistant',
+        role: response.message.role === 'user' ? 'user' : 'assistant',
         content: response.message.content,
         timestamp: new Date(response.message.timestamp),
       });

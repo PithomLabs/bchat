@@ -122,9 +122,11 @@ func TestChatExternalHumanActiveHandoffDoesNotAppendUserOrAIMessage(t *testing.T
 	_, err = service.ChatExternal(ctx, tenant.Slug, "127.0.0.1", "test", ChatRequest{SessionID: sessionID, Message: "are you there?"})
 	require.NoError(t, err)
 
-	// Verify transcript is still 2 (user + AI)
+	// Verify transcript is 3 (user + AI + user, no new AI message appended)
 	memSession = service.memorySessions.GetOrCreate(tenant.ID, sessionID)
-	require.Len(t, memSession.Messages, 2)
+	require.Len(t, memSession.Messages, 3)
+	require.Equal(t, "user", memSession.Messages[2].Role)
+	require.Equal(t, "are you there?", memSession.Messages[2].Content)
 }
 
 func TestChatExternalUnsupportedBridgeDBDoesNotBreakNormalChat(t *testing.T) {

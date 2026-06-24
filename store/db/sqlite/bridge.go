@@ -458,6 +458,25 @@ func (d *DB) GetBridgeHandoffReplyByClientMessageID(ctx context.Context, tenantI
 	return &reply, nil
 }
 
+func (d *DB) GetBridgeHandoffReplyByReplyID(ctx context.Context, tenantID int32, replyID string) (*store.BridgeHandoffReply, error) {
+	var reply store.BridgeHandoffReply
+	err := d.db.QueryRowContext(ctx, `
+		SELECT id, reply_id, tenant_id, session_id, handoff_id, generation, client_message_id, text, delivery_status, created_at
+		FROM bridge_handoff_replies
+		WHERE tenant_id = ? AND reply_id = ?
+	`, tenantID, replyID).Scan(
+		&reply.ID, &reply.ReplyID, &reply.TenantID, &reply.SessionID, &reply.HandoffID,
+		&reply.Generation, &reply.ClientMessageID, &reply.Text, &reply.DeliveryStatus, &reply.CreatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get bridge handoff reply by reply id: %w", err)
+	}
+	return &reply, nil
+}
+
 func (d *DB) CreateBridgeHandoffReplyAndOutboxIfActive(ctx context.Context, create *store.CreateBridgeHandoffReply) (*store.BridgeHandoffReplyWithOutbox, error) {
 	conn, err := d.db.Conn(ctx)
 	if err != nil {
@@ -1000,3 +1019,108 @@ func (d *DB) FailClaimedBridgeReplyOutbox(ctx context.Context, fail *store.FailB
 	rollback()
 	return nil, store.ErrBridgeOutboxConflict
 }
+
+func (d *DB) ClaimBridgeReplyOutboxByOutboxID(ctx context.Context, tenantID int32, outboxID string, claimedBy string, now time.Time, claimDurationSeconds int64) (*store.BridgeReplyOutbox, error) {
+	if tenantID <= 0 || len(outboxID) != 36 || len(claimedBy) < 1 || len(claimedBy) > 128 {
+		return nil, store.ErrBridgeInvalidArgument
+	}
+	for _, r := range claimedBy {
+		if r < 32 || r > 126 {
+			return nil, store.ErrBridgeInvalidArgument
+		}
+	}
+	nowUnix := now.Unix()
+	if nowUnix <= 0 || claimDurationSeconds <= 0 {
+		return nil, store.ErrBridgeInvalidArgument
+	}
+
+	conn, err := d.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get connection: %w", err)
+	}
+	defer conn.Close()
+
+	_, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE")
+	if err != nil {
+		return nil, fmt.Errorf("begin immediate transaction: %w", err)
+	}
+
+	rollback := func() {
+		_, _ = conn.ExecContext(ctx, "ROLLBACK")
+	}
+
+	var ob store.BridgeReplyOutbox
+	var createdAt int64
+	err = conn.QueryRowContext(ctx, `
+		SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at, completed_at, failed_at, failure_code, failure_message
+		FROM bridge_reply_outbox
+		WHERE tenant_id = ? AND outbox_id = ?
+	`, tenantID, outboxID).Scan(
+		&ob.ID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &createdAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt, &ob.CompletedAt, &ob.FailedAt, &ob.FailureCode, &ob.FailureMessage,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		rollback()
+		return nil, store.ErrBridgeOutboxNotFound
+	}
+	if err != nil {
+		rollback()
+		return nil, fmt.Errorf("query outbox by id: %w", err)
+	}
+
+	if ob.Status == "completed" {
+		rollback()
+		return nil, store.ErrBridgeOutboxAlreadyCompleted
+	}
+	if ob.Status == "failed" {
+		rollback()
+		return nil, store.ErrBridgeOutboxAlreadyFailed
+	}
+	if ob.Status != "pending" {
+		rollback()
+		return nil, store.ErrBridgeOutboxConflict
+	}
+
+	claimToken := uuid.NewString()
+	expiresAt := nowUnix + claimDurationSeconds
+
+	res, err := conn.ExecContext(ctx, `
+		UPDATE bridge_reply_outbox
+		SET status='claimed',
+		    claim_token=?,
+		    claimed_by=?,
+		    claimed_at=?,
+		    claim_expires_at=?,
+		    attempt_count=attempt_count+1
+		WHERE id=? AND tenant_id=? AND status='pending'
+	`, claimToken, claimedBy, nowUnix, expiresAt, ob.ID, tenantID)
+	if err != nil {
+		rollback()
+		return nil, fmt.Errorf("update claim: %w", err)
+	}
+
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		rollback()
+		return nil, fmt.Errorf("check rows affected: %w", err)
+	}
+
+	if rowsAffected == 1 {
+		_, err = conn.ExecContext(ctx, "COMMIT")
+		if err != nil {
+			rollback()
+			return nil, fmt.Errorf("commit transaction: %w", err)
+		}
+		ob.CreatedAt = createdAt
+		ob.Status = "claimed"
+		ob.ClaimToken = &claimToken
+		ob.ClaimedBy = &claimedBy
+		ob.ClaimedAt = &nowUnix
+		ob.ClaimExpiresAt = &expiresAt
+		ob.AttemptCount++
+		return &ob, nil
+	}
+
+	rollback()
+	return nil, store.ErrBridgeOutboxConflict
+}
+

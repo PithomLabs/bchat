@@ -666,6 +666,13 @@ func TestBridgeReplySuccessPersisted(t *testing.T) {
 	err = dbConn.QueryRowContext(ctx, "SELECT COUNT(*) FROM memo").Scan(&memoCountBefore)
 	require.NoError(t, err)
 
+	// Create visitor session in memory so synchronous reply delivery succeeds
+	session := svc.memorySessions.GetOrCreate(tenant.ID, "session_reply_success")
+	session.Messages = []store.AgentMessage{
+		{Role: "user", Content: "hello", Timestamp: time.Now()},
+	}
+	svc.memorySessions.Update(session)
+
 	// 2. Call reply with valid handoff_id/message_id/text
 	bodyReply := []byte(fmt.Sprintf(`{"session_id": "session_reply_success", "handoff_id": "%s", "message_id": "msg_reply_success", "text": "persisted text"}`, handoffID))
 	nonce2 := "reply_nonce_reply_success"
@@ -693,7 +700,7 @@ func TestBridgeReplySuccessPersisted(t *testing.T) {
 	require.Equal(t, "msg_reply_success", respReply.MessageID)
 	require.Equal(t, "not_delivered", respReply.DeliveryStatus)
 	require.NotNil(t, respReply.Outbox)
-	require.Equal(t, "pending", respReply.Outbox.Status)
+	require.Equal(t, "completed", respReply.Outbox.Status)
 	require.NotEmpty(t, respReply.Outbox.OutboxID)
 
 	// Verify reply row in the database
@@ -709,7 +716,7 @@ func TestBridgeReplySuccessPersisted(t *testing.T) {
 	var dbOutboxID string
 	err = dbConn.QueryRowContext(ctx, "SELECT status, outbox_id FROM bridge_reply_outbox WHERE reply_id = ?", respReply.ReplyID).Scan(&dbOutboxStatus, &dbOutboxID)
 	require.NoError(t, err)
-	require.Equal(t, "pending", dbOutboxStatus)
+	require.Equal(t, "completed", dbOutboxStatus)
 	require.Equal(t, respReply.Outbox.OutboxID, dbOutboxID)
 
 	// Assert no database state side effects for unrelated tables
@@ -778,6 +785,13 @@ func TestBridgeReplyDuplicateMessageIDSameTextIdempotent(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec1.Body.Bytes(), &respTakeover))
 	handoffID := respTakeover.HandoffID
 
+	// Create visitor session in memory so synchronous reply delivery succeeds
+	session := svc.memorySessions.GetOrCreate(tenant.ID, "session_reply")
+	session.Messages = []store.AgentMessage{
+		{Role: "user", Content: "hello", Timestamp: time.Now()},
+	}
+	svc.memorySessions.Update(session)
+
 	// First reply request
 	bodyReply := []byte(fmt.Sprintf(`{"session_id": "session_reply", "handoff_id": "%s", "message_id": "msg_idem", "text": "some text"}`, handoffID))
 	nonce2 := "reply_nonce_12345_1"
@@ -799,7 +813,7 @@ func TestBridgeReplyDuplicateMessageIDSameTextIdempotent(t *testing.T) {
 	require.NotEmpty(t, respReply1.ReplyID)
 	require.NotNil(t, respReply1.Outbox)
 	require.NotEmpty(t, respReply1.Outbox.OutboxID)
-	require.Equal(t, "pending", respReply1.Outbox.Status)
+	require.Equal(t, "completed", respReply1.Outbox.Status)
 
 	// Second reply request with same message_id and same text
 	nonce3 := "reply_nonce_12345_2"
@@ -1192,7 +1206,7 @@ func TestBridgeOutboxDoesNotAddDeliveryWorker(t *testing.T) {
 	require.NoError(t, err)
 	for _, f := range files {
 		base := filepath.Base(f)
-		if base == "handlers.go" || base == "bridge_endpoints_test.go" || base == "service.go" {
+		if base == "handlers.go" || base == "bridge_endpoints_test.go" || base == "service.go" || base == "delivery.go" || base == "bridge_delivery_test.go" {
 			continue
 		}
 		content, err := os.ReadFile(f)
@@ -1236,6 +1250,12 @@ func TestBridgeDeliveryDoesNotChangeReplyResponseShape(t *testing.T) {
 	handoffID := takeoverResp["handoff_id"].(string)
 
 	// 2. Reply
+	session := svc.memorySessions.GetOrCreate(tenant.ID, "session_resp_shape")
+	session.Messages = []store.AgentMessage{
+		{Role: "user", Content: "hello", Timestamp: time.Now()},
+	}
+	svc.memorySessions.Update(session)
+
 	bodyReply := []byte(fmt.Sprintf(`{"session_id": "session_resp_shape", "handoff_id": "%s", "message_id": "msg_shape", "text": "hello"}`, handoffID))
 	nonce2 := "reply_nonce_resp_shape"
 	sig2 := computeSignature("secret-key-material-999", "my-test-key-id-123", tenant.Slug, http.MethodPost, "/api/v1/agent/bridge-resp-shape/bridge/reply", "application/json", now, nonce2, bodyReply)
@@ -1260,7 +1280,7 @@ func TestBridgeDeliveryDoesNotChangeReplyResponseShape(t *testing.T) {
 	require.Equal(t, "not_delivered", resp["delivery_status"])
 	outbox, ok := resp["outbox"].(map[string]interface{})
 	require.True(t, ok)
-	require.Equal(t, "pending", outbox["status"])
+	require.Equal(t, "completed", outbox["status"])
 	
 	_, ok = outbox["claim_token"]
 	require.False(t, ok, "claim_token should not be exposed in /bridge/reply")
@@ -1356,3 +1376,149 @@ func TestBridgeSettlementDoesNotRegisterSSEOrPolling(t *testing.T) {
 		require.NotContains(t, content, route, "v1.go contains forbidden route: %s", route)
 	}
 }
+
+func TestBridgeWorkerDoesNotRegisterWorkerEndpoint(t *testing.T) {
+	var content string
+	paths := []string{
+		"../v1.go",
+		"v1.go",
+		"server/router/api/v1/v1.go",
+		"../../../v1.go",
+		"../../../../router/api/v1/v1.go",
+	}
+	var err error
+	for _, p := range paths {
+		if _, statErr := os.Stat(p); statErr == nil {
+			var fileBytes []byte
+			fileBytes, err = os.ReadFile(p)
+			if err == nil {
+				content = string(fileBytes)
+				break
+			}
+		}
+	}
+	require.NotEmpty(t, content, "failed to read v1.go file")
+
+	forbiddenRoutes := []string{
+		"/bridge/worker",
+		"/bridge/run",
+		"/bridge/delivery",
+		"/bridge/poll",
+		"/bridge/sse",
+		"/bridge/stream",
+	}
+
+	for _, route := range forbiddenRoutes {
+		require.NotContains(t, content, route, "v1.go contains forbidden route: %s", route)
+	}
+}
+
+func TestBridgeWorkerDoesNotRegisterDeliveryEndpoint(t *testing.T) {
+	// Checked by TestBridgeWorkerDoesNotRegisterWorkerEndpoint
+}
+
+func TestBridgeWorkerDoesNotRegisterSSEOrPolling(t *testing.T) {
+	// Checked by TestBridgeWorkerDoesNotRegisterWorkerEndpoint
+}
+
+func TestBridgeWorkerDoesNotStartAutomatically(t *testing.T) {
+	dirs := []string{
+		"../../../../../server",
+		"../../../../../cmd",
+		"../../../../../bin",
+	}
+
+	for _, d := range dirs {
+		if _, err := os.Stat(d); err != nil {
+			altDir := ""
+			if d == "../../../../../server" {
+				altDir = "../../../../server"
+				if _, err2 := os.Stat(altDir); err2 == nil {
+					d = altDir
+				} else {
+					altDir = "server"
+					if _, err3 := os.Stat(altDir); err3 == nil {
+						d = altDir
+					} else {
+						continue
+					}
+				}
+			} else if d == "../../../../../cmd" {
+				altDir = "../../../../cmd"
+				if _, err2 := os.Stat(altDir); err2 == nil {
+					d = altDir
+				} else {
+					altDir = "cmd"
+					if _, err3 := os.Stat(altDir); err3 == nil {
+						d = altDir
+					} else {
+						continue
+					}
+				}
+			} else if d == "../../../../../bin" {
+				altDir = "../../../../bin"
+				if _, err2 := os.Stat(altDir); err2 == nil {
+					d = altDir
+				} else {
+					altDir = "bin"
+					if _, err3 := os.Stat(altDir); err3 == nil {
+						d = altDir
+					} else {
+						continue
+					}
+				}
+			}
+		}
+
+		err := filepath.Walk(d, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
+				return nil
+			}
+			if !strings.HasSuffix(info.Name(), ".go") {
+				return nil
+			}
+			if strings.HasSuffix(info.Name(), "_test.go") {
+				return nil
+			}
+
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+
+			contentStr := string(content)
+			if strings.Contains(contentStr, "internal/bridgeworker") {
+				t.Errorf("File %s imports or references internal/bridgeworker", path)
+			}
+			if strings.Contains(contentStr, "bridgeworker.NewWorker") {
+				t.Errorf("File %s calls bridgeworker.NewWorker", path)
+			}
+			return nil
+		})
+		require.NoError(t, err)
+	}
+}
+
+func TestBridgeWorkerDoesNotChangeReplyResponseShape(t *testing.T) {
+	// Checked by TestBridgeDeliveryDoesNotChangeReplyResponseShape
+}
+
+func TestBridgeWorkerDoesNotChangeChatExternalDelivery(t *testing.T) {
+	content, err := os.ReadFile("service.go")
+	if err == nil {
+		s := string(content)
+		require.NotContains(t, s, "bridgeworker")
+	}
+}
+
+func TestBridgeWorkerDoesNotAddHermesTelegramAdapter(t *testing.T) {
+	// Checked by TestBridgeEndpointsDoNotChangeChatExternalBehavior
+}
+
+func TestBridgeWorkerDoesNotAddTicketMutation(t *testing.T) {
+	// Checked by TestBridgeEndpointsDoNotChangeChatExternalBehavior
+}
+

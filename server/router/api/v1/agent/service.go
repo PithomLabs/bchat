@@ -1454,6 +1454,19 @@ func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAg
 			status = "human_handoff_queued"
 		}
 
+		// Append visitor's message during active handoff so operator can see it
+		session.Messages = append(session.Messages, store.AgentMessage{
+			Role:      "user",
+			Content:   req.Message,
+			Timestamp: now,
+		})
+		session.MessageCount = len(session.Messages)
+		s.memorySessions.Update(session)
+
+		if s.shouldRecordTranscript(ctx, config.TenantID) {
+			_ = s.saveTranscript(ctx, session, clientIP, userAgent)
+		}
+
 		return &ChatResponse{
 			SessionID: session.ID,
 			Message: ResponseMessage{
@@ -3475,13 +3488,19 @@ type BridgeReplyOutboxResponse struct {
 	OutboxID string `json:"outbox_id"`
 }
 
+type WebChatDeliveryStatus struct {
+	Attempted bool   `json:"attempted"`
+	Status    string `json:"status"`
+}
+
 type BridgeReplyResponse struct {
-	Status         string                     `json:"status"`
-	ReplyID        string                     `json:"reply_id"`
-	HandoffID      string                     `json:"handoff_id"`
-	MessageID      string                     `json:"message_id"`
-	DeliveryStatus string                     `json:"delivery_status"`
-	Outbox         *BridgeReplyOutboxResponse `json:"outbox,omitempty"`
+	Status          string                     `json:"status"`
+	ReplyID         string                     `json:"reply_id"`
+	HandoffID       string                     `json:"handoff_id"`
+	MessageID       string                     `json:"message_id"`
+	DeliveryStatus  string                     `json:"delivery_status"`
+	Outbox          *BridgeReplyOutboxResponse `json:"outbox,omitempty"`
+	WebChatDelivery *WebChatDeliveryStatus     `json:"webchat_delivery,omitempty"`
 }
 
 

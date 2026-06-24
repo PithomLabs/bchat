@@ -1,4 +1,4 @@
-import type { Message, WidgetState } from './types';
+import type { Message, WidgetState, BridgeState } from './types';
 import { INITIAL_STATE } from './types';
 
 /**
@@ -8,10 +8,12 @@ import { INITIAL_STATE } from './types';
 export class StateManager {
   private state: WidgetState;
   private listeners: Set<(state: WidgetState) => void>;
+  private tenantSlug: string;
 
-  constructor() {
+  constructor(tenantSlug: string) {
     this.state = { ...INITIAL_STATE };
     this.listeners = new Set();
+    this.tenantSlug = tenantSlug;
   }
 
   /**
@@ -68,11 +70,25 @@ export class StateManager {
   }
 
   setSessionId(sessionId: string | null): void {
+    const key = `bchat_session_id:${this.tenantSlug}`;
+    if (sessionId) {
+      localStorage.setItem(key, sessionId);
+    } else {
+      localStorage.removeItem(key);
+    }
     this.update({ sessionId });
   }
 
   setError(error: string | null): void {
     this.update({ error });
+  }
+
+  setBridge(bridge: BridgeState | null): void {
+    this.update({ bridge });
+  }
+
+  setMessages(messages: Message[]): void {
+    this.update({ messages });
   }
 
   addMessage(message: Message): void {
@@ -82,10 +98,13 @@ export class StateManager {
   }
 
   clearMessages(): void {
+    const key = `bchat_session_id:${this.tenantSlug}`;
+    localStorage.removeItem(key);
     this.update({
       messages: [],
       sessionId: null,
       error: null,
+      bridge: null,
     });
   }
 

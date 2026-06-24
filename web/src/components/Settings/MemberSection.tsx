@@ -1,4 +1,11 @@
-import { Dropdown, Menu, MenuButton, MenuItem, Radio, RadioGroup } from "@mui/joy";
+import {
+  Dropdown,
+  Menu,
+  MenuButton,
+  MenuItem,
+  Radio,
+  RadioGroup,
+} from "@mui/joy";
 import { Button, Input } from "@usememos/mui";
 import { sortBy } from "lodash-es";
 import { MoreVerticalIcon } from "lucide-react";
@@ -51,7 +58,9 @@ const MemberSection = observer(() => {
     }
   };
 
-  const handleUsernameInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleUsernameInputChange = (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
     setState({
       ...state,
       creatingUser: {
@@ -61,7 +70,9 @@ const MemberSection = observer(() => {
     });
   };
 
-  const handlePasswordInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePasswordInputChange = (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
     setState({
       ...state,
       creatingUser: {
@@ -71,7 +82,9 @@ const MemberSection = observer(() => {
     });
   };
 
-  const handleUserRoleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleUserRoleInputChange = (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
     setState({
       ...state,
       creatingUser: {
@@ -82,7 +95,10 @@ const MemberSection = observer(() => {
   };
 
   const handleCreateUserBtnClick = async () => {
-    if (state.creatingUser.username === "" || state.creatingUser.password === "") {
+    if (
+      state.creatingUser.username === "" ||
+      state.creatingUser.password === ""
+    ) {
       toast.error(t("message.fill-all"));
       return;
     }
@@ -104,7 +120,9 @@ const MemberSection = observer(() => {
             userId: userId,
             permissions: ["tenant:read"],
           });
-          toast.success("User created and associated with company successfully");
+          toast.success(
+            "User created and associated with company successfully",
+          );
         }
       } else {
         toast.success(t("message.created-successfully"));
@@ -124,7 +142,9 @@ const MemberSection = observer(() => {
   };
 
   const handleArchiveUserClick = async (user: User) => {
-    const confirmed = window.confirm(t("setting.member-section.archive-warning", { username: user.nickname }));
+    const confirmed = window.confirm(
+      t("setting.member-section.archive-warning", { username: user.nickname }),
+    );
     if (confirmed) {
       await userServiceClient.updateUser({
         user: {
@@ -149,7 +169,9 @@ const MemberSection = observer(() => {
   };
 
   const handleDeleteUserClick = async (user: User) => {
-    const confirmed = window.confirm(t("setting.member-section.delete-warning", { username: user.nickname }));
+    const confirmed = window.confirm(
+      t("setting.member-section.delete-warning", { username: user.nickname }),
+    );
     if (confirmed) {
       await userStore.deleteUser(user.name);
       fetchUsers();
@@ -158,7 +180,9 @@ const MemberSection = observer(() => {
 
   return (
     <div className="w-full flex flex-col gap-2 pt-2 pb-4">
-      <p className="font-medium text-gray-700 dark:text-gray-500">{t("setting.member-section.create-a-member")}</p>
+      <p className="font-medium text-gray-700 dark:text-gray-500">
+        {t("setting.member-section.create-a-member")}
+      </p>
       <div className="w-auto flex flex-col justify-start items-start gap-2 border rounded-md py-2 px-3 dark:border-zinc-700">
         <div className="flex flex-col justify-start items-start gap-1">
           <span>{t("common.username")}</span>
@@ -182,21 +206,43 @@ const MemberSection = observer(() => {
         </div>
         <div className="flex flex-col justify-start items-start gap-1">
           <span>{t("common.role")}</span>
-          <RadioGroup orientation="horizontal" defaultValue={User_Role.USER} onChange={handleUserRoleInputChange}>
-            <Radio value={User_Role.USER} label={t("setting.member-section.user")} />
-            <Radio value={User_Role.ADMIN} label={t("setting.member-section.admin")} />
+          <RadioGroup
+            orientation="horizontal"
+            defaultValue={User_Role.USER}
+            onChange={handleUserRoleInputChange}
+          >
+            <Radio
+              value={User_Role.USER}
+              label={t("setting.member-section.user")}
+            />
+            <Radio
+              value={User_Role.ADMIN}
+              label={t("setting.member-section.admin")}
+            />
           </RadioGroup>
         </div>
         <div className="flex flex-col justify-start items-start gap-1 mt-1">
-          <span className="text-sm font-medium">{t("setting.member-section.company", "Company")}</span>
+          <span className="text-sm font-medium">
+            {t("setting.member-section.company")}
+          </span>
           <select
             className="w-full bg-transparent border rounded px-3 py-2 text-sm dark:border-zinc-700"
             value={state.creatingUser.tenantSlug || ""}
-            onChange={(e) => setState({ ...state, creatingUser: { ...state.creatingUser, tenantSlug: e.target.value } })}
+            onChange={(e) =>
+              setState({
+                ...state,
+                creatingUser: {
+                  ...state.creatingUser,
+                  tenantSlug: e.target.value,
+                },
+              })
+            }
           >
             <option value="">None</option>
-            {agentAdminStore.state.tenants.map(tenant => (
-              <option key={tenant.slug} value={tenant.slug}>{tenant.companyName}</option>
+            {agentAdminStore.state.tenants.map((tenant) => (
+              <option key={tenant.slug} value={tenant.slug}>
+                {tenant.companyName}
+              </option>
             ))}
           </select>
         </div>
@@ -234,11 +280,19 @@ const MemberSection = observer(() => {
                 <tr key={user.name}>
                   <td className="whitespace-nowrap px-3 py-2 text-sm text-gray-500 dark:text-gray-400">
                     {user.username}
-                    <span className="ml-1 italic">{user.state === State.ARCHIVED && "(Archived)"}</span>
+                    <span className="ml-1 italic">
+                      {user.state === State.ARCHIVED && "(Archived)"}
+                    </span>
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-sm text-gray-500 dark:text-gray-400">{stringifyUserRole(user.role)}</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-sm text-gray-500 dark:text-gray-400">{user.nickname}</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-sm text-gray-500 dark:text-gray-400">{user.email}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-sm text-gray-500 dark:text-gray-400">
+                    {stringifyUserRole(user.role)}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2 text-sm text-gray-500 dark:text-gray-400">
+                    {user.nickname}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2 text-sm text-gray-500 dark:text-gray-400">
+                    {user.email}
+                  </td>
                   <td className="relative whitespace-nowrap py-2 pl-3 pr-4 text-right text-sm font-medium flex justify-end">
                     {currentUser?.name === user.name ? (
                       <span>{t("common.yourself")}</span>
@@ -248,13 +302,31 @@ const MemberSection = observer(() => {
                           <MoreVerticalIcon className="w-4 h-auto" />
                         </MenuButton>
                         <Menu placement="bottom-end" size="sm">
-                          <MenuItem onClick={() => showCreateUserDialog(user, () => fetchUsers())}>{t("common.update")}</MenuItem>
+                          <MenuItem
+                            onClick={() =>
+                              showCreateUserDialog(user, () => fetchUsers())
+                            }
+                          >
+                            {t("common.update")}
+                          </MenuItem>
                           {user.state === State.NORMAL ? (
-                            <MenuItem onClick={() => handleArchiveUserClick(user)}>{t("setting.member-section.archive-member")}</MenuItem>
+                            <MenuItem
+                              onClick={() => handleArchiveUserClick(user)}
+                            >
+                              {t("setting.member-section.archive-member")}
+                            </MenuItem>
                           ) : (
                             <>
-                              <MenuItem onClick={() => handleRestoreUserClick(user)}>{t("common.restore")}</MenuItem>
-                              <MenuItem onClick={() => handleDeleteUserClick(user)}>{t("setting.member-section.delete-member")}</MenuItem>
+                              <MenuItem
+                                onClick={() => handleRestoreUserClick(user)}
+                              >
+                                {t("common.restore")}
+                              </MenuItem>
+                              <MenuItem
+                                onClick={() => handleDeleteUserClick(user)}
+                              >
+                                {t("setting.member-section.delete-member")}
+                              </MenuItem>
                             </>
                           )}
                         </Menu>

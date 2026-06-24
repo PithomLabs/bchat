@@ -30,15 +30,18 @@ const CreateUserDialog: React.FC<Props> = (props: Props) => {
     if (!isCreating && props.user?.name) {
       const userId = parseInt(props.user.name.split("/")[1], 10);
       if (!isNaN(userId)) {
-        axios.get(`/api/v1/user/${userId}/tenants`).then((res) => {
-          if (res.data && res.data.tenants && res.data.tenants.length > 0) {
-            const currentSlug = res.data.tenants[0].tenant?.slug || "";
-            setTenantSlug(currentSlug);
-            setOriginalTenantSlug(currentSlug);
-          }
-        }).catch((err) => {
-          console.error("Failed to fetch user tenants", err);
-        });
+        axios
+          .get(`/api/v1/user/${userId}/tenants`)
+          .then((res) => {
+            if (res.data && res.data.tenants && res.data.tenants.length > 0) {
+              const currentSlug = res.data.tenants[0].tenant?.slug || "";
+              setTenantSlug(currentSlug);
+              setOriginalTenantSlug(currentSlug);
+            }
+          })
+          .catch((err) => {
+            console.error("Failed to fetch user tenants", err);
+          });
       }
     }
   }, [isCreating, props.user]);
@@ -74,9 +77,11 @@ const CreateUserDialog: React.FC<Props> = (props: Props) => {
         if (updateMask.length > 0) {
           await userServiceClient.updateUser({ user, updateMask });
         }
-        
+
         // Handle company (tenant) association update
-        const userId = props.user?.name ? parseInt(props.user.name.split("/")[1], 10) : NaN;
+        const userId = props.user?.name
+          ? parseInt(props.user.name.split("/")[1], 10)
+          : NaN;
         if (!isNaN(userId) && tenantSlug !== originalTenantSlug) {
           // If there was an original tenant and it changed, we should ideally revoke the old one.
           // The API allows revoking by calling DELETE /api/v1/agent/:slug/permissions/:userId
@@ -85,7 +90,10 @@ const CreateUserDialog: React.FC<Props> = (props: Props) => {
           }
           // Grant new permission
           if (tenantSlug) {
-            await agentAdminStore.grantPermission(tenantSlug, { userId, permissions: ["tenant:read"] });
+            await agentAdminStore.grantPermission(tenantSlug, {
+              userId,
+              permissions: ["tenant:read"],
+            });
           }
         }
 
@@ -111,7 +119,9 @@ const CreateUserDialog: React.FC<Props> = (props: Props) => {
       </div>
       <div className="flex flex-col justify-start items-start max-w-md min-w-72">
         <div className="w-full flex flex-col justify-start items-start mb-3">
-          <span className="text-sm whitespace-nowrap mb-1">{t("common.username")}</span>
+          <span className="text-sm whitespace-nowrap mb-1">
+            {t("common.username")}
+          </span>
           <Input
             className="w-full"
             type="text"
@@ -123,7 +133,9 @@ const CreateUserDialog: React.FC<Props> = (props: Props) => {
               })
             }
           />
-          <span className="text-sm whitespace-nowrap mt-3 mb-1">{t("common.password")}</span>
+          <span className="text-sm whitespace-nowrap mt-3 mb-1">
+            {t("common.password")}
+          </span>
           <Input
             className="w-full"
             type="password"
@@ -136,18 +148,30 @@ const CreateUserDialog: React.FC<Props> = (props: Props) => {
               })
             }
           />
-          <span className="text-sm whitespace-nowrap mt-3 mb-1">{t("common.role")}</span>
+          <span className="text-sm whitespace-nowrap mt-3 mb-1">
+            {t("common.role")}
+          </span>
           <RadioGroup
             orientation="horizontal"
             defaultValue={user.role}
-            onChange={(e) => setPartialUser({ role: e.target.value as User_Role })}
+            onChange={(e) =>
+              setPartialUser({ role: e.target.value as User_Role })
+            }
           >
-            <Radio value={User_Role.USER} label={t("setting.member-section.user")} />
-            <Radio value={User_Role.ADMIN} label={t("setting.member-section.admin")} />
+            <Radio
+              value={User_Role.USER}
+              label={t("setting.member-section.user")}
+            />
+            <Radio
+              value={User_Role.ADMIN}
+              label={t("setting.member-section.admin")}
+            />
           </RadioGroup>
           {!isCreating && (
             <>
-              <span className="text-sm whitespace-nowrap mt-3 mb-1">{t("setting.member-section.company", "Company")}</span>
+              <span className="text-sm whitespace-nowrap mt-3 mb-1">
+                {t("setting.member-section.company")}
+              </span>
               <select
                 className="w-full bg-transparent border rounded px-3 py-2 text-sm dark:border-zinc-700"
                 value={tenantSlug}
@@ -164,10 +188,18 @@ const CreateUserDialog: React.FC<Props> = (props: Props) => {
           )}
         </div>
         <div className="w-full flex flex-row justify-end items-center space-x-2 mt-2">
-          <Button variant="plain" disabled={requestState.isLoading} onClick={destroy}>
+          <Button
+            variant="plain"
+            disabled={requestState.isLoading}
+            onClick={destroy}
+          >
             {t("common.cancel")}
           </Button>
-          <Button color="primary" disabled={requestState.isLoading} onClick={handleConfirm}>
+          <Button
+            color="primary"
+            disabled={requestState.isLoading}
+            onClick={handleConfirm}
+          >
             {t("common.confirm")}
           </Button>
         </div>

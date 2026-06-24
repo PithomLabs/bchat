@@ -15,7 +15,12 @@ interface AgentChatWidgetProps {
   companyName?: string;
 }
 
-const AgentChatWidget = ({ tenantSlug, position = "bottom-right", primaryColor = "#0d9488", companyName }: AgentChatWidgetProps) => {
+const AgentChatWidget = ({
+  tenantSlug,
+  position = "bottom-right",
+  primaryColor = "#0d9488",
+  companyName,
+}: AgentChatWidgetProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -23,11 +28,102 @@ const AgentChatWidget = ({ tenantSlug, position = "bottom-right", primaryColor =
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [bridgeState, setBridgeState] = useState<{
+    status: string;
+    handoff_id: string;
+    routing_mode: string;
+  } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Load session from localStorage on init
+  useEffect(() => {
+    const key = `bchat_session_id:${tenantSlug}`;
+    const savedSessionId = localStorage.getItem(key);
+    if (savedSessionId) {
+      setSessionId(savedSessionId);
+      // Fetch transcript immediately
+      const fetchTranscript = async () => {
+        try {
+          const res = await fetch(
+            `/api/v1/agent/${tenantSlug}/chat/ext/transcript?session_id=${savedSessionId}`,
+          );
+          if (res.ok) {
+            const data = await res.json();
+            if (data.messages) {
+              setMessages(
+                data.messages.map((m: any) => ({
+                  role: m.role === "user" ? "user" : "assistant",
+                  content: m.content,
+                  timestamp: new Date(m.timestamp),
+                })),
+              );
+            }
+            if (data.bridge) {
+              setBridgeState(data.bridge);
+            } else {
+              setBridgeState(null);
+            }
+          }
+        } catch (e) {
+          console.error("Failed to load transcript on mount", e);
+        }
+      };
+      fetchTranscript();
+    }
+  }, [tenantSlug]);
+
+  // Handle localStorage sync
+  useEffect(() => {
+    const key = `bchat_session_id:${tenantSlug}`;
+    if (sessionId) {
+      localStorage.setItem(key, sessionId);
+    } else {
+      localStorage.removeItem(key);
+    }
+  }, [sessionId, tenantSlug]);
+
+  // Polling loop when handoff is active/queued and widget is open
+  useEffect(() => {
+    if (!isOpen || isMinimized || !sessionId || !bridgeState) return;
+    if (
+      bridgeState.status !== "human_handoff_active" &&
+      bridgeState.status !== "human_handoff_queued"
+    )
+      return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(
+          `/api/v1/agent/${tenantSlug}/chat/ext/transcript?session_id=${sessionId}`,
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (data.messages) {
+            setMessages(
+              data.messages.map((m: any) => ({
+                role: m.role === "user" ? "user" : "assistant",
+                content: m.content,
+                timestamp: new Date(m.timestamp),
+              })),
+            );
+          }
+          if (data.bridge) {
+            setBridgeState(data.bridge);
+          } else {
+            setBridgeState(null);
+          }
+        }
+      } catch (e) {
+        console.error("Failed to poll transcript", e);
+      }
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [isOpen, isMinimized, sessionId, bridgeState?.status, tenantSlug]);
 
   const sendMessage = async () => {
     if (!input.trim() || isLoading) return;
@@ -69,6 +165,11 @@ const AgentChatWidget = ({ tenantSlug, position = "bottom-right", primaryColor =
 
       const data = await response.json();
       setSessionId(data.session_id);
+      if (data.bridge) {
+        setBridgeState(data.bridge);
+      } else {
+        setBridgeState(null);
+      }
 
       // Add assistant message
       setMessages((prev) => [
@@ -93,13 +194,17 @@ const AgentChatWidget = ({ tenantSlug, position = "bottom-right", primaryColor =
     }
   };
 
-  const positionClasses = position === "bottom-right" ? "right-4 bottom-4" : "left-4 bottom-4";
+  const positionClasses =
+    position === "bottom-right" ? "right-4 bottom-4" : "left-4 bottom-4";
 
   if (!isOpen) {
     return (
       <button
         onClick={() => setIsOpen(true)}
-        className={cn("fixed z-50 p-4 rounded-full shadow-lg text-white transition-transform hover:scale-110", positionClasses)}
+        className={cn(
+          "fixed z-50 p-4 rounded-full shadow-lg text-white transition-transform hover:scale-110",
+          positionClasses,
+        )}
         style={{ backgroundColor: primaryColor }}
         aria-label="Open chat"
       >
@@ -110,20 +215,34 @@ const AgentChatWidget = ({ tenantSlug, position = "bottom-right", primaryColor =
 
   return (
     <div
-      className={cn("fixed z-50 w-80 sm:w-96 flex flex-col bg-white rounded-lg shadow-2xl overflow-hidden", positionClasses)}
+      className={cn(
+        "fixed z-50 w-80 sm:w-96 flex flex-col bg-white rounded-lg shadow-2xl overflow-hidden",
+        positionClasses,
+      )}
       style={{ height: isMinimized ? "auto" : "500px" }}
     >
       {/* Header */}
-      <div className="flex items-center justify-between p-3 text-white" style={{ backgroundColor: primaryColor }}>
+      <div
+        className="flex items-center justify-between p-3 text-white"
+        style={{ backgroundColor: primaryColor }}
+      >
         <div className="flex items-center gap-2">
           <MessageSquareIcon className="w-5 h-5" />
-          <span className="font-medium">{companyName ? `Chat with ${companyName}` : "Chat with us"}</span>
+          <span className="font-medium">
+            {companyName ? `Chat with ${companyName}` : "Chat with us"}
+          </span>
         </div>
         <div className="flex gap-1">
-          <button onClick={() => setIsMinimized(!isMinimized)} className="p-1 hover:bg-white/20 rounded">
+          <button
+            onClick={() => setIsMinimized(!isMinimized)}
+            className="p-1 hover:bg-white/20 rounded"
+          >
             <MinusIcon className="w-4 h-4" />
           </button>
-          <button onClick={() => setIsOpen(false)} className="p-1 hover:bg-white/20 rounded">
+          <button
+            onClick={() => setIsOpen(false)}
+            className="p-1 hover:bg-white/20 rounded"
+          >
             <XIcon className="w-4 h-4" />
           </button>
         </div>
@@ -140,11 +259,19 @@ const AgentChatWidget = ({ tenantSlug, position = "bottom-right", primaryColor =
               </div>
             )}
             {messages.map((msg, idx) => (
-              <div key={idx} className={cn("flex", msg.role === "user" ? "justify-end" : "justify-start")}>
+              <div
+                key={idx}
+                className={cn(
+                  "flex",
+                  msg.role === "user" ? "justify-end" : "justify-start",
+                )}
+              >
                 <div
                   className={cn(
                     "max-w-[80%] p-2.5 rounded-lg text-sm",
-                    msg.role === "user" ? "bg-teal-500 text-white" : "bg-white border border-gray-200 text-gray-800",
+                    msg.role === "user"
+                      ? "bg-teal-500 text-white"
+                      : "bg-white border border-gray-200 text-gray-800",
                   )}
                 >
                   <p className="whitespace-pre-wrap">{msg.content}</p>
@@ -158,7 +285,9 @@ const AgentChatWidget = ({ tenantSlug, position = "bottom-right", primaryColor =
                 </div>
               </div>
             )}
-            {error && <div className="text-center text-red-500 text-sm">{error}</div>}
+            {error && (
+              <div className="text-center text-red-500 text-sm">{error}</div>
+            )}
             <div ref={messagesEndRef} />
           </div>
 
