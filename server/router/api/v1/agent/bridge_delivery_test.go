@@ -767,6 +767,15 @@ func TestBChatLiveWidgetLocalStorageUsage(t *testing.T) {
 	require.Contains(t, string(stateContent), "`bchat_session_id:${this.tenantSlug}`")
 }
 
+func TestLegacyWidgetDelegatesToModernBundle(t *testing.T) {
+	script := generateWidgetLoaderScript("https://chat.example.com", "acme support", "Acme")
+
+	require.Contains(t, script, "window.AgentChatConfig")
+	require.Contains(t, script, `"https://chat.example.com/widget/acme%20support/embed.js"`)
+	require.Contains(t, script, `tenant: "acme support"`)
+	require.NotContains(t, script, "function renderMessages")
+}
+
 func TestBChatLiveWidgetPollingToggle(t *testing.T) {
 	// Verify React widget polling conditional loop
 	p1, err := findWorkspaceFile("web/src/components/AgentChatWidget.tsx")

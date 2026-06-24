@@ -1,4 +1,5 @@
 import type { WidgetConfig } from '../core/types';
+import interFontUrl from '../assets/fonts/inter-latin-wght-normal.woff2?inline';
 
 /**
  * Generate CSS styles for the widget
@@ -9,13 +10,21 @@ export function getStyles(config: WidgetConfig): string {
   const positionRight = position === 'bottom-right';
 
   return `
+    @font-face {
+      font-family: 'Inter';
+      src: url('${interFontUrl}') format('woff2');
+      font-style: normal;
+      font-weight: 100 900;
+      font-display: swap;
+    }
+
     /* Widget Reset */
     #agent-chat-widget,
     #agent-chat-widget * {
       box-sizing: border-box;
       margin: 0;
       padding: 0;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
     }
@@ -28,7 +37,7 @@ export function getStyles(config: WidgetConfig): string {
       width: ${buttonSize}px;
       height: ${buttonSize}px;
       border-radius: 50%;
-      background: linear-gradient(135deg, ${color} 0%, ${shadeColor(color, -15)} 100%);
+      background: ${color};
       border: none;
       cursor: pointer;
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15), 0 0 0 0 ${color}40;
@@ -62,13 +71,14 @@ export function getStyles(config: WidgetConfig): string {
     /* Chat Panel */
     #acw-panel {
       position: fixed;
-      bottom: 90px;
+      bottom: 20px;
       ${positionRight ? 'right: 20px;' : 'left: 20px;'}
-      width: ${panelWidth}px;
-      height: ${panelHeight}px;
-      background: #ffffff;
-      border-radius: 16px;
-      box-shadow: 0 5px 40px rgba(0, 0, 0, 0.16);
+      width: min(700px, 90vw);
+      height: min(600px, 90vh);
+      background: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 12px;
+      box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
       display: none;
       flex-direction: column;
       overflow: hidden;
@@ -102,21 +112,11 @@ export function getStyles(config: WidgetConfig): string {
 
     /* Header */
     #acw-header {
-      background: linear-gradient(135deg, ${color} 0%, ${shadeColor(color, -20)} 100%);
-      padding: 20px 20px 24px;
-      color: white;
-      position: relative;
-    }
-
-    #acw-header::after {
-      content: '';
-      position: absolute;
-      bottom: -12px;
-      left: 0;
-      right: 0;
-      height: 24px;
-      background: linear-gradient(135deg, ${color} 0%, ${shadeColor(color, -20)} 100%);
-      border-radius: 0 0 50% 50% / 0 0 100% 100%;
+      background: rgba(24, 24, 27, 0.96);
+      padding: 14px 16px;
+      color: #e4e4e7;
+      border-bottom: 1px solid #27272a;
+      backdrop-filter: blur(12px);
     }
 
     #acw-header-title {
@@ -128,19 +128,19 @@ export function getStyles(config: WidgetConfig): string {
     #acw-header-title > div:first-child {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
     }
 
     #acw-header-title svg {
       width: 24px;
       height: 24px;
-      fill: white;
+      fill: ${color};
     }
 
     #acw-header-title span {
-      font-size: 16px;
+      font-size: 15px;
       font-weight: 600;
-      letter-spacing: -0.2px;
+      letter-spacing: -0.015em;
     }
 
     #acw-header-controls {
@@ -149,13 +149,12 @@ export function getStyles(config: WidgetConfig): string {
     }
 
     #acw-header-controls button {
-      background: rgba(255, 255, 255, 0.2);
-      backdrop-filter: blur(4px);
-      border: none;
+      background: #27272a;
+      border: 1px solid transparent;
       width: 32px;
       height: 32px;
       cursor: pointer;
-      border-radius: 8px;
+      border-radius: 9px;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -163,13 +162,14 @@ export function getStyles(config: WidgetConfig): string {
     }
 
     #acw-header-controls button:hover {
-      background: rgba(255, 255, 255, 0.3);
+      background: #3f3f46;
+      border-color: #52525b;
     }
 
     #acw-header-controls svg {
       width: 16px;
       height: 16px;
-      fill: white;
+      fill: #a1a1aa;
     }
 
     /* Content Area */
@@ -178,17 +178,19 @@ export function getStyles(config: WidgetConfig): string {
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      background: #f6f6f6;
+      background: #09090b;
       position: relative;
       z-index: 1;
-      margin-top: 12px;
     }
 
     /* Messages */
     #acw-messages {
       flex: 1;
       overflow-y: auto;
-      padding: 20px 16px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
       scroll-behavior: smooth;
     }
 
@@ -201,7 +203,7 @@ export function getStyles(config: WidgetConfig): string {
     }
 
     #acw-messages::-webkit-scrollbar-thumb {
-      background: rgba(0, 0, 0, 0.15);
+      background: rgba(255, 255, 255, 0.15);
       border-radius: 10px;
     }
 
@@ -226,17 +228,16 @@ export function getStyles(config: WidgetConfig): string {
 
     #acw-empty p {
       font-size: 15px;
-      color: #65676b;
-      line-height: 1.5;
+      color: #a1a1aa;
+      line-height: 1.6;
       max-width: 240px;
     }
 
     /* Message Row */
     .acw-msg {
       display: flex;
-      margin-bottom: 12px; /* matches space-y-3 */
-      animation: acw-fade-in 0.3s ease;
       width: 100%;
+      animation: acw-fade-in 0.3s ease;
     }
 
     @keyframes acw-fade-in {
@@ -245,34 +246,38 @@ export function getStyles(config: WidgetConfig): string {
     }
 
     .acw-msg-user {
-      justify-content: flex-start;
+      justify-content: flex-end;
+      margin-left: 32px;
     }
 
     .acw-msg-assistant {
       justify-content: flex-start;
+      margin-right: 32px;
     }
 
     /* Message Bubble */
     .acw-msg-bubble {
-      width: 100%;
-      padding: 12px; /* p-3 */
-      border-radius: 8px; /* rounded-lg */
+      max-width: 85%;
+      padding: 12px;
+      border-radius: 8px;
       font-size: 14px;
-      line-height: 1.5;
+      line-height: 1.6;
       word-wrap: break-word;
       white-space: pre-wrap;
     }
 
     /* Customer (User) Bubble Specifics */
     .acw-msg-user .acw-msg-bubble {
-      background-color: #eff6ff; /* bg-blue-50 */
-      margin-left: 32px; /* ml-8 */
+      background-color: #172554;
+      border: 1px solid #1e3a8a;
+      color: #e4e4e7;
     }
 
     /* Agent (Assistant) Bubble Specifics */
     .acw-msg-assistant .acw-msg-bubble {
-      background-color: #f3f4f6; /* bg-gray-100 */
-      margin-right: 32px; /* mr-8 */
+      background-color: #27272a;
+      border: 1px solid #3f3f46;
+      color: #e4e4e7;
     }
 
     /* Header inside bubble */
@@ -280,34 +285,34 @@ export function getStyles(config: WidgetConfig): string {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 4px;
+      margin-bottom: 6px;
     }
 
     /* Role label */
     .acw-msg-role {
-      font-size: 12px; /* text-xs */
-      font-weight: 500; /* font-medium */
+      font-size: 12px;
+      font-weight: 500;
     }
 
     .acw-msg-user .acw-msg-role {
-      color: #2563eb; /* text-blue-600 */
+      color: #60a5fa;
     }
 
     .acw-msg-assistant .acw-msg-role {
-      color: #4b5563; /* text-gray-600 */
+      color: #71717a;
     }
 
     /* Timestamp */
     .acw-msg-time {
-      font-size: 12px; /* text-xs */
-      color: #9ca3af; /* text-gray-400 */
+      font-size: 12px;
+      color: #71717a;
     }
 
     /* Content text */
     .acw-msg-content {
-      font-size: 14px; /* text-sm */
-      color: #1f2937; /* text-gray-800 */
-      line-height: 1.5;
+      font-size: 14px;
+      color: #e4e4e7;
+      line-height: 1.6;
       text-align: left;
       white-space: pre-wrap;
     }
@@ -320,10 +325,11 @@ export function getStyles(config: WidgetConfig): string {
     }
 
     .acw-typing-bubble {
-      background: #ffffff;
-      padding: 14px 18px;
-      border-radius: 18px 18px 18px 4px;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+      background: #18181b;
+      padding: 13px 17px;
+      border: 1px solid #27272a;
+      border-radius: 12px;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
     }
 
     .acw-typing-dots {
@@ -361,35 +367,35 @@ export function getStyles(config: WidgetConfig): string {
 
     /* Error */
     .acw-error {
-      background: #ffebe9;
-      color: #cf222e;
+      background: #450a0a;
+      color: #fca5a5;
       padding: 12px 16px;
       border-radius: 12px;
       font-size: 13px;
       margin-bottom: 16px;
-      border: 1px solid #ffcecb;
+      border: 1px solid #7f1d1d;
     }
 
     /* Input Area */
     #acw-input-area {
-      background: #ffffff;
-      padding: 16px;
-      border-top: 1px solid rgba(0, 0, 0, 0.06);
+      background: #18181b;
+      padding: 12px 16px 16px;
+      border-top: 1px solid #27272a;
     }
 
     #acw-input-wrapper {
       display: flex;
       align-items: flex-end;
-      gap: 10px;
-      background: #f0f2f5;
-      border-radius: 24px;
-      padding: 6px 6px 6px 16px;
-      transition: box-shadow 0.2s ease, background 0.2s ease;
+      gap: 8px;
+      background: #27272a;
+      border: 1px solid #3f3f46;
+      border-radius: 8px;
+      padding: 8px 10px 8px 14px;
+      transition: border-color 0.2s ease;
     }
 
     #acw-input-wrapper:focus-within {
-      background: #ffffff;
-      box-shadow: 0 0 0 2px ${color}40;
+      border-color: ${color};
     }
 
     #acw-input {
@@ -397,17 +403,17 @@ export function getStyles(config: WidgetConfig): string {
       border: none;
       background: transparent;
       font-size: 14px;
-      line-height: 1.4;
+      line-height: 1.5;
       resize: none;
       outline: none;
       min-height: 24px;
       max-height: 100px;
-      padding: 8px 0;
-      color: #1c1e21;
+      padding: 4px 0;
+      color: #e4e4e7;
     }
 
     #acw-input::placeholder {
-      color: #8a8d91;
+      color: #71717a;
     }
 
     #acw-input:disabled {
@@ -416,35 +422,35 @@ export function getStyles(config: WidgetConfig): string {
     }
 
     #acw-send {
-      width: 36px;
-      height: 36px;
+      width: 32px;
+      height: 32px;
       border: none;
       background: ${color};
-      border-radius: 50%;
+      border-radius: 6px;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: transform 0.15s ease, opacity 0.15s ease;
+      transition: opacity 0.15s ease;
       flex-shrink: 0;
     }
 
     #acw-send:hover:not(:disabled) {
-      transform: scale(1.08);
+      opacity: 0.9;
     }
 
     #acw-send:active:not(:disabled) {
-      transform: scale(0.95);
+      opacity: 0.75;
     }
 
     #acw-send:disabled {
-      opacity: 0.5;
+      opacity: 0.4;
       cursor: not-allowed;
     }
 
     #acw-send svg {
-      width: 18px;
-      height: 18px;
+      width: 16px;
+      height: 16px;
       fill: white;
     }
 
@@ -452,11 +458,10 @@ export function getStyles(config: WidgetConfig): string {
     @media (max-width: 480px) {
       #acw-panel {
         width: calc(100vw - 16px);
-        height: calc(100vh - 120px);
-        max-height: 600px;
-        bottom: 80px;
+        height: min(600px, calc(100dvh - 60px));
+        bottom: 8px;
         ${positionRight ? 'right: 8px;' : 'left: 8px;'}
-        border-radius: 20px;
+        border-radius: 12px;
       }
 
       #acw-toggle {
@@ -465,81 +470,6 @@ export function getStyles(config: WidgetConfig): string {
       }
     }
 
-    /* Dark Mode */
-    @media (prefers-color-scheme: dark) {
-      #acw-panel {
-        background: #242526;
-        box-shadow: 0 5px 40px rgba(0, 0, 0, 0.4);
-      }
-
-      #acw-content {
-        background: #18191a;
-      }
-
-      #acw-empty p {
-        color: #b0b3b8;
-      }
-
-      /* Dark Mode Bubble Overrides */
-      .acw-msg-user .acw-msg-bubble {
-        background-color: rgba(30, 58, 138, 0.2); /* dark:bg-blue-900/20 */
-      }
-
-      .acw-msg-assistant .acw-msg-bubble {
-        background-color: #1f2937; /* dark:bg-gray-800 */
-      }
-
-      .acw-msg-user .acw-msg-role {
-        color: #60a5fa; /* text-blue-400 */
-      }
-
-      .acw-msg-assistant .acw-msg-role {
-        color: #9ca3af; /* text-gray-400 */
-      }
-
-      .acw-msg-time {
-        color: #6b7280; /* text-gray-500 */
-      }
-
-      .acw-msg-content {
-        color: #e5e7eb; /* dark:text-gray-200 */
-      }
-
-      .acw-typing-bubble {
-        background: #3a3b3c;
-      }
-
-      .acw-error {
-        background: #4a1c1c;
-        border-color: #6b2c2c;
-        color: #f97583;
-      }
-
-      #acw-input-area {
-        background: #242526;
-        border-top-color: rgba(255, 255, 255, 0.1);
-      }
-
-      #acw-input-wrapper {
-        background: #3a3b3c;
-      }
-
-      #acw-input-wrapper:focus-within {
-        background: #4e4f50;
-      }
-
-      #acw-input {
-        color: #e4e6eb;
-      }
-
-      #acw-input::placeholder {
-        color: #b0b3b8;
-      }
-
-      #acw-messages::-webkit-scrollbar-thumb {
-        background: rgba(255, 255, 255, 0.2);
-      }
-    }
   `;
 }
 
@@ -553,6 +483,18 @@ function shadeColor(hex: string, percent: number): string {
   const G = Math.max(0, Math.min(255, ((num >> 8) & 0x00ff) + amt));
   const B = Math.max(0, Math.min(255, (num & 0x0000ff) + amt));
   return '#' + (0x1000000 + R * 0x10000 + G * 0x100 + B).toString(16).slice(1);
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  const normalized = hex.replace('#', '');
+  const value = normalized.length === 3
+    ? normalized.split('').map((char) => char + char).join('')
+    : normalized;
+  const parsed = parseInt(value, 16);
+  const red = (parsed >> 16) & 255;
+  const green = (parsed >> 8) & 255;
+  const blue = parsed & 255;
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
 }
 
 /**
