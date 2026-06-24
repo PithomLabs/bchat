@@ -1,5 +1,10 @@
 import { MessageSquareIcon, MinusIcon, SendIcon, XIcon } from "lucide-react";
-import { KeyboardEvent, useEffect, useRef, useState } from "react";
+import {
+  KeyboardEvent,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { cn } from "@/utils";
 
 interface Message {
@@ -216,32 +221,34 @@ const AgentChatWidget = ({
   return (
     <div
       className={cn(
-        "fixed z-50 w-80 sm:w-96 flex flex-col bg-white rounded-lg shadow-2xl overflow-hidden",
+        "dark chat-font fixed z-50 flex w-[90vw] max-w-[700px] flex-col overflow-hidden rounded-xl border border-stone-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-[0_18px_60px_rgba(0,0,0,0.5)]",
         positionClasses,
       )}
-      style={{ height: isMinimized ? "auto" : "500px" }}
+      style={{
+        height: isMinimized ? "auto" : "min(600px, 90vh)",
+      }}
     >
       {/* Header */}
-      <div
-        className="flex items-center justify-between p-3 text-white"
-        style={{ backgroundColor: primaryColor }}
-      >
+      <div className="flex items-center justify-between border-b border-stone-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-900/95 px-4 py-3.5 text-stone-800 dark:text-stone-200 backdrop-blur">
         <div className="flex items-center gap-2">
-          <MessageSquareIcon className="w-5 h-5" />
-          <span className="font-medium">
+          <MessageSquareIcon
+            className="w-5 h-5"
+            style={{ color: primaryColor }}
+          />
+          <span className="text-[15px] font-semibold tracking-[-0.015em]">
             {companyName ? `Chat with ${companyName}` : "Chat with us"}
           </span>
         </div>
         <div className="flex gap-1">
           <button
             onClick={() => setIsMinimized(!isMinimized)}
-            className="p-1 hover:bg-white/20 rounded"
+            className="rounded-lg border border-transparent bg-stone-100 dark:bg-zinc-800 p-1.5 text-stone-500 dark:text-zinc-400 transition hover:border-stone-200 dark:hover:border-zinc-700 hover:bg-stone-200 dark:hover:bg-zinc-700"
           >
             <MinusIcon className="w-4 h-4" />
           </button>
           <button
             onClick={() => setIsOpen(false)}
-            className="p-1 hover:bg-white/20 rounded"
+            className="rounded-lg border border-transparent bg-stone-100 dark:bg-zinc-800 p-1.5 text-stone-500 dark:text-zinc-400 transition hover:border-stone-200 dark:hover:border-zinc-700 hover:bg-stone-200 dark:hover:bg-zinc-700"
           >
             <XIcon className="w-4 h-4" />
           </button>
@@ -251,11 +258,13 @@ const AgentChatWidget = ({
       {!isMinimized && (
         <>
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-gray-50">
+          <div className="flex-1 space-y-3 overflow-y-auto bg-transparent px-4 py-4">
             {messages.length === 0 && (
-              <div className="text-center text-gray-500 py-8">
+              <div className="flex h-full min-h-[260px] flex-col items-center justify-center py-8 text-center text-stone-500 dark:text-zinc-400">
                 <MessageSquareIcon className="w-10 h-10 mx-auto mb-2 opacity-30" />
-                <p>How can we help you today?</p>
+                <p className="text-[15px] leading-relaxed font-medium">
+                  How can we help you today?
+                </p>
               </div>
             )}
             {messages.map((msg, idx) => (
@@ -263,25 +272,45 @@ const AgentChatWidget = ({
                 key={idx}
                 className={cn(
                   "flex",
-                  msg.role === "user" ? "justify-end" : "justify-start",
+                  msg.role === "user" ? "justify-end ml-8" : "justify-start mr-8",
                 )}
               >
                 <div
                   className={cn(
-                    "max-w-[80%] p-2.5 rounded-lg text-sm",
+                    "max-w-[85%] rounded-lg border p-3 text-sm leading-relaxed",
                     msg.role === "user"
-                      ? "bg-teal-500 text-white"
-                      : "bg-white border border-gray-200 text-gray-800",
+                      ? "border-blue-200 dark:border-blue-900 bg-blue-100 dark:bg-blue-950/40 text-gray-800 dark:text-gray-200"
+                      : "border-zinc-200 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 text-gray-800 dark:text-gray-200",
                   )}
                 >
-                  <p className="whitespace-pre-wrap">{msg.content}</p>
+                  <div className="flex justify-between items-center mb-1">
+                    <span
+                      className={cn(
+                        "text-xs font-medium",
+                        msg.role === "user" ? "text-blue-600 dark:text-blue-400" : "text-zinc-600 dark:text-zinc-400",
+                      )}
+                    >
+                      {msg.role === "user" ? "Customer" : "Agent"}
+                    </span>
+                    <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                      {msg.timestamp.toLocaleTimeString([], {
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })}
+                    </span>
+                  </div>
+                  <p className="whitespace-pre-wrap break-words">
+                    {msg.content}
+                  </p>
                 </div>
               </div>
             ))}
             {isLoading && (
-              <div className="flex justify-start">
-                <div className="bg-white border border-gray-200 p-2.5 rounded-lg">
-                  <span className="animate-pulse text-gray-500">Typing...</span>
+              <div className="flex justify-start mr-8">
+                <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 p-3 max-w-[85%]">
+                  <span className="animate-pulse text-sm text-zinc-500 dark:text-zinc-400">
+                    Typing...
+                  </span>
                 </div>
               </div>
             )}
@@ -292,21 +321,21 @@ const AgentChatWidget = ({
           </div>
 
           {/* Input */}
-          <div className="p-3 border-t bg-white">
-            <div className="flex gap-2">
+          <div className="border-t border-stone-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 pb-4 pt-3">
+            <div className="flex items-center gap-2 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 p-2 pl-3.5 transition focus-within:border-teal-500">
               <input
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="Type your message..."
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-teal-500"
+                className="min-w-0 flex-1 border-0 bg-transparent py-1.5 text-sm leading-relaxed font-sans text-gray-800 dark:text-gray-200 outline-none placeholder:text-gray-400 dark:placeholder:text-gray-500"
                 disabled={isLoading}
               />
               <button
                 onClick={sendMessage}
                 disabled={!input.trim() || isLoading}
-                className="p-2 rounded-lg text-white disabled:opacity-50"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white transition hover:opacity-90 disabled:opacity-40"
                 style={{ backgroundColor: primaryColor }}
               >
                 <SendIcon className="w-4 h-4" />

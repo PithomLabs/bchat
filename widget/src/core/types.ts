@@ -32,8 +32,8 @@ export const DEFAULT_CONFIG: Omit<WidgetConfig, 'baseUrl' | 'tenant'> = {
   position: 'bottom-right',
   welcomeMessage: 'How can we help you today?',
   buttonSize: 56,
-  panelWidth: 350,
-  panelHeight: 500,
+  panelWidth: 380,
+  panelHeight: 560,
 };
 
 /**

@@ -1687,14 +1687,35 @@ func (h *Handler) HandleWidget(c echo.Context) error {
 	if tenant.GUID != "" {
 		combinedName = fmt.Sprintf("%s-%s", tenant.CompanyName, tenant.GUID)
 	}
-	script := generateWidgetScript(baseURL, slug, combinedName)
+	script := generateWidgetLoaderScript(baseURL, slug, combinedName)
 
 	c.Response().Header().Set("Content-Type", "application/javascript")
 	c.Response().Header().Set("Cache-Control", "public, max-age=3600")
 	return c.String(http.StatusOK, script)
 }
 
+// generateWidgetLoaderScript preserves the legacy widget URL while delegating
+// rendering and behavior to the modern bundled widget.
+func generateWidgetLoaderScript(baseURL, tenantSlug, companyName string) string {
+	return fmt.Sprintf(`(function() {
+  'use strict';
+  window.AgentChatConfig = Object.assign({
+    baseUrl: %q,
+    tenant: %q,
+    companyName: %q,
+    color: '#0d9488',
+    position: 'bottom-right',
+    welcomeMessage: 'How can we help you today?'
+  }, window.AgentChatConfig || {});
+  var script = document.createElement('script');
+  script.src = %q;
+  script.async = true;
+  document.head.appendChild(script);
+})();`, baseURL, tenantSlug, companyName, baseURL+"/widget/"+url.PathEscape(tenantSlug)+"/embed.js")
+}
+
 // generateWidgetScript generates the embeddable widget JavaScript.
+// It is retained only as an emergency fallback when widget/dist is unavailable.
 func generateWidgetScript(baseURL, tenantSlug, companyName string) string {
 	return `(function() {
   'use strict';

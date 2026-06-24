@@ -1,13 +1,70 @@
-import { Button, Checkbox, Chip, DialogActions, DialogContent, DialogTitle, Divider, FormControl, FormHelperText, FormLabel, Input, Modal, ModalClose, ModalDialog, Option, Select, Slider, Switch, Textarea } from "@mui/joy";
-import { ArrowLeftIcon, BuildingIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CodeIcon, CopyIcon, EditIcon, EyeIcon, EyeOffIcon, FileTextIcon, HistoryIcon, MessageCircleIcon, PlusIcon, RefreshCwIcon, SearchIcon, SettingsIcon, SparklesIcon, Trash2Icon, UploadIcon, XIcon, ZapIcon } from "lucide-react";
+import {
+  Button,
+  Checkbox,
+  Chip,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
+  FormControl,
+  FormHelperText,
+  FormLabel,
+  Input,
+  Modal,
+  ModalClose,
+  ModalDialog,
+  Option,
+  Select,
+  Slider,
+  Switch,
+  Textarea,
+} from "@mui/joy";
+import {
+  ArrowLeftIcon,
+  BuildingIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  CodeIcon,
+  CopyIcon,
+  EditIcon,
+  EyeIcon,
+  EyeOffIcon,
+  FileTextIcon,
+  HistoryIcon,
+  MessageCircleIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  SearchIcon,
+  SettingsIcon,
+  SparklesIcon,
+  Trash2Icon,
+  UploadIcon,
+  XIcon,
+  ZapIcon,
+} from "lucide-react";
 import { observer } from "mobx-react-lite";
 import { ChangeEvent, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import MobileHeader from "@/components/MobileHeader";
 import useResponsiveWidth from "@/hooks/useResponsiveWidth";
 import { agentAdminStore, userStore } from "@/store/v2";
-import type { AgentTenant, AgentTranscript, CreateTenantRequest, LLMConfig, SetLLMConfigRequest, UserPermission, GrantPermissionRequest, ProcessingOptions, FormatForRAGResponse } from "@/store/v2/agentAdmin";
-import { LLM_MODEL_OPTIONS, PERMISSION_PRESETS, DEFAULT_PROCESSING_OPTIONS } from "@/store/v2/agentAdmin";
+import type {
+  AgentTenant,
+  AgentTranscript,
+  CreateTenantRequest,
+  LLMConfig,
+  SetLLMConfigRequest,
+  UserPermission,
+  GrantPermissionRequest,
+  ProcessingOptions,
+  FormatForRAGResponse,
+} from "@/store/v2/agentAdmin";
+import {
+  LLM_MODEL_OPTIONS,
+  PERMISSION_PRESETS,
+  DEFAULT_PROCESSING_OPTIONS,
+} from "@/store/v2/agentAdmin";
 import { cn } from "@/utils";
 import { useTranslate, Translations } from "@/utils/i18n";
 import { User_Role } from "@/types/proto/api/v1/user_service";
@@ -16,14 +73,28 @@ const AgentAdmin = observer(() => {
   const t = useTranslate();
   const { md } = useResponsiveWidth();
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showDeleteModal, setShowDeleteModal] = useState<AgentTenant | null>(null);
-  const [showVersionsModal, setShowVersionsModal] = useState<{ slug: string; audienceType: string; fileType: string } | null>(null);
+  const [showDeleteModal, setShowDeleteModal] = useState<AgentTenant | null>(
+    null,
+  );
+  const [showVersionsModal, setShowVersionsModal] = useState<{
+    slug: string;
+    audienceType: string;
+    fileType: string;
+  } | null>(null);
   const [isRebuilding, setIsRebuilding] = useState(false);
   // Auto-generate annotated content state
-  const [showGeneratedContent, setShowGeneratedContent] = useState<{ type: "kb" | "policy" | "rag"; content: string; stats?: FormatForRAGResponse["stats"] } | null>(null);
-  const [isGenerating, setIsGenerating] = useState<"kb" | "policy" | "rag" | null>(null);
+  const [showGeneratedContent, setShowGeneratedContent] = useState<{
+    type: "kb" | "policy" | "rag";
+    content: string;
+    stats?: FormatForRAGResponse["stats"];
+  } | null>(null);
+  const [isGenerating, setIsGenerating] = useState<
+    "kb" | "policy" | "rag" | null
+  >(null);
   // Processing options for Format for RAG
-  const [processingOptions, setProcessingOptions] = useState<ProcessingOptions>(DEFAULT_PROCESSING_OPTIONS);
+  const [processingOptions, setProcessingOptions] = useState<ProcessingOptions>(
+    DEFAULT_PROCESSING_OPTIONS,
+  );
   const [showProcessingOptions, setShowProcessingOptions] = useState(false);
   const [formatFileType, setFormatFileType] = useState<"kb" | "policy">("kb");
   const [hasCustomOptions, setHasCustomOptions] = useState(false);
@@ -38,13 +109,18 @@ const AgentAdmin = observer(() => {
 
   // Transcripts state
   const [showTranscripts, setShowTranscripts] = useState(false);
-  const [selectedTranscript, setSelectedTranscript] = useState<AgentTranscript | null>(null);
+  const [selectedTranscript, setSelectedTranscript] =
+    useState<AgentTranscript | null>(null);
   const [showTranscriptModal, setShowTranscriptModal] = useState(false);
 
   // Widget embed state
   const [widgetColor, setWidgetColor] = useState("#0d9488");
-  const [widgetPosition, setWidgetPosition] = useState<"bottom-right" | "bottom-left">("bottom-right");
-  const [widgetWelcome, setWidgetWelcome] = useState("Hi! How can I help you today?");
+  const [widgetPosition, setWidgetPosition] = useState<
+    "bottom-right" | "bottom-left"
+  >("bottom-right");
+  const [widgetWelcome, setWidgetWelcome] = useState(
+    "Hi! How can I help you today?",
+  );
   const [showWidgetPreview, setShowWidgetPreview] = useState(true);
 
   // Domain allowlisting state
@@ -53,12 +129,38 @@ const AgentAdmin = observer(() => {
   const [reindexAudience, setReindexAudience] = useState<string>("all");
   const [isSavingDomains, setIsSavingDomains] = useState(false);
 
-  const { tenants, selectedTenant, isLoading, isSaving, error, fileVersions, llmConfig, tenantPermissions, myPermissions, script, isLoadingScript, qaPairs, qaTestResults, isGeneratingQA, isTestingQA, ragSearchResults, isSearchingRAG, transcripts, isLoadingTranscripts, tenantSettings } = agentAdminStore.state;
+  const {
+    tenants,
+    selectedTenant,
+    isLoading,
+    isSaving,
+    error,
+    fileVersions,
+    llmConfig,
+    tenantPermissions,
+    myPermissions,
+    script,
+    isLoadingScript,
+    qaPairs,
+    qaTestResults,
+    isGeneratingQA,
+    isTestingQA,
+    ragSearchResults,
+    isSearchingRAG,
+    transcripts,
+    isLoadingTranscripts,
+    tenantSettings,
+  } = agentAdminStore.state;
 
   // Get current user and determine if they're an admin
   const currentUserName = userStore.state.currentUser;
-  const currentUser = currentUserName ? userStore.state.userMapByName[currentUserName] : null;
-  const isAdmin = currentUser && (currentUser.role === User_Role.HOST || currentUser.role === User_Role.ADMIN);
+  const currentUser = currentUserName
+    ? userStore.state.userMapByName[currentUserName]
+    : null;
+  const isAdmin =
+    currentUser &&
+    (currentUser.role === User_Role.HOST ||
+      currentUser.role === User_Role.ADMIN);
 
   // Permission helpers for non-admin users
   const canRead = isAdmin || agentAdminStore.hasPermission("tenant:read");
@@ -66,7 +168,8 @@ const AgentAdmin = observer(() => {
   const canUpload = isAdmin || agentAdminStore.hasPermission("files:upload");
   const canRestore = isAdmin || agentAdminStore.hasPermission("files:restore");
   const canConfigApi = isAdmin || agentAdminStore.hasPermission("api:config");
-  const canManagePermissions = isAdmin || agentAdminStore.hasPermission("tenant:admin");
+  const canManagePermissions =
+    isAdmin || agentAdminStore.hasPermission("tenant:admin");
 
   useEffect(() => {
     // Fetch tenants based on user role
@@ -82,7 +185,11 @@ const AgentAdmin = observer(() => {
       // Set user's permissions for this tenant (for non-admin users)
       agentAdminStore.setMyPermissions(selectedTenant.tenant.id);
       // Fetch LLM config if user can read or configure API
-      if (isAdmin || agentAdminStore.hasPermission("tenant:read") || agentAdminStore.hasPermission("api:config")) {
+      if (
+        isAdmin ||
+        agentAdminStore.hasPermission("tenant:read") ||
+        agentAdminStore.hasPermission("api:config")
+      ) {
         agentAdminStore.fetchLLMConfig(selectedTenant.tenant.slug);
       }
       // Only fetch tenant permissions if user can manage them
@@ -95,14 +202,16 @@ const AgentAdmin = observer(() => {
       }
       // Load saved processing options for this tenant
       if (isAdmin) {
-        agentAdminStore.loadProcessingOptions(selectedTenant.tenant.slug).then((result) => {
-          if (!result.error) {
-            setProcessingOptions(result.options);
-            if (result && "hasCustom" in result) {
-              setHasCustomOptions(result.hasCustom as boolean);
+        agentAdminStore
+          .loadProcessingOptions(selectedTenant.tenant.slug)
+          .then((result) => {
+            if (!result.error) {
+              setProcessingOptions(result.options);
+              if (result && "hasCustom" in result) {
+                setHasCustomOptions(result.hasCustom as boolean);
+              }
             }
-          }
-        });
+          });
         // Fetch Q&A pairs for this tenant
         agentAdminStore.fetchQAPairs(selectedTenant.tenant.slug);
         // Fetch tenant settings and transcripts
@@ -115,13 +224,27 @@ const AgentAdmin = observer(() => {
   // Polling for reindex status
   useEffect(() => {
     let interval: any;
-    if (selectedTenant && (isRebuilding || isSaving || agentAdminStore.state.reindexStatus?.status === "in_progress")) {
+    if (
+      selectedTenant &&
+      (isRebuilding ||
+        isSaving ||
+        agentAdminStore.state.reindexStatus?.status === "in_progress")
+    ) {
       interval = setInterval(() => {
-        agentAdminStore.fetchReindexStatus(selectedTenant.tenant.slug, reindexAudience);
+        agentAdminStore.fetchReindexStatus(
+          selectedTenant.tenant.slug,
+          reindexAudience,
+        );
       }, 3000);
     }
     return () => clearInterval(interval);
-  }, [selectedTenant?.tenant.slug, isRebuilding, isSaving, agentAdminStore.state.reindexStatus?.status, reindexAudience]);
+  }, [
+    selectedTenant?.tenant.slug,
+    isRebuilding,
+    isSaving,
+    agentAdminStore.state.reindexStatus?.status,
+    reindexAudience,
+  ]);
 
   useEffect(() => {
     if (error) {
@@ -163,7 +286,10 @@ const AgentAdmin = observer(() => {
   const handleRebuildIndex = async () => {
     if (!selectedTenant) return;
     setIsRebuilding(true);
-    const result = await agentAdminStore.reindexTenant(selectedTenant.tenant.slug, reindexAudience);
+    const result = await agentAdminStore.reindexTenant(
+      selectedTenant.tenant.slug,
+      reindexAudience,
+    );
     if (result.success) {
       toast.success(t("agent-admin.rebuild-index-started"));
       // The polling useEffect will pick up the progress
@@ -175,9 +301,14 @@ const AgentAdmin = observer(() => {
 
   const handleGenerateQAPairs = async () => {
     if (!selectedTenant) return;
-    const result = await agentAdminStore.generateQAPairs(selectedTenant.tenant.slug, 50);
+    const result = await agentAdminStore.generateQAPairs(
+      selectedTenant.tenant.slug,
+      50,
+    );
     if (result.success) {
-      toast.success(t("agent-admin.qa-generated", { count: result.count || 0 }));
+      toast.success(
+        t("agent-admin.qa-generated", { count: result.count || 0 }),
+      );
     } else {
       toast.error(result.error || t("agent-admin.qa-generate-failed"));
     }
@@ -185,14 +316,18 @@ const AgentAdmin = observer(() => {
 
   const handleTestAllQAPairs = async () => {
     if (!selectedTenant) return;
-    const result = await agentAdminStore.testAllQAPairs(selectedTenant.tenant.slug);
+    const result = await agentAdminStore.testAllQAPairs(
+      selectedTenant.tenant.slug,
+    );
     if (result.success && result.results) {
       const recall = (result.results.recall_at_5 * 100).toFixed(0);
-      toast.success(t("agent-admin.qa-test-complete", {
-        found: result.results.found,
-        total: result.results.total_pairs,
-        recall,
-      }));
+      toast.success(
+        t("agent-admin.qa-test-complete", {
+          found: result.results.found,
+          total: result.results.total_pairs,
+          recall,
+        }),
+      );
     } else {
       toast.error(result.error || t("agent-admin.qa-test-failed"));
     }
@@ -210,14 +345,18 @@ const AgentAdmin = observer(() => {
       selectedTenant.tenant.slug,
       searchQuery.trim(),
       "internal",
-      searchTopK
+      searchTopK,
     );
     if (result && !result.success) {
       toast.error(result.error || "Search failed");
     }
   };
 
-  const handleViewVersions = async (slug: string, audienceType: string, fileType: string) => {
+  const handleViewVersions = async (
+    slug: string,
+    audienceType: string,
+    fileType: string,
+  ) => {
     await agentAdminStore.fetchFileVersions(slug, audienceType, fileType);
     setShowVersionsModal({ slug, audienceType, fileType });
   };
@@ -228,7 +367,7 @@ const AgentAdmin = observer(() => {
         showVersionsModal.slug,
         showVersionsModal.audienceType,
         showVersionsModal.fileType,
-        versionId
+        versionId,
       );
       if (success) {
         toast.success("Version restored successfully");
@@ -254,7 +393,9 @@ const AgentAdmin = observer(() => {
   const handleGeneratePolicy = async () => {
     if (!selectedTenant) return;
     setIsGenerating("policy");
-    const result = await agentAdminStore.generatePolicy(selectedTenant.tenant.slug);
+    const result = await agentAdminStore.generatePolicy(
+      selectedTenant.tenant.slug,
+    );
     setIsGenerating(null);
     if (result.content) {
       setShowGeneratedContent({ type: "policy", content: result.content });
@@ -270,7 +411,7 @@ const AgentAdmin = observer(() => {
     const result = await agentAdminStore.formatForRAG(
       selectedTenant.tenant.slug,
       formatFileType,
-      processingOptions
+      processingOptions,
     );
     setIsGenerating(null);
     if (result.result) {
@@ -285,7 +426,10 @@ const AgentAdmin = observer(() => {
   };
 
   // Update a processing option
-  const updateProcessingOption = <K extends keyof ProcessingOptions>(key: K, value: ProcessingOptions[K]) => {
+  const updateProcessingOption = <K extends keyof ProcessingOptions>(
+    key: K,
+    value: ProcessingOptions[K],
+  ) => {
     setProcessingOptions((prev) => ({ ...prev, [key]: value }));
   };
 
@@ -295,14 +439,16 @@ const AgentAdmin = observer(() => {
     setIsSavingOptions(true);
     const result = await agentAdminStore.saveProcessingOptions(
       selectedTenant.tenant.slug,
-      processingOptions
+      processingOptions,
     );
     setIsSavingOptions(false);
     if (result.success) {
       setHasCustomOptions(true);
       toast.success(t("agent-admin.processing-options-saved"));
     } else {
-      toast.error(result.error || t("agent-admin.processing-options-save-failed"));
+      toast.error(
+        result.error || t("agent-admin.processing-options-save-failed"),
+      );
     }
   };
 
@@ -332,7 +478,12 @@ const AgentAdmin = observer(() => {
         <div className="w-full flex flex-row justify-between items-center mb-6">
           <div className="flex items-center gap-2">
             {selectedTenant && (
-              <Button variant="plain" color="neutral" size="sm" onClick={handleBackToList}>
+              <Button
+                variant="plain"
+                color="neutral"
+                size="sm"
+                onClick={handleBackToList}
+              >
                 <ArrowLeftIcon className="w-4 h-4" />
               </Button>
             )}
@@ -344,13 +495,21 @@ const AgentAdmin = observer(() => {
             </h1>
           </div>
           {!selectedTenant && isAdmin && (
-            <Button color="primary" startDecorator={<PlusIcon className="w-4 h-4" />} onClick={() => setShowCreateModal(true)}>
+            <Button
+              color="primary"
+              startDecorator={<PlusIcon className="w-4 h-4" />}
+              onClick={() => setShowCreateModal(true)}
+            >
               {t("agent-admin.create-tenant")}
             </Button>
           )}
         </div>
 
-        {!selectedTenant && <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">{t("agent-admin.description")}</p>}
+        {!selectedTenant && (
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+            {t("agent-admin.description")}
+          </p>
+        )}
 
         {/* Tenant List View */}
         {!selectedTenant && (
@@ -376,21 +535,36 @@ const AgentAdmin = observer(() => {
                           <h3 className="font-semibold text-gray-800 dark:text-gray-200">
                             {tenant.companyName}
                           </h3>
-                          <Chip size="sm" color={tenant.isActive ? "success" : "neutral"} variant="soft">
-                            {tenant.isActive ? t("agent-admin.active") : t("agent-admin.inactive")}
+                          <Chip
+                            size="sm"
+                            color={tenant.isActive ? "success" : "neutral"}
+                            variant="soft"
+                          >
+                            {tenant.isActive
+                              ? t("agent-admin.active")
+                              : t("agent-admin.inactive")}
                           </Chip>
                         </div>
                         <p className="text-sm text-gray-500 dark:text-gray-400">
-                          <code className="bg-gray-100 dark:bg-zinc-700 px-1 rounded">{tenant.slug}</code>
-                          {tenant.vertical && <span className="ml-2">• {tenant.vertical}</span>}
+                          <code className="bg-gray-100 dark:bg-zinc-700 px-1 rounded">
+                            {tenant.slug}
+                          </code>
+                          {tenant.vertical && (
+                            <span className="ml-2">• {tenant.vertical}</span>
+                          )}
                         </p>
                       </div>
-                      <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
+                      <div
+                        className="flex gap-2"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <Button
                           variant="plain"
                           color="neutral"
                           size="sm"
-                          onClick={() => handleSelectTenant(tenant.slug, tenant.id)}
+                          onClick={() =>
+                            handleSelectTenant(tenant.slug, tenant.id)
+                          }
                         >
                           <EditIcon className="w-4 h-4" />
                         </Button>
@@ -420,15 +594,29 @@ const AgentAdmin = observer(() => {
             <div className="bg-white dark:bg-zinc-800 rounded-xl border border-gray-200 dark:border-zinc-700 p-4">
               <div className="flex justify-between items-center">
                 <div>
-                  <h3 className="font-medium text-gray-800 dark:text-gray-200">{t("agent-admin.status")}</h3>
+                  <h3 className="font-medium text-gray-800 dark:text-gray-200">
+                    {t("agent-admin.status")}
+                  </h3>
                   <p className="text-sm text-gray-500">
-                    Slug: <code className="bg-gray-100 dark:bg-zinc-700 px-1 rounded">{selectedTenant.tenant.slug}</code>
-                    {selectedTenant.tenant.vertical && <span className="ml-2">• {selectedTenant.tenant.vertical}</span>}
+                    Slug:{" "}
+                    <code className="bg-gray-100 dark:bg-zinc-700 px-1 rounded">
+                      {selectedTenant.tenant.slug}
+                    </code>
+                    {selectedTenant.tenant.vertical && (
+                      <span className="ml-2">
+                        • {selectedTenant.tenant.vertical}
+                      </span>
+                    )}
                   </p>
                 </div>
                 <Switch
                   checked={selectedTenant.tenant.isActive}
-                  onChange={(e) => agentAdminStore.toggleTenantActive(selectedTenant.tenant.slug, e.target.checked)}
+                  onChange={(e) =>
+                    agentAdminStore.toggleTenantActive(
+                      selectedTenant.tenant.slug,
+                      e.target.checked,
+                    )
+                  }
                   disabled={isSaving}
                 />
               </div>
@@ -471,7 +659,13 @@ const AgentAdmin = observer(() => {
               title={t("agent-admin.external")}
               audienceType="external"
               tenant={selectedTenant}
-              onViewVersions={(audienceType, fileType) => handleViewVersions(selectedTenant.tenant.slug, audienceType, fileType)}
+              onViewVersions={(audienceType, fileType) =>
+                handleViewVersions(
+                  selectedTenant.tenant.slug,
+                  audienceType,
+                  fileType,
+                )
+              }
               isSaving={isSaving}
               t={t}
               canUpload={canUpload}
@@ -487,7 +681,9 @@ const AgentAdmin = observer(() => {
                       <SparklesIcon className="w-4 h-4" />
                       {t("agent-admin.auto-generate-title")}
                     </h3>
-                    <p className="text-sm text-purple-600 dark:text-purple-400">{t("agent-admin.auto-generate-desc")}</p>
+                    <p className="text-sm text-purple-600 dark:text-purple-400">
+                      {t("agent-admin.auto-generate-desc")}
+                    </p>
                   </div>
 
                   {/* Reasoning Model for Generate KB/Policy */}
@@ -500,10 +696,16 @@ const AgentAdmin = observer(() => {
 
                   {/* Processing Options Toggle */}
                   <button
-                    onClick={() => setShowProcessingOptions(!showProcessingOptions)}
+                    onClick={() =>
+                      setShowProcessingOptions(!showProcessingOptions)
+                    }
                     className="flex items-center gap-2 text-sm text-purple-600 dark:text-purple-400 hover:text-purple-800 dark:hover:text-purple-200"
                   >
-                    {showProcessingOptions ? <ChevronUpIcon className="w-4 h-4" /> : <ChevronDownIcon className="w-4 h-4" />}
+                    {showProcessingOptions ? (
+                      <ChevronUpIcon className="w-4 h-4" />
+                    ) : (
+                      <ChevronDownIcon className="w-4 h-4" />
+                    )}
                     {t("agent-admin.processing-options")}
                   </button>
 
@@ -512,11 +714,15 @@ const AgentAdmin = observer(() => {
                     <div className="bg-white dark:bg-zinc-900 rounded-lg border border-purple-200 dark:border-purple-700 p-4 space-y-4">
                       {/* File Type Selection */}
                       <div className="flex items-center gap-4 pb-3 border-b border-purple-100 dark:border-purple-800">
-                        <span className="text-sm font-medium text-purple-700 dark:text-purple-300">Process:</span>
+                        <span className="text-sm font-medium text-purple-700 dark:text-purple-300">
+                          Process:
+                        </span>
                         <div className="flex gap-2">
                           <Button
                             size="sm"
-                            variant={formatFileType === "kb" ? "solid" : "outlined"}
+                            variant={
+                              formatFileType === "kb" ? "solid" : "outlined"
+                            }
                             color="primary"
                             onClick={() => setFormatFileType("kb")}
                           >
@@ -524,7 +730,9 @@ const AgentAdmin = observer(() => {
                           </Button>
                           <Button
                             size="sm"
-                            variant={formatFileType === "policy" ? "solid" : "outlined"}
+                            variant={
+                              formatFileType === "policy" ? "solid" : "outlined"
+                            }
                             color="primary"
                             onClick={() => setFormatFileType("policy")}
                           >
@@ -542,31 +750,56 @@ const AgentAdmin = observer(() => {
                           <Checkbox
                             label={t("agent-admin.extract-faqs")}
                             checked={processingOptions.extract_faqs}
-                            onChange={(e) => updateProcessingOption("extract_faqs", e.target.checked)}
+                            onChange={(e) =>
+                              updateProcessingOption(
+                                "extract_faqs",
+                                e.target.checked,
+                              )
+                            }
                             size="sm"
                           />
                           <Checkbox
                             label={t("agent-admin.extract-services")}
                             checked={processingOptions.extract_services}
-                            onChange={(e) => updateProcessingOption("extract_services", e.target.checked)}
+                            onChange={(e) =>
+                              updateProcessingOption(
+                                "extract_services",
+                                e.target.checked,
+                              )
+                            }
                             size="sm"
                           />
                           <Checkbox
                             label={t("agent-admin.extract-exclusions")}
                             checked={processingOptions.extract_exclusions}
-                            onChange={(e) => updateProcessingOption("extract_exclusions", e.target.checked)}
+                            onChange={(e) =>
+                              updateProcessingOption(
+                                "extract_exclusions",
+                                e.target.checked,
+                              )
+                            }
                             size="sm"
                           />
                           <Checkbox
                             label={t("agent-admin.extract-coverage")}
                             checked={processingOptions.extract_coverage}
-                            onChange={(e) => updateProcessingOption("extract_coverage", e.target.checked)}
+                            onChange={(e) =>
+                              updateProcessingOption(
+                                "extract_coverage",
+                                e.target.checked,
+                              )
+                            }
                             size="sm"
                           />
                           <Checkbox
                             label={t("agent-admin.extract-safety")}
                             checked={processingOptions.extract_safety}
-                            onChange={(e) => updateProcessingOption("extract_safety", e.target.checked)}
+                            onChange={(e) =>
+                              updateProcessingOption(
+                                "extract_safety",
+                                e.target.checked,
+                              )
+                            }
                             size="sm"
                           />
                         </div>
@@ -581,31 +814,56 @@ const AgentAdmin = observer(() => {
                           <Checkbox
                             label={t("agent-admin.remove-whitespace")}
                             checked={processingOptions.remove_whitespace}
-                            onChange={(e) => updateProcessingOption("remove_whitespace", e.target.checked)}
+                            onChange={(e) =>
+                              updateProcessingOption(
+                                "remove_whitespace",
+                                e.target.checked,
+                              )
+                            }
                             size="sm"
                           />
                           <Checkbox
                             label={t("agent-admin.strip-html")}
                             checked={processingOptions.strip_html}
-                            onChange={(e) => updateProcessingOption("strip_html", e.target.checked)}
+                            onChange={(e) =>
+                              updateProcessingOption(
+                                "strip_html",
+                                e.target.checked,
+                              )
+                            }
                             size="sm"
                           />
                           <Checkbox
                             label={t("agent-admin.fix-encoding")}
                             checked={processingOptions.fix_encoding}
-                            onChange={(e) => updateProcessingOption("fix_encoding", e.target.checked)}
+                            onChange={(e) =>
+                              updateProcessingOption(
+                                "fix_encoding",
+                                e.target.checked,
+                              )
+                            }
                             size="sm"
                           />
                           <Checkbox
                             label={t("agent-admin.remove-page-numbers")}
                             checked={processingOptions.remove_page_numbers}
-                            onChange={(e) => updateProcessingOption("remove_page_numbers", e.target.checked)}
+                            onChange={(e) =>
+                              updateProcessingOption(
+                                "remove_page_numbers",
+                                e.target.checked,
+                              )
+                            }
                             size="sm"
                           />
                           <Checkbox
                             label={t("agent-admin.remove-headers-footers")}
                             checked={processingOptions.remove_header_footer}
-                            onChange={(e) => updateProcessingOption("remove_header_footer", e.target.checked)}
+                            onChange={(e) =>
+                              updateProcessingOption(
+                                "remove_header_footer",
+                                e.target.checked,
+                              )
+                            }
                             size="sm"
                           />
                         </div>
@@ -620,31 +878,56 @@ const AgentAdmin = observer(() => {
                           <Checkbox
                             label={t("agent-admin.split-h2")}
                             checked={processingOptions.split_h2}
-                            onChange={(e) => updateProcessingOption("split_h2", e.target.checked)}
+                            onChange={(e) =>
+                              updateProcessingOption(
+                                "split_h2",
+                                e.target.checked,
+                              )
+                            }
                             size="sm"
                           />
                           <Checkbox
                             label={t("agent-admin.split-h3")}
                             checked={processingOptions.split_h3}
-                            onChange={(e) => updateProcessingOption("split_h3", e.target.checked)}
+                            onChange={(e) =>
+                              updateProcessingOption(
+                                "split_h3",
+                                e.target.checked,
+                              )
+                            }
                             size="sm"
                           />
                           <Checkbox
                             label={t("agent-admin.split-paragraphs")}
                             checked={processingOptions.split_paragraphs}
-                            onChange={(e) => updateProcessingOption("split_paragraphs", e.target.checked)}
+                            onChange={(e) =>
+                              updateProcessingOption(
+                                "split_paragraphs",
+                                e.target.checked,
+                              )
+                            }
                             size="sm"
                           />
                           <Checkbox
                             label={t("agent-admin.split-sentences")}
                             checked={processingOptions.split_sentences}
-                            onChange={(e) => updateProcessingOption("split_sentences", e.target.checked)}
+                            onChange={(e) =>
+                              updateProcessingOption(
+                                "split_sentences",
+                                e.target.checked,
+                              )
+                            }
                             size="sm"
                           />
                           <Checkbox
                             label={t("agent-admin.preserve-lists")}
                             checked={processingOptions.preserve_lists}
-                            onChange={(e) => updateProcessingOption("preserve_lists", e.target.checked)}
+                            onChange={(e) =>
+                              updateProcessingOption(
+                                "preserve_lists",
+                                e.target.checked,
+                              )
+                            }
                             size="sm"
                           />
                         </div>
@@ -657,48 +940,83 @@ const AgentAdmin = observer(() => {
                         </h4>
                         <div className="space-y-3">
                           <div className="flex items-center gap-4">
-                            <span className="text-xs text-gray-600 dark:text-gray-400 w-24">{t("agent-admin.max-chunk-size")}</span>
+                            <span className="text-xs text-gray-600 dark:text-gray-400 w-24">
+                              {t("agent-admin.max-chunk-size")}
+                            </span>
                             <Slider
                               value={processingOptions.max_chunk_size}
-                              onChange={(_, value) => updateProcessingOption("max_chunk_size", value as number)}
+                              onChange={(_, value) =>
+                                updateProcessingOption(
+                                  "max_chunk_size",
+                                  value as number,
+                                )
+                              }
                               min={400}
                               max={1200}
                               step={50}
                               valueLabelDisplay="auto"
                               sx={{ flex: 1 }}
                             />
-                            <span className="text-xs text-gray-500 w-16">{processingOptions.max_chunk_size} {t("agent-admin.tokens")}</span>
+                            <span className="text-xs text-gray-500 w-16">
+                              {processingOptions.max_chunk_size}{" "}
+                              {t("agent-admin.tokens")}
+                            </span>
                           </div>
                           <div className="flex items-center gap-4">
-                            <span className="text-xs text-gray-600 dark:text-gray-400 w-24">{t("agent-admin.min-chunk-size")}</span>
+                            <span className="text-xs text-gray-600 dark:text-gray-400 w-24">
+                              {t("agent-admin.min-chunk-size")}
+                            </span>
                             <Slider
                               value={processingOptions.min_chunk_size}
-                              onChange={(_, value) => updateProcessingOption("min_chunk_size", value as number)}
+                              onChange={(_, value) =>
+                                updateProcessingOption(
+                                  "min_chunk_size",
+                                  value as number,
+                                )
+                              }
                               min={50}
                               max={200}
                               step={10}
                               valueLabelDisplay="auto"
                               sx={{ flex: 1 }}
                             />
-                            <span className="text-xs text-gray-500 w-16">{processingOptions.min_chunk_size} {t("agent-admin.tokens")}</span>
+                            <span className="text-xs text-gray-500 w-16">
+                              {processingOptions.min_chunk_size}{" "}
+                              {t("agent-admin.tokens")}
+                            </span>
                           </div>
                           <div className="flex items-center gap-4">
-                            <span className="text-xs text-gray-600 dark:text-gray-400 w-24">{t("agent-admin.chunk-overlap")}</span>
+                            <span className="text-xs text-gray-600 dark:text-gray-400 w-24">
+                              {t("agent-admin.chunk-overlap")}
+                            </span>
                             <Slider
                               value={processingOptions.chunk_overlap}
-                              onChange={(_, value) => updateProcessingOption("chunk_overlap", value as number)}
+                              onChange={(_, value) =>
+                                updateProcessingOption(
+                                  "chunk_overlap",
+                                  value as number,
+                                )
+                              }
                               min={0}
                               max={100}
                               step={10}
                               valueLabelDisplay="auto"
                               sx={{ flex: 1 }}
                             />
-                            <span className="text-xs text-gray-500 w-16">{processingOptions.chunk_overlap} {t("agent-admin.tokens")}</span>
+                            <span className="text-xs text-gray-500 w-16">
+                              {processingOptions.chunk_overlap}{" "}
+                              {t("agent-admin.tokens")}
+                            </span>
                           </div>
                           <Checkbox
                             label={t("agent-admin.merge-small-chunks")}
                             checked={processingOptions.merge_small_chunks}
-                            onChange={(e) => updateProcessingOption("merge_small_chunks", e.target.checked)}
+                            onChange={(e) =>
+                              updateProcessingOption(
+                                "merge_small_chunks",
+                                e.target.checked,
+                              )
+                            }
                             size="sm"
                           />
                         </div>
@@ -713,19 +1031,34 @@ const AgentAdmin = observer(() => {
                           <Checkbox
                             label={t("agent-admin.generate-titles")}
                             checked={processingOptions.generate_titles}
-                            onChange={(e) => updateProcessingOption("generate_titles", e.target.checked)}
+                            onChange={(e) =>
+                              updateProcessingOption(
+                                "generate_titles",
+                                e.target.checked,
+                              )
+                            }
                             size="sm"
                           />
                           <Checkbox
                             label={t("agent-admin.add-source-ref")}
                             checked={processingOptions.add_source_ref}
-                            onChange={(e) => updateProcessingOption("add_source_ref", e.target.checked)}
+                            onChange={(e) =>
+                              updateProcessingOption(
+                                "add_source_ref",
+                                e.target.checked,
+                              )
+                            }
                             size="sm"
                           />
                           <Checkbox
                             label={t("agent-admin.preserve-hierarchy")}
                             checked={processingOptions.preserve_hierarchy}
-                            onChange={(e) => updateProcessingOption("preserve_hierarchy", e.target.checked)}
+                            onChange={(e) =>
+                              updateProcessingOption(
+                                "preserve_hierarchy",
+                                e.target.checked,
+                              )
+                            }
                             size="sm"
                           />
                         </div>
@@ -773,7 +1106,9 @@ const AgentAdmin = observer(() => {
                       disabled={isGenerating !== null}
                       startDecorator={<ZapIcon className="w-4 h-4" />}
                     >
-                      {isGenerating === "rag" ? t("agent-admin.formatting") : t("agent-admin.format-for-rag")}
+                      {isGenerating === "rag"
+                        ? t("agent-admin.formatting")
+                        : t("agent-admin.format-for-rag")}
                     </Button>
                     <Button
                       variant="outlined"
@@ -783,7 +1118,9 @@ const AgentAdmin = observer(() => {
                       disabled={isGenerating !== null}
                       startDecorator={<SparklesIcon className="w-4 h-4" />}
                     >
-                      {isGenerating === "kb" ? t("agent-admin.generating") : t("agent-admin.generate-kb")}
+                      {isGenerating === "kb"
+                        ? t("agent-admin.generating")
+                        : t("agent-admin.generate-kb")}
                     </Button>
                     <Button
                       variant="outlined"
@@ -793,7 +1130,9 @@ const AgentAdmin = observer(() => {
                       disabled={isGenerating !== null}
                       startDecorator={<SparklesIcon className="w-4 h-4" />}
                     >
-                      {isGenerating === "policy" ? t("agent-admin.generating") : t("agent-admin.generate-policy")}
+                      {isGenerating === "policy"
+                        ? t("agent-admin.generating")
+                        : t("agent-admin.generate-policy")}
                     </Button>
                   </div>
                   <p className="text-xs text-purple-500 dark:text-purple-400">
@@ -808,7 +1147,13 @@ const AgentAdmin = observer(() => {
               title={t("agent-admin.internal")}
               audienceType="internal"
               tenant={selectedTenant}
-              onViewVersions={(audienceType, fileType) => handleViewVersions(selectedTenant.tenant.slug, audienceType, fileType)}
+              onViewVersions={(audienceType, fileType) =>
+                handleViewVersions(
+                  selectedTenant.tenant.slug,
+                  audienceType,
+                  fileType,
+                )
+              }
               isSaving={isSaving}
               t={t}
               canUpload={canUpload}
@@ -821,8 +1166,12 @@ const AgentAdmin = observer(() => {
                 <div className="flex flex-col gap-4">
                   <div className="flex justify-between items-center">
                     <div>
-                      <h3 className="font-medium text-blue-700 dark:text-blue-300">{t("agent-admin.rebuild-index")}</h3>
-                      <p className="text-sm text-blue-600 dark:text-blue-400">{t("agent-admin.rebuild-index-desc")}</p>
+                      <h3 className="font-medium text-blue-700 dark:text-blue-300">
+                        {t("agent-admin.rebuild-index")}
+                      </h3>
+                      <p className="text-sm text-blue-600 dark:text-blue-400">
+                        {t("agent-admin.rebuild-index-desc")}
+                      </p>
                     </div>
                     <div className="flex items-center gap-2">
                       <Select
@@ -835,53 +1184,82 @@ const AgentAdmin = observer(() => {
                         <Option value="internal">Internal</Option>
                         <Option value="external">External</Option>
                       </Select>
-                      <Button color="primary" onClick={handleRebuildIndex} loading={isRebuilding || agentAdminStore.state.reindexStatus?.status === "in_progress"}>
+                      <Button
+                        color="primary"
+                        onClick={handleRebuildIndex}
+                        loading={
+                          isRebuilding ||
+                          agentAdminStore.state.reindexStatus?.status ===
+                            "in_progress"
+                        }
+                      >
                         <RefreshCwIcon className="w-4 h-4 mr-2" />
                         {t("agent-admin.rebuild-index")}
                       </Button>
                     </div>
                   </div>
 
-                  {agentAdminStore.state.reindexStatus && agentAdminStore.state.reindexStatus.status !== "idle" && (
-                    <div className="bg-white dark:bg-zinc-800 rounded-lg p-3 border border-blue-100 dark:border-blue-900/40">
-                      <div className="flex justify-between text-xs font-medium mb-1">
-                        <span className={cn(
-                          agentAdminStore.state.reindexStatus.status === "failed" ? "text-red-500" :
-                            agentAdminStore.state.reindexStatus.status === "completed" ? "text-green-500" : "text-blue-500"
-                        )}>
-                          {agentAdminStore.state.reindexStatus.status.toUpperCase()}
-                        </span>
-                        <span>
-                          {agentAdminStore.state.reindexStatus.processed_chunks} / {agentAdminStore.state.reindexStatus.total_chunks} chunks
-                        </span>
+                  {agentAdminStore.state.reindexStatus &&
+                    agentAdminStore.state.reindexStatus.status !== "idle" && (
+                      <div className="bg-white dark:bg-zinc-800 rounded-lg p-3 border border-blue-100 dark:border-blue-900/40">
+                        <div className="flex justify-between text-xs font-medium mb-1">
+                          <span
+                            className={cn(
+                              agentAdminStore.state.reindexStatus.status ===
+                                "failed"
+                                ? "text-red-500"
+                                : agentAdminStore.state.reindexStatus.status ===
+                                    "completed"
+                                  ? "text-green-500"
+                                  : "text-blue-500",
+                            )}
+                          >
+                            {agentAdminStore.state.reindexStatus.status.toUpperCase()}
+                          </span>
+                          <span>
+                            {
+                              agentAdminStore.state.reindexStatus
+                                .processed_chunks
+                            }{" "}
+                            / {agentAdminStore.state.reindexStatus.total_chunks}{" "}
+                            chunks
+                          </span>
+                        </div>
+                        <div className="w-full bg-gray-200 dark:bg-zinc-700 rounded-full h-1.5 mb-2">
+                          <div
+                            className={cn(
+                              "h-1.5 rounded-full transition-all duration-500",
+                              agentAdminStore.state.reindexStatus.status ===
+                                "failed"
+                                ? "bg-red-500"
+                                : agentAdminStore.state.reindexStatus.status ===
+                                    "completed"
+                                  ? "bg-green-500"
+                                  : "bg-blue-500",
+                            )}
+                            style={{
+                              width: `${Math.min(100, (agentAdminStore.state.reindexStatus.processed_chunks / (agentAdminStore.state.reindexStatus.total_chunks || 1)) * 100)}%`,
+                            }}
+                          ></div>
+                        </div>
+                        {agentAdminStore.state.reindexStatus.last_message && (
+                          <div className="text-[10px] font-mono text-gray-500 dark:text-gray-400 break-all bg-gray-50 dark:bg-zinc-900/50 p-1 rounded">
+                            $ {agentAdminStore.state.reindexStatus.last_message}
+                          </div>
+                        )}
+                        {agentAdminStore.state.reindexStatus.error && (
+                          <div className="text-[10px] text-red-500 mt-1">
+                            Error: {agentAdminStore.state.reindexStatus.error}
+                          </div>
+                        )}
+                        {agentAdminStore.state.reindexStatus.status ===
+                          "completed" && (
+                          <div className="text-[10px] text-green-500 mt-1">
+                            ✓ Reindexing completed successfully
+                          </div>
+                        )}
                       </div>
-                      <div className="w-full bg-gray-200 dark:bg-zinc-700 rounded-full h-1.5 mb-2">
-                        <div
-                          className={cn(
-                            "h-1.5 rounded-full transition-all duration-500",
-                            agentAdminStore.state.reindexStatus.status === "failed" ? "bg-red-500" :
-                              agentAdminStore.state.reindexStatus.status === "completed" ? "bg-green-500" : "bg-blue-500"
-                          )}
-                          style={{ width: `${Math.min(100, (agentAdminStore.state.reindexStatus.processed_chunks / (agentAdminStore.state.reindexStatus.total_chunks || 1)) * 100)}%` }}
-                        ></div>
-                      </div>
-                      {agentAdminStore.state.reindexStatus.last_message && (
-                        <div className="text-[10px] font-mono text-gray-500 dark:text-gray-400 break-all bg-gray-50 dark:bg-zinc-900/50 p-1 rounded">
-                          $ {agentAdminStore.state.reindexStatus.last_message}
-                        </div>
-                      )}
-                      {agentAdminStore.state.reindexStatus.error && (
-                        <div className="text-[10px] text-red-500 mt-1">
-                          Error: {agentAdminStore.state.reindexStatus.error}
-                        </div>
-                      )}
-                      {agentAdminStore.state.reindexStatus.status === "completed" && (
-                        <div className="text-[10px] text-green-500 mt-1">
-                          ✓ Reindexing completed successfully
-                        </div>
-                      )}
-                    </div>
-                  )}
+                    )}
                 </div>
               </div>
             )}
@@ -892,8 +1270,12 @@ const AgentAdmin = observer(() => {
                 <div className="flex items-center gap-2 mb-4">
                   <CodeIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
                   <div>
-                    <h3 className="font-medium text-gray-800 dark:text-gray-200">{t("agent-admin.widget-embed-title")}</h3>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">{t("agent-admin.widget-embed-desc")}</p>
+                    <h3 className="font-medium text-gray-800 dark:text-gray-200">
+                      {t("agent-admin.widget-embed-title")}
+                    </h3>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      {t("agent-admin.widget-embed-desc")}
+                    </p>
                   </div>
                 </div>
 
@@ -924,7 +1306,11 @@ const AgentAdmin = observer(() => {
                       <FormLabel>{t("agent-admin.widget-position")}</FormLabel>
                       <div className="flex gap-2">
                         <Button
-                          variant={widgetPosition === "bottom-right" ? "solid" : "outlined"}
+                          variant={
+                            widgetPosition === "bottom-right"
+                              ? "solid"
+                              : "outlined"
+                          }
                           color="neutral"
                           size="sm"
                           onClick={() => setWidgetPosition("bottom-right")}
@@ -932,7 +1318,11 @@ const AgentAdmin = observer(() => {
                           {t("agent-admin.widget-position-right")}
                         </Button>
                         <Button
-                          variant={widgetPosition === "bottom-left" ? "solid" : "outlined"}
+                          variant={
+                            widgetPosition === "bottom-left"
+                              ? "solid"
+                              : "outlined"
+                          }
                           color="neutral"
                           size="sm"
                           onClick={() => setWidgetPosition("bottom-left")}
@@ -948,7 +1338,9 @@ const AgentAdmin = observer(() => {
                       <Input
                         value={widgetWelcome}
                         onChange={(e) => setWidgetWelcome(e.target.value)}
-                        placeholder={t("agent-admin.widget-welcome-placeholder")}
+                        placeholder={t(
+                          "agent-admin.widget-welcome-placeholder",
+                        )}
                       />
                     </FormControl>
                   </div>
@@ -964,59 +1356,82 @@ const AgentAdmin = observer(() => {
                       />
                     </div>
                     {showWidgetPreview && (
-                      <div className="relative bg-white dark:bg-zinc-900 rounded-xl border border-gray-200 dark:border-zinc-700 h-80 overflow-hidden">
+                      <div className="dark chat-font relative h-96 overflow-hidden rounded-xl border border-stone-200 dark:border-zinc-700 bg-[#f7f5f2] dark:bg-zinc-950 chat-bg-pattern">
                         {/* Mini Preview Panel */}
                         <div
-                          className="absolute w-64 bg-white rounded-2xl shadow-lg border overflow-hidden"
+                          className="absolute flex h-[350px] w-72 flex-col overflow-hidden rounded-[18px] border border-stone-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-[0_14px_40px_rgba(41,37,36,0.16)] dark:shadow-[0_14px_40px_rgba(0,0,0,0.4)]"
                           style={{
-                            bottom: 16,
-                            [widgetPosition === "bottom-right" ? "right" : "left"]: 16,
-                            borderColor: "#e5e5e5"
+                            bottom: 12,
+                            [widgetPosition === "bottom-right"
+                              ? "right"
+                              : "left"]: 16,
                           }}
                         >
                           {/* Header */}
-                          <div
-                            className="px-4 py-3 flex items-center justify-between"
-                            style={{ background: "#fff", borderBottom: "1px solid #f0f0f0" }}
-                          >
+                          <div className="flex items-center justify-between border-b border-stone-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-900/95 px-4 py-3 text-stone-800 dark:text-stone-200">
                             <div className="flex items-center gap-2">
-                              <svg viewBox="0 0 24 24" className="w-5 h-5" style={{ fill: widgetColor }}>
+                              <svg
+                                viewBox="0 0 24 24"
+                                className="w-5 h-5"
+                                style={{ fill: widgetColor }}
+                              >
                                 <path d="M12 2C6.48 2 2 6.48 2 12c0 1.85.5 3.58 1.36 5.07L2 22l4.93-1.36C8.42 21.5 10.15 22 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2zm0 18c-1.58 0-3.08-.38-4.4-1.06l-.31-.17-3.23.89.89-3.23-.17-.31C4.38 15.08 4 13.58 4 12c0-4.41 3.59-8 8-8s8 3.59 8 8-3.59 8-8 8z" />
                               </svg>
-                              <span className="font-semibold text-sm text-gray-800">
-                                {selectedTenant?.tenant.companyName || "Company"}
+                              <span className="text-sm font-semibold tracking-[-0.015em] text-stone-800 dark:text-stone-250">
+                                {selectedTenant?.tenant.companyName ||
+                                  "Company"}
                               </span>
                             </div>
                             <div className="flex gap-1">
-                              <div className="w-6 h-6 rounded-md hover:bg-gray-100 flex items-center justify-center cursor-pointer">
-                                <span className="text-gray-400 text-xs">─</span>
+                              <div className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg bg-stone-100 dark:bg-zinc-850">
+                                <span className="text-xs text-stone-500 dark:text-zinc-400">
+                                  ─
+                                </span>
                               </div>
-                              <div className="w-6 h-6 rounded-md hover:bg-gray-100 flex items-center justify-center cursor-pointer">
-                                <span className="text-gray-400 text-xs">✕</span>
+                              <div className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg bg-stone-100 dark:bg-zinc-850">
+                                <span className="text-xs text-stone-500 dark:text-zinc-400">
+                                  ✕
+                                </span>
                               </div>
                             </div>
                           </div>
                           {/* Messages Area */}
-                          <div className="p-4 bg-gray-50 h-32 flex items-center justify-center">
-                            <div className="text-center text-gray-400">
-                              <svg viewBox="0 0 24 24" className="w-8 h-8 mx-auto mb-2 fill-gray-300">
-                                <path d="M12 2C6.48 2 2 6.48 2 12c0 1.85.5 3.58 1.36 5.07L2 22l4.93-1.36C8.42 21.5 10.15 22 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2zm0 18c-1.58 0-3.08-.38-4.4-1.06l-.31-.17-3.23.89.89-3.23-.17-.31C4.38 15.08 4 13.58 4 12c0-4.41 3.59-8 8-8s8 3.59 8 8-3.59 8-8 8z" />
-                              </svg>
-                              <p className="text-xs">{widgetWelcome}</p>
+                          <div className="flex flex-1 flex-col gap-3 bg-[#f7f5f2] dark:bg-zinc-950 chat-bg-pattern p-4 overflow-y-auto">
+                            <div className="max-w-[85%] rounded-xl border border-stone-100 dark:border-zinc-850 bg-white dark:bg-zinc-900 px-3.5 py-2.5 text-xs leading-relaxed text-stone-800 dark:text-zinc-100 shadow-sm">
+                              {widgetWelcome}
+                              <span className="mt-1 block text-[9px] text-stone-400 dark:text-zinc-500">
+                                Agent · 10:24 AM
+                              </span>
+                            </div>
+                            <div
+                              className="ml-auto max-w-[85%] rounded-xl border border-transparent px-3 py-2.5 text-xs leading-relaxed text-white shadow-sm"
+                              style={{
+                                backgroundColor: widgetColor,
+                              }}
+                            >
+                              I need help with my account.
+                              <span className="mt-1 block text-[9px] text-white/70">
+                                10:25 AM
+                              </span>
                             </div>
                           </div>
                           {/* Input Area */}
-                          <div className="p-3 border-t border-gray-100 flex gap-2">
-                            <div className="flex-1 bg-gray-100 rounded-full px-4 py-2 text-xs text-gray-400">
-                              Message...
-                            </div>
-                            <div
-                              className="w-8 h-8 rounded-full flex items-center justify-center"
-                              style={{ background: widgetColor }}
-                            >
-                              <svg viewBox="0 0 24 24" className="w-4 h-4 fill-white">
-                                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
-                              </svg>
+                          <div className="border-t border-stone-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-3">
+                            <div className="flex items-center gap-2 rounded-[13px] border border-stone-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-1.5 pl-3">
+                              <div className="flex-1 text-xs text-stone-400 dark:text-zinc-500">
+                                Message...
+                              </div>
+                              <div
+                                className="flex h-8 w-8 items-center justify-center rounded-[9px]"
+                                style={{ background: widgetColor }}
+                              >
+                                <svg
+                                  viewBox="0 0 24 24"
+                                  className="w-4 h-4 fill-white"
+                                >
+                                  <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+                                </svg>
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -1026,11 +1441,16 @@ const AgentAdmin = observer(() => {
                           style={{
                             background: widgetColor,
                             bottom: 16,
-                            [widgetPosition === "bottom-right" ? "right" : "left"]: 16,
-                            display: "none"
+                            [widgetPosition === "bottom-right"
+                              ? "right"
+                              : "left"]: 16,
+                            display: "none",
                           }}
                         >
-                          <svg viewBox="0 0 24 24" className="w-6 h-6 fill-white">
+                          <svg
+                            viewBox="0 0 24 24"
+                            className="w-6 h-6 fill-white"
+                          >
                             <path d="M12 2C6.48 2 2 6.48 2 12c0 1.85.5 3.58 1.36 5.07L2 22l4.93-1.36C8.42 21.5 10.15 22 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2zm0 18c-1.58 0-3.08-.38-4.4-1.06l-.31-.17-3.23.89.89-3.23-.17-.31C4.38 15.08 4 13.58 4 12c0-4.41 3.59-8 8-8s8 3.59 8 8-3.59 8-8 8z" />
                           </svg>
                         </div>
@@ -1096,7 +1516,9 @@ const AgentAdmin = observer(() => {
                         }
                       }}
                     />
-                    <label className="font-medium text-sm">{t("agent-admin.domain-allowlist-enable")}</label>
+                    <label className="font-medium text-sm">
+                      {t("agent-admin.domain-allowlist-enable")}
+                    </label>
                   </div>
                   <p className="text-xs text-gray-500 dark:text-zinc-400 mb-3">
                     {t("agent-admin.domain-allowlist-desc")}
@@ -1106,7 +1528,9 @@ const AgentAdmin = observer(() => {
                       <Textarea
                         value={allowedDomainsText}
                         onChange={(e) => setAllowedDomainsText(e.target.value)}
-                        placeholder={"example.com\n*.example.com\nlocalhost:3000"}
+                        placeholder={
+                          "example.com\n*.example.com\nlocalhost:3000"
+                        }
                         minRows={3}
                         sx={{ fontFamily: "monospace", fontSize: "0.875rem" }}
                       />
@@ -1124,13 +1548,16 @@ const AgentAdmin = observer(() => {
                               .split("\n")
                               .map((d) => d.trim())
                               .filter((d) => d.length > 0);
-                            const success = await agentAdminStore.updateAllowedDomains(
-                              selectedTenant.tenant.slug,
-                              domains
-                            );
+                            const success =
+                              await agentAdminStore.updateAllowedDomains(
+                                selectedTenant.tenant.slug,
+                                domains,
+                              );
                             setIsSavingDomains(false);
                             if (success) {
-                              toast.success(t("agent-admin.domain-allowlist-saved"));
+                              toast.success(
+                                t("agent-admin.domain-allowlist-saved"),
+                              );
                             }
                           }}
                         >
@@ -1139,28 +1566,33 @@ const AgentAdmin = observer(() => {
                       </div>
                     </div>
                   )}
-                  {!domainAllowlistEnabled && selectedTenant?.tenant.allowedDomains && selectedTenant.tenant.allowedDomains.length > 0 && (
-                    <Button
-                      size="sm"
-                      color="warning"
-                      variant="soft"
-                      loading={isSavingDomains}
-                      onClick={async () => {
-                        if (!selectedTenant) return;
-                        setIsSavingDomains(true);
-                        const success = await agentAdminStore.updateAllowedDomains(
-                          selectedTenant.tenant.slug,
-                          []
-                        );
-                        setIsSavingDomains(false);
-                        if (success) {
-                          toast.success(t("agent-admin.domain-allowlist-disabled"));
-                        }
-                      }}
-                    >
-                      {t("agent-admin.domain-allowlist-clear")}
-                    </Button>
-                  )}
+                  {!domainAllowlistEnabled &&
+                    selectedTenant?.tenant.allowedDomains &&
+                    selectedTenant.tenant.allowedDomains.length > 0 && (
+                      <Button
+                        size="sm"
+                        color="warning"
+                        variant="soft"
+                        loading={isSavingDomains}
+                        onClick={async () => {
+                          if (!selectedTenant) return;
+                          setIsSavingDomains(true);
+                          const success =
+                            await agentAdminStore.updateAllowedDomains(
+                              selectedTenant.tenant.slug,
+                              [],
+                            );
+                          setIsSavingDomains(false);
+                          if (success) {
+                            toast.success(
+                              t("agent-admin.domain-allowlist-disabled"),
+                            );
+                          }
+                        }}
+                      >
+                        {t("agent-admin.domain-allowlist-clear")}
+                      </Button>
+                    )}
                 </div>
               </div>
             )}
@@ -1202,15 +1634,21 @@ const AgentAdmin = observer(() => {
                 {qaTestResults && (
                   <div className="grid grid-cols-4 gap-3 mt-3 p-3 bg-white dark:bg-gray-800 rounded-lg">
                     <div className="text-center">
-                      <div className="text-2xl font-bold text-purple-600">{qaTestResults.total_pairs}</div>
+                      <div className="text-2xl font-bold text-purple-600">
+                        {qaTestResults.total_pairs}
+                      </div>
                       <div className="text-xs text-gray-500">Total Pairs</div>
                     </div>
                     <div className="text-center">
-                      <div className="text-2xl font-bold text-green-600">{qaTestResults.found}</div>
+                      <div className="text-2xl font-bold text-green-600">
+                        {qaTestResults.found}
+                      </div>
                       <div className="text-xs text-gray-500">Found</div>
                     </div>
                     <div className="text-center">
-                      <div className="text-2xl font-bold text-red-600">{qaTestResults.not_found}</div>
+                      <div className="text-2xl font-bold text-red-600">
+                        {qaTestResults.not_found}
+                      </div>
                       <div className="text-xs text-gray-500">Not Found</div>
                     </div>
                     <div className="text-center">
@@ -1242,7 +1680,9 @@ const AgentAdmin = observer(() => {
                     onClick={() => setShowSearchExplorer(!showSearchExplorer)}
                   >
                     <SearchIcon className="w-4 h-4 mr-2" />
-                    {showSearchExplorer ? t("common.close") : t("agent-admin.open-explorer")}
+                    {showSearchExplorer
+                      ? t("common.close")
+                      : t("agent-admin.open-explorer")}
                   </Button>
                 </div>
 
@@ -1255,7 +1695,9 @@ const AgentAdmin = observer(() => {
                         placeholder={t("agent-admin.search-placeholder")}
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        onKeyDown={(e) => e.key === "Enter" && handleRAGSearch()}
+                        onKeyDown={(e) =>
+                          e.key === "Enter" && handleRAGSearch()
+                        }
                         className="flex-1"
                       />
                       <Select
@@ -1281,7 +1723,10 @@ const AgentAdmin = observer(() => {
                     {ragSearchResults && (
                       <div className="space-y-3">
                         <div className="flex justify-between items-center text-sm text-gray-600 dark:text-gray-400">
-                          <span>{ragSearchResults.total_results} results for "{ragSearchResults.query}"</span>
+                          <span>
+                            {ragSearchResults.total_results} results for "
+                            {ragSearchResults.query}"
+                          </span>
                           <span>{ragSearchResults.latency_ms}ms</span>
                         </div>
 
@@ -1299,19 +1744,29 @@ const AgentAdmin = observer(() => {
                                 <div
                                   className={cn(
                                     "h-full rounded-full transition-all",
-                                    result.score_percent >= 80 ? "bg-green-500" :
-                                      result.score_percent >= 60 ? "bg-yellow-500" :
-                                        result.score_percent >= 40 ? "bg-orange-500" : "bg-red-500"
+                                    result.score_percent >= 80
+                                      ? "bg-green-500"
+                                      : result.score_percent >= 60
+                                        ? "bg-yellow-500"
+                                        : result.score_percent >= 40
+                                          ? "bg-orange-500"
+                                          : "bg-red-500",
                                   )}
                                   style={{ width: `${result.score_percent}%` }}
                                 />
                               </div>
-                              <span className={cn(
-                                "font-bold min-w-[3rem] text-right",
-                                result.score_percent >= 80 ? "text-green-600" :
-                                  result.score_percent >= 60 ? "text-yellow-600" :
-                                    result.score_percent >= 40 ? "text-orange-600" : "text-red-600"
-                              )}>
+                              <span
+                                className={cn(
+                                  "font-bold min-w-[3rem] text-right",
+                                  result.score_percent >= 80
+                                    ? "text-green-600"
+                                    : result.score_percent >= 60
+                                      ? "text-yellow-600"
+                                      : result.score_percent >= 40
+                                        ? "text-orange-600"
+                                        : "text-red-600",
+                                )}
+                              >
                                 {result.score_percent}%
                               </span>
                             </div>
@@ -1330,12 +1785,21 @@ const AgentAdmin = observer(() => {
                             <div className="flex flex-wrap gap-2 items-center text-xs">
                               {result.matched_keywords.length > 0 && (
                                 <div className="flex gap-1 items-center">
-                                  <span className="text-gray-500">Matched:</span>
-                                  {result.matched_keywords.slice(0, 5).map((kw) => (
-                                    <Chip key={kw} size="sm" color="success" variant="soft">
-                                      {kw}
-                                    </Chip>
-                                  ))}
+                                  <span className="text-gray-500">
+                                    Matched:
+                                  </span>
+                                  {result.matched_keywords
+                                    .slice(0, 5)
+                                    .map((kw) => (
+                                      <Chip
+                                        key={kw}
+                                        size="sm"
+                                        color="success"
+                                        variant="soft"
+                                      >
+                                        {kw}
+                                      </Chip>
+                                    ))}
                                 </div>
                               )}
                               <Chip size="sm" variant="outlined">
@@ -1347,7 +1811,8 @@ const AgentAdmin = observer(() => {
 
                         {ragSearchResults.results.length === 0 && (
                           <div className="text-center py-8 text-gray-500">
-                            No results found. Try a different query or rebuild the index.
+                            No results found. Try a different query or rebuild
+                            the index.
                           </div>
                         )}
                       </div>
@@ -1374,10 +1839,11 @@ const AgentAdmin = observer(() => {
                       label={t("agent-admin.record-transcripts")}
                       checked={tenantSettings?.recordTranscripts ?? true}
                       onChange={async (e) => {
-                        const success = await agentAdminStore.updateTenantSettings(
-                          selectedTenant.tenant.slug,
-                          { recordTranscripts: e.target.checked }
-                        );
+                        const success =
+                          await agentAdminStore.updateTenantSettings(
+                            selectedTenant.tenant.slug,
+                            { recordTranscripts: e.target.checked },
+                          );
                         if (success) {
                           toast.success(t("agent-admin.settings-saved"));
                         }
@@ -1390,7 +1856,10 @@ const AgentAdmin = observer(() => {
                       onClick={() => setShowTranscripts(!showTranscripts)}
                     >
                       <MessageCircleIcon className="w-4 h-4 mr-2" />
-                      {showTranscripts ? t("common.close") : t("agent-admin.transcript-view")} ({transcripts.length})
+                      {showTranscripts
+                        ? t("common.close")
+                        : t("agent-admin.transcript-view")}{" "}
+                      ({transcripts.length})
                     </Button>
                   </div>
                 </div>
@@ -1399,7 +1868,9 @@ const AgentAdmin = observer(() => {
                 {showTranscripts && (
                   <div className="mt-4 space-y-3">
                     {isLoadingTranscripts ? (
-                      <div className="text-center py-4 text-gray-500">Loading...</div>
+                      <div className="text-center py-4 text-gray-500">
+                        Loading...
+                      </div>
                     ) : transcripts.length === 0 ? (
                       <div className="text-center py-4 text-gray-500">
                         {t("agent-admin.transcripts-empty")}
@@ -1414,26 +1885,42 @@ const AgentAdmin = observer(() => {
                             <div className="flex justify-between items-start">
                               <div className="flex-1">
                                 <div className="flex items-center gap-2 mb-1">
-                                  <Chip size="sm" variant="soft" color="primary">
+                                  <Chip
+                                    size="sm"
+                                    variant="soft"
+                                    color="primary"
+                                  >
                                     {transcript.audienceType}
                                   </Chip>
                                   <span className="text-xs text-gray-500">
-                                    {new Date(transcript.startedAt).toLocaleString()}
+                                    {new Date(
+                                      transcript.startedAt,
+                                    ).toLocaleString()}
                                   </span>
                                   {transcript.isCompleted && (
-                                    <Chip size="sm" variant="soft" color="success">
+                                    <Chip
+                                      size="sm"
+                                      variant="soft"
+                                      color="success"
+                                    >
                                       Completed
                                     </Chip>
                                   )}
                                 </div>
                                 <div className="text-sm text-gray-700 dark:text-gray-300">
                                   {transcript.customerName && (
-                                    <span className="font-medium">{transcript.customerName}</span>
+                                    <span className="font-medium">
+                                      {transcript.customerName}
+                                    </span>
                                   )}
                                   {transcript.detectedIntent && (
-                                    <span className="ml-2 text-gray-500">- {transcript.detectedIntent}</span>
+                                    <span className="ml-2 text-gray-500">
+                                      - {transcript.detectedIntent}
+                                    </span>
                                   )}
-                                  <span className="ml-2 text-gray-400">({transcript.messageCount} messages)</span>
+                                  <span className="ml-2 text-gray-400">
+                                    ({transcript.messageCount} messages)
+                                  </span>
                                 </div>
                               </div>
                               <div className="flex gap-2">
@@ -1453,13 +1940,22 @@ const AgentAdmin = observer(() => {
                                   variant="plain"
                                   color="danger"
                                   onClick={async () => {
-                                    if (window.confirm(t("agent-admin.transcript-delete-confirm"))) {
-                                      const success = await agentAdminStore.deleteTranscript(
-                                        selectedTenant.tenant.slug,
-                                        transcript.id
-                                      );
+                                    if (
+                                      window.confirm(
+                                        t(
+                                          "agent-admin.transcript-delete-confirm",
+                                        ),
+                                      )
+                                    ) {
+                                      const success =
+                                        await agentAdminStore.deleteTranscript(
+                                          selectedTenant.tenant.slug,
+                                          transcript.id,
+                                        );
                                       if (success) {
-                                        toast.success(t("agent-admin.transcript-deleted"));
+                                        toast.success(
+                                          t("agent-admin.transcript-deleted"),
+                                        );
                                       }
                                     }
                                   }}
@@ -1482,10 +1978,17 @@ const AgentAdmin = observer(() => {
               <div className="bg-red-50 dark:bg-red-900/20 rounded-xl border border-red-200 dark:border-red-800 p-4">
                 <div className="flex justify-between items-center">
                   <div>
-                    <h3 className="font-medium text-red-700 dark:text-red-300">{t("agent-admin.delete-tenant")}</h3>
-                    <p className="text-sm text-red-600 dark:text-red-400">This action cannot be undone.</p>
+                    <h3 className="font-medium text-red-700 dark:text-red-300">
+                      {t("agent-admin.delete-tenant")}
+                    </h3>
+                    <p className="text-sm text-red-600 dark:text-red-400">
+                      This action cannot be undone.
+                    </p>
                   </div>
-                  <Button color="danger" onClick={() => setShowDeleteModal(selectedTenant.tenant)}>
+                  <Button
+                    color="danger"
+                    onClick={() => setShowDeleteModal(selectedTenant.tenant)}
+                  >
                     {t("agent-admin.delete-tenant")}
                   </Button>
                 </div>
@@ -1502,18 +2005,31 @@ const AgentAdmin = observer(() => {
         />
 
         {/* Delete Confirmation Modal */}
-        <Modal open={showDeleteModal !== null} onClose={() => setShowDeleteModal(null)}>
+        <Modal
+          open={showDeleteModal !== null}
+          onClose={() => setShowDeleteModal(null)}
+        >
           <ModalDialog variant="outlined" role="alertdialog">
             <DialogTitle>{t("agent-admin.delete-tenant")}</DialogTitle>
             <Divider />
             <DialogContent>
-              {t("agent-admin.delete-confirm", { name: showDeleteModal?.companyName || "" })}
+              {t("agent-admin.delete-confirm", {
+                name: showDeleteModal?.companyName || "",
+              })}
             </DialogContent>
             <DialogActions>
-              <Button variant="plain" color="neutral" onClick={() => setShowDeleteModal(null)}>
+              <Button
+                variant="plain"
+                color="neutral"
+                onClick={() => setShowDeleteModal(null)}
+              >
                 {t("common.cancel")}
               </Button>
-              <Button color="danger" onClick={handleDeleteTenant} loading={isSaving}>
+              <Button
+                color="danger"
+                onClick={handleDeleteTenant}
+                loading={isSaving}
+              >
                 {t("common.delete")}
               </Button>
             </DialogActions>
@@ -1521,14 +2037,21 @@ const AgentAdmin = observer(() => {
         </Modal>
 
         {/* Version History Modal */}
-        <Modal open={showVersionsModal !== null} onClose={() => setShowVersionsModal(null)}>
+        <Modal
+          open={showVersionsModal !== null}
+          onClose={() => setShowVersionsModal(null)}
+        >
           <ModalDialog sx={{ maxWidth: 600, width: "100%" }}>
             <DialogTitle>{t("agent-admin.version-history")}</DialogTitle>
             <Divider />
             <DialogContent>
               {showVersionsModal && (
                 <VersionHistoryList
-                  versions={fileVersions[`${showVersionsModal.slug}-${showVersionsModal.audienceType}-${showVersionsModal.fileType}`] || []}
+                  versions={
+                    fileVersions[
+                      `${showVersionsModal.slug}-${showVersionsModal.audienceType}-${showVersionsModal.fileType}`
+                    ] || []
+                  }
                   onRestore={handleRestoreVersion}
                   isSaving={isSaving}
                   t={t}
@@ -1536,7 +2059,11 @@ const AgentAdmin = observer(() => {
               )}
             </DialogContent>
             <DialogActions>
-              <Button variant="plain" color="neutral" onClick={() => setShowVersionsModal(null)}>
+              <Button
+                variant="plain"
+                color="neutral"
+                onClick={() => setShowVersionsModal(null)}
+              >
                 {t("common.close")}
               </Button>
             </DialogActions>
@@ -1544,7 +2071,10 @@ const AgentAdmin = observer(() => {
         </Modal>
 
         {/* Generated Content Modal */}
-        <Modal open={showGeneratedContent !== null} onClose={() => setShowGeneratedContent(null)}>
+        <Modal
+          open={showGeneratedContent !== null}
+          onClose={() => setShowGeneratedContent(null)}
+        >
           <ModalDialog sx={{ maxWidth: 900, width: "90vw", maxHeight: "90vh" }}>
             <ModalClose />
             <DialogTitle>
@@ -1557,35 +2087,56 @@ const AgentAdmin = observer(() => {
             <Divider />
             <DialogContent sx={{ overflow: "auto" }}>
               {/* Stats for RAG formatting */}
-              {showGeneratedContent?.type === "rag" && showGeneratedContent.stats && (
-                <div className="mb-4 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-700">
-                  <h4 className="text-sm font-medium text-green-700 dark:text-green-300 mb-2">
-                    {t("agent-admin.processing-stats")}
-                  </h4>
-                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm">
-                    <div>
-                      <span className="text-gray-500 dark:text-gray-400">{t("agent-admin.original-tokens")}:</span>
-                      <span className="ml-1 font-medium">{showGeneratedContent.stats.original_tokens}</span>
-                    </div>
-                    <div>
-                      <span className="text-gray-500 dark:text-gray-400">{t("agent-admin.processed-tokens")}:</span>
-                      <span className="ml-1 font-medium">{showGeneratedContent.stats.processed_tokens}</span>
-                    </div>
-                    <div>
-                      <span className="text-gray-500 dark:text-gray-400">{t("agent-admin.chunks-created")}:</span>
-                      <span className="ml-1 font-medium">{showGeneratedContent.stats.chunks_created}</span>
-                    </div>
-                    <div>
-                      <span className="text-gray-500 dark:text-gray-400">{t("agent-admin.faqs-found")}:</span>
-                      <span className="ml-1 font-medium">{showGeneratedContent.stats.faqs_extracted}</span>
-                    </div>
-                    <div>
-                      <span className="text-gray-500 dark:text-gray-400">{t("agent-admin.services-found")}:</span>
-                      <span className="ml-1 font-medium">{showGeneratedContent.stats.services_extracted}</span>
+              {showGeneratedContent?.type === "rag" &&
+                showGeneratedContent.stats && (
+                  <div className="mb-4 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-700">
+                    <h4 className="text-sm font-medium text-green-700 dark:text-green-300 mb-2">
+                      {t("agent-admin.processing-stats")}
+                    </h4>
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm">
+                      <div>
+                        <span className="text-gray-500 dark:text-gray-400">
+                          {t("agent-admin.original-tokens")}:
+                        </span>
+                        <span className="ml-1 font-medium">
+                          {showGeneratedContent.stats.original_tokens}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-gray-500 dark:text-gray-400">
+                          {t("agent-admin.processed-tokens")}:
+                        </span>
+                        <span className="ml-1 font-medium">
+                          {showGeneratedContent.stats.processed_tokens}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-gray-500 dark:text-gray-400">
+                          {t("agent-admin.chunks-created")}:
+                        </span>
+                        <span className="ml-1 font-medium">
+                          {showGeneratedContent.stats.chunks_created}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-gray-500 dark:text-gray-400">
+                          {t("agent-admin.faqs-found")}:
+                        </span>
+                        <span className="ml-1 font-medium">
+                          {showGeneratedContent.stats.faqs_extracted}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-gray-500 dark:text-gray-400">
+                          {t("agent-admin.services-found")}:
+                        </span>
+                        <span className="ml-1 font-medium">
+                          {showGeneratedContent.stats.services_extracted}
+                        </span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
+                )}
               <Textarea
                 value={showGeneratedContent?.content || ""}
                 readOnly
@@ -1595,7 +2146,11 @@ const AgentAdmin = observer(() => {
               />
             </DialogContent>
             <DialogActions>
-              <Button variant="plain" color="neutral" onClick={() => setShowGeneratedContent(null)}>
+              <Button
+                variant="plain"
+                color="neutral"
+                onClick={() => setShowGeneratedContent(null)}
+              >
                 {t("common.close")}
               </Button>
               <Button
@@ -1643,18 +2198,33 @@ const AgentAdmin = observer(() => {
               {/* Pairs list with results */}
               <div className="space-y-2">
                 {qaPairs.map((pair) => {
-                  const result = qaTestResults?.results?.find((r) => r.pair_id === pair.id);
+                  const result = qaTestResults?.results?.find(
+                    (r) => r.pair_id === pair.id,
+                  );
                   return (
-                    <div key={pair.id} className="p-3 border rounded-lg dark:border-gray-700">
+                    <div
+                      key={pair.id}
+                      className="p-3 border rounded-lg dark:border-gray-700"
+                    >
                       <div className="flex justify-between">
                         <div className="flex-1 pr-4">
-                          <div className="font-medium text-gray-900 dark:text-gray-100">{pair.question}</div>
-                          <div className="text-sm text-gray-500 dark:text-gray-400 mt-1">{pair.expected_answer}</div>
+                          <div className="font-medium text-gray-900 dark:text-gray-100">
+                            {pair.question}
+                          </div>
+                          <div className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                            {pair.expected_answer}
+                          </div>
                           <div className="flex gap-2 mt-2">
-                            <Chip size="sm" color="neutral">{pair.difficulty}</Chip>
-                            <Chip size="sm" color="primary">{pair.category}</Chip>
+                            <Chip size="sm" color="neutral">
+                              {pair.difficulty}
+                            </Chip>
+                            <Chip size="sm" color="primary">
+                              {pair.category}
+                            </Chip>
                             {pair.source_section && (
-                              <Chip size="sm" variant="outlined">{pair.source_section}</Chip>
+                              <Chip size="sm" variant="outlined">
+                                {pair.source_section}
+                              </Chip>
                             )}
                           </div>
                         </div>
@@ -1664,7 +2234,9 @@ const AgentAdmin = observer(() => {
                               size="sm"
                               color={result.found ? "success" : "danger"}
                             >
-                              {result.found ? `Rank #${result.rank}` : "Not Found"}
+                              {result.found
+                                ? `Rank #${result.rank}`
+                                : "Not Found"}
                             </Chip>
                           )}
                           <Button
@@ -1683,7 +2255,11 @@ const AgentAdmin = observer(() => {
               </div>
             </DialogContent>
             <DialogActions>
-              <Button variant="plain" color="neutral" onClick={() => setShowQAModal(false)}>
+              <Button
+                variant="plain"
+                color="neutral"
+                onClick={() => setShowQAModal(false)}
+              >
                 {t("common.close")}
               </Button>
             </DialogActions>
@@ -1691,7 +2267,10 @@ const AgentAdmin = observer(() => {
         </Modal>
 
         {/* Transcript View Modal */}
-        <Modal open={showTranscriptModal && selectedTranscript !== null} onClose={() => setShowTranscriptModal(false)}>
+        <Modal
+          open={showTranscriptModal && selectedTranscript !== null}
+          onClose={() => setShowTranscriptModal(false)}
+        >
           <ModalDialog sx={{ maxWidth: 700, width: "90vw", maxHeight: "90vh" }}>
             <ModalClose />
             <DialogTitle className="flex items-center gap-2">
@@ -1707,7 +2286,9 @@ const AgentAdmin = observer(() => {
                     <div className="grid grid-cols-2 gap-2">
                       <div>
                         <span className="text-gray-500">Session:</span>{" "}
-                        <span className="font-mono text-xs">{selectedTranscript.sessionId}</span>
+                        <span className="font-mono text-xs">
+                          {selectedTranscript.sessionId}
+                        </span>
                       </div>
                       <div>
                         <span className="text-gray-500">Audience:</span>{" "}
@@ -1717,7 +2298,9 @@ const AgentAdmin = observer(() => {
                       </div>
                       <div>
                         <span className="text-gray-500">Started:</span>{" "}
-                        {new Date(selectedTranscript.startedAt).toLocaleString()}
+                        {new Date(
+                          selectedTranscript.startedAt,
+                        ).toLocaleString()}
                       </div>
                       <div>
                         <span className="text-gray-500">Messages:</span>{" "}
@@ -1747,14 +2330,18 @@ const AgentAdmin = observer(() => {
                           "p-3 rounded-lg",
                           msg.role === "user"
                             ? "bg-blue-50 dark:bg-blue-900/20 ml-8"
-                            : "bg-gray-100 dark:bg-gray-800 mr-8"
+                            : "bg-gray-100 dark:bg-gray-800 mr-8",
                         )}
                       >
                         <div className="flex justify-between items-center mb-1">
-                          <span className={cn(
-                            "text-xs font-medium",
-                            msg.role === "user" ? "text-blue-600" : "text-gray-600"
-                          )}>
+                          <span
+                            className={cn(
+                              "text-xs font-medium",
+                              msg.role === "user"
+                                ? "text-blue-600"
+                                : "text-gray-600",
+                            )}
+                          >
                             {msg.role === "user" ? "Customer" : "Agent"}
                           </span>
                           {msg.timestamp && (
@@ -1773,7 +2360,11 @@ const AgentAdmin = observer(() => {
               )}
             </DialogContent>
             <DialogActions>
-              <Button variant="plain" color="neutral" onClick={() => setShowTranscriptModal(false)}>
+              <Button
+                variant="plain"
+                color="neutral"
+                onClick={() => setShowTranscriptModal(false)}
+              >
                 {t("common.close")}
               </Button>
             </DialogActions>
@@ -1796,8 +2387,13 @@ const EndpointRow = ({ label, value, onCopy }: EndpointRowProps) => (
   <div className="flex justify-between items-center">
     <span className="text-gray-600 dark:text-gray-400">{label}</span>
     <div className="flex items-center gap-2">
-      <code className="bg-gray-100 dark:bg-zinc-700 px-2 py-1 rounded text-xs">{value}</code>
-      <button onClick={() => onCopy(value)} className="text-gray-400 hover:text-gray-600">
+      <code className="bg-gray-100 dark:bg-zinc-700 px-2 py-1 rounded text-xs">
+        {value}
+      </code>
+      <button
+        onClick={() => onCopy(value)}
+        className="text-gray-400 hover:text-gray-600"
+      >
         <CopyIcon className="w-4 h-4" />
       </button>
     </div>
@@ -1819,14 +2415,26 @@ interface AudienceSectionProps {
   canRestore?: boolean;
 }
 
-const AudienceSection = ({ title, audienceType, tenant, onViewVersions, isSaving, t, canUpload = false, canRestore = false }: AudienceSectionProps) => {
+const AudienceSection = ({
+  title,
+  audienceType,
+  tenant,
+  onViewVersions,
+  isSaving,
+  t,
+  canUpload = false,
+  canRestore = false,
+}: AudienceSectionProps) => {
   const data = audienceType === "external" ? tenant.external : tenant.internal;
   const kbFileRef = useRef<HTMLInputElement>(null);
   const policyFileRef = useRef<HTMLInputElement>(null);
   const [previewContent, setPreviewContent] = useState<string | null>(null);
   const [previewTitle, setPreviewTitle] = useState<string>("");
 
-  const handleFileUpload = async (fileType: "kb" | "policy", event: ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (
+    fileType: "kb" | "policy",
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
     const file = event.target.files?.[0];
     if (file) {
       const success = await agentAdminStore.updateTenantFiles({
@@ -1844,9 +2452,16 @@ const AudienceSection = ({ title, audienceType, tenant, onViewVersions, isSaving
   };
 
   const handlePreview = async (fileType: "kb" | "policy") => {
-    const content = await agentAdminStore.fetchFileContent(tenant.tenant.slug, audienceType, fileType);
+    const content = await agentAdminStore.fetchFileContent(
+      tenant.tenant.slug,
+      audienceType,
+      fileType,
+    );
     if (content) {
-      const typeLabel = fileType === "kb" ? t("agent-admin.preview-kb") : t("agent-admin.preview-policy");
+      const typeLabel =
+        fileType === "kb"
+          ? t("agent-admin.preview-kb")
+          : t("agent-admin.preview-policy");
       setPreviewTitle(`${typeLabel} (${audienceType})`);
       setPreviewContent(content);
     } else {
@@ -1856,29 +2471,51 @@ const AudienceSection = ({ title, audienceType, tenant, onViewVersions, isSaving
 
   return (
     <div className="bg-white dark:bg-zinc-800 rounded-xl border border-gray-200 dark:border-zinc-700 p-4">
-      <h3 className="font-medium text-gray-800 dark:text-gray-200 mb-4">{title}</h3>
+      <h3 className="font-medium text-gray-800 dark:text-gray-200 mb-4">
+        {title}
+      </h3>
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-4 mb-4">
         <div className="text-center p-3 bg-gray-50 dark:bg-zinc-700 rounded-lg">
-          <div className="text-2xl font-bold text-teal-600">{data?.stats?.servicesCount || 0}</div>
-          <div className="text-xs text-gray-500">{t("agent-admin.services-count")}</div>
+          <div className="text-2xl font-bold text-teal-600">
+            {data?.stats?.servicesCount || 0}
+          </div>
+          <div className="text-xs text-gray-500">
+            {t("agent-admin.services-count")}
+          </div>
         </div>
         <div className="text-center p-3 bg-gray-50 dark:bg-zinc-700 rounded-lg">
-          <div className="text-2xl font-bold text-teal-600">{data?.stats?.intentsCount || 0}</div>
-          <div className="text-xs text-gray-500">{t("agent-admin.intents-count")}</div>
+          <div className="text-2xl font-bold text-teal-600">
+            {data?.stats?.intentsCount || 0}
+          </div>
+          <div className="text-xs text-gray-500">
+            {t("agent-admin.intents-count")}
+          </div>
         </div>
         <div className="text-center p-3 bg-gray-50 dark:bg-zinc-700 rounded-lg">
-          <div className="text-2xl font-bold text-teal-600">{data?.stats?.faqsCount || 0}</div>
-          <div className="text-xs text-gray-500">{t("agent-admin.faqs-count")}</div>
+          <div className="text-2xl font-bold text-teal-600">
+            {data?.stats?.faqsCount || 0}
+          </div>
+          <div className="text-xs text-gray-500">
+            {t("agent-admin.faqs-count")}
+          </div>
         </div>
       </div>
 
       {/* File Uploads */}
       <div className="space-y-3">
         <FileUploadRow
-          label={audienceType === "external" ? t("agent-admin.external-kb") : t("agent-admin.internal-kb")}
-          hint={audienceType === "external" ? t("agent-admin.external-kb-hint") : t("agent-admin.internal-kb-hint")}
+          label={
+            audienceType === "external"
+              ? t("agent-admin.external-kb")
+              : t("agent-admin.internal-kb")
+          }
+          hint={
+            audienceType === "external"
+              ? t("agent-admin.external-kb-hint")
+              : t("agent-admin.internal-kb-hint")
+          }
           fileRef={kbFileRef}
           onUpload={(e) => handleFileUpload("kb", e)}
           onViewVersions={() => onViewVersions(audienceType, "kb")}
@@ -1889,8 +2526,16 @@ const AudienceSection = ({ title, audienceType, tenant, onViewVersions, isSaving
           canRestore={canRestore}
         />
         <FileUploadRow
-          label={audienceType === "external" ? t("agent-admin.external-policy") : t("agent-admin.internal-policy")}
-          hint={audienceType === "external" ? t("agent-admin.external-policy-hint") : t("agent-admin.internal-policy-hint")}
+          label={
+            audienceType === "external"
+              ? t("agent-admin.external-policy")
+              : t("agent-admin.internal-policy")
+          }
+          hint={
+            audienceType === "external"
+              ? t("agent-admin.external-policy-hint")
+              : t("agent-admin.internal-policy-hint")
+          }
           fileRef={policyFileRef}
           onUpload={(e) => handleFileUpload("policy", e)}
           onViewVersions={() => onViewVersions(audienceType, "policy")}
@@ -1904,16 +2549,23 @@ const AudienceSection = ({ title, audienceType, tenant, onViewVersions, isSaving
 
       {/* Preview Modal */}
       <Modal open={!!previewContent} onClose={() => setPreviewContent(null)}>
-        <ModalDialog sx={{ maxWidth: 900, width: '90vw', maxHeight: '90vh', overflow: 'hidden' }}>
+        <ModalDialog
+          sx={{
+            maxWidth: 900,
+            width: "90vw",
+            maxHeight: "90vh",
+            overflow: "hidden",
+          }}
+        >
           <ModalClose />
           <DialogTitle>{previewTitle}</DialogTitle>
-          <DialogContent sx={{ overflow: 'auto' }}>
+          <DialogContent sx={{ overflow: "auto" }}>
             <Textarea
               value={previewContent || ""}
               readOnly
               minRows={20}
               maxRows={40}
-              sx={{ fontFamily: 'monospace', fontSize: 12 }}
+              sx={{ fontFamily: "monospace", fontSize: 12 }}
             />
           </DialogContent>
         </ModalDialog>
@@ -1935,10 +2587,23 @@ interface FileUploadRowProps {
   canRestore?: boolean;
 }
 
-const FileUploadRow = ({ label, hint, fileRef, onUpload, onViewVersions, onPreview, isSaving, t, canUpload = false, canRestore = false }: FileUploadRowProps) => (
+const FileUploadRow = ({
+  label,
+  hint,
+  fileRef,
+  onUpload,
+  onViewVersions,
+  onPreview,
+  isSaving,
+  t,
+  canUpload = false,
+  canRestore = false,
+}: FileUploadRowProps) => (
   <div className="flex justify-between items-center p-3 bg-gray-50 dark:bg-zinc-700 rounded-lg">
     <div>
-      <div className="font-medium text-sm text-gray-800 dark:text-gray-200">{label}</div>
+      <div className="font-medium text-sm text-gray-800 dark:text-gray-200">
+        {label}
+      </div>
       <div className="text-xs text-gray-500">{hint}</div>
     </div>
     <div className="flex gap-2">
@@ -2033,13 +2698,23 @@ const CreateTenantModal = ({ open, onClose, t }: CreateTenantModalProps) => {
     }
   };
 
-  const handleFileChange = (field: keyof CreateTenantRequest, file: File | null) => {
+  const handleFileChange = (
+    field: keyof CreateTenantRequest,
+    file: File | null,
+  ) => {
     setFormData((prev) => ({ ...prev, [field]: file }));
   };
 
   return (
     <Modal open={open} onClose={onClose}>
-      <ModalDialog sx={{ maxWidth: 600, width: "100%", maxHeight: "90vh", overflow: "auto" }}>
+      <ModalDialog
+        sx={{
+          maxWidth: 600,
+          width: "100%",
+          maxHeight: "90vh",
+          overflow: "auto",
+        }}
+      >
         <DialogTitle>{t("agent-admin.create-tenant")}</DialogTitle>
         <Divider />
         <DialogContent>
@@ -2049,9 +2724,18 @@ const CreateTenantModal = ({ open, onClose, t }: CreateTenantModalProps) => {
               <Input
                 placeholder={t("agent-admin.tenant-slug-placeholder")}
                 value={formData.tenantSlug}
-                onChange={(e) => setFormData((prev) => ({ ...prev, tenantSlug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "") }))}
+                onChange={(e) =>
+                  setFormData((prev) => ({
+                    ...prev,
+                    tenantSlug: e.target.value
+                      .toLowerCase()
+                      .replace(/[^a-z0-9-]/g, ""),
+                  }))
+                }
               />
-              <div className="text-xs text-gray-500 mt-1">{t("agent-admin.tenant-slug-hint")}</div>
+              <div className="text-xs text-gray-500 mt-1">
+                {t("agent-admin.tenant-slug-hint")}
+              </div>
             </FormControl>
 
             <FormControl required>
@@ -2059,7 +2743,12 @@ const CreateTenantModal = ({ open, onClose, t }: CreateTenantModalProps) => {
               <Input
                 placeholder={t("agent-admin.company-name-placeholder")}
                 value={formData.companyName}
-                onChange={(e) => setFormData((prev) => ({ ...prev, companyName: e.target.value }))}
+                onChange={(e) =>
+                  setFormData((prev) => ({
+                    ...prev,
+                    companyName: e.target.value,
+                  }))
+                }
               />
             </FormControl>
 
@@ -2068,7 +2757,9 @@ const CreateTenantModal = ({ open, onClose, t }: CreateTenantModalProps) => {
               <Input
                 placeholder={t("agent-admin.vertical-placeholder")}
                 value={formData.vertical}
-                onChange={(e) => setFormData((prev) => ({ ...prev, vertical: e.target.value }))}
+                onChange={(e) =>
+                  setFormData((prev) => ({ ...prev, vertical: e.target.value }))
+                }
               />
             </FormControl>
 
@@ -2080,7 +2771,12 @@ const CreateTenantModal = ({ open, onClose, t }: CreateTenantModalProps) => {
                 <input
                   type="file"
                   ref={externalKbRef}
-                  onChange={(e) => handleFileChange("externalKbFile", e.target.files?.[0] || null)}
+                  onChange={(e) =>
+                    handleFileChange(
+                      "externalKbFile",
+                      e.target.files?.[0] || null,
+                    )
+                  }
                   accept=".md,.txt"
                   className="hidden"
                 />
@@ -2100,7 +2796,12 @@ const CreateTenantModal = ({ open, onClose, t }: CreateTenantModalProps) => {
                 <input
                   type="file"
                   ref={externalPolicyRef}
-                  onChange={(e) => handleFileChange("externalPolicyFile", e.target.files?.[0] || null)}
+                  onChange={(e) =>
+                    handleFileChange(
+                      "externalPolicyFile",
+                      e.target.files?.[0] || null,
+                    )
+                  }
                   accept=".md,.txt"
                   className="hidden"
                 />
@@ -2124,7 +2825,12 @@ const CreateTenantModal = ({ open, onClose, t }: CreateTenantModalProps) => {
                 <input
                   type="file"
                   ref={internalKbRef}
-                  onChange={(e) => handleFileChange("internalKbFile", e.target.files?.[0] || null)}
+                  onChange={(e) =>
+                    handleFileChange(
+                      "internalKbFile",
+                      e.target.files?.[0] || null,
+                    )
+                  }
                   accept=".md,.txt"
                   className="hidden"
                 />
@@ -2144,7 +2850,12 @@ const CreateTenantModal = ({ open, onClose, t }: CreateTenantModalProps) => {
                 <input
                   type="file"
                   ref={internalPolicyRef}
-                  onChange={(e) => handleFileChange("internalPolicyFile", e.target.files?.[0] || null)}
+                  onChange={(e) =>
+                    handleFileChange(
+                      "internalPolicyFile",
+                      e.target.files?.[0] || null,
+                    )
+                  }
                   accept=".md,.txt"
                   className="hidden"
                 />
@@ -2181,9 +2892,18 @@ interface VersionHistoryListProps {
   t: (key: any, params?: any) => string;
 }
 
-const VersionHistoryList = ({ versions, onRestore, isSaving, t }: VersionHistoryListProps) => {
+const VersionHistoryList = ({
+  versions,
+  onRestore,
+  isSaving,
+  t,
+}: VersionHistoryListProps) => {
   if (versions.length === 0) {
-    return <div className="text-center text-gray-500 py-4">No version history available</div>;
+    return (
+      <div className="text-center text-gray-500 py-4">
+        No version history available
+      </div>
+    );
   }
 
   return (
@@ -2193,12 +2913,16 @@ const VersionHistoryList = ({ versions, onRestore, isSaving, t }: VersionHistory
           key={version.id}
           className={cn(
             "flex justify-between items-center p-3 rounded-lg",
-            index === 0 ? "bg-teal-50 dark:bg-teal-900/20 border border-teal-200 dark:border-teal-800" : "bg-gray-50 dark:bg-zinc-700"
+            index === 0
+              ? "bg-teal-50 dark:bg-teal-900/20 border border-teal-200 dark:border-teal-800"
+              : "bg-gray-50 dark:bg-zinc-700",
           )}
         >
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-sm font-medium">Version {versions.length - index}</span>
+              <span className="text-sm font-medium">
+                Version {versions.length - index}
+              </span>
               {index === 0 && (
                 <Chip size="sm" color="success" variant="soft">
                   {t("agent-admin.current-version")}
@@ -2206,12 +2930,21 @@ const VersionHistoryList = ({ versions, onRestore, isSaving, t }: VersionHistory
               )}
             </div>
             <div className="text-xs text-gray-500">
-              {t("agent-admin.imported-at")}: {new Date(version.importedAt).toLocaleString()}
+              {t("agent-admin.imported-at")}:{" "}
+              {new Date(version.importedAt).toLocaleString()}
             </div>
-            <div className="text-xs text-gray-400">Hash: {version.contentHash?.slice(0, 12)}...</div>
+            <div className="text-xs text-gray-400">
+              Hash: {version.contentHash?.slice(0, 12)}...
+            </div>
           </div>
           {index !== 0 && (
-            <Button size="sm" variant="outlined" color="neutral" onClick={() => onRestore(version.id)} loading={isSaving}>
+            <Button
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              onClick={() => onRestore(version.id)}
+              loading={isSaving}
+            >
               {t("agent-admin.restore-version")}
             </Button>
           )}
@@ -2234,7 +2967,14 @@ interface ScriptSectionProps {
   t: (key: any, params?: any) => string;
 }
 
-const ScriptSection = ({ tenantSlug, script, isLoading, isSaving, canUpload = false, t }: ScriptSectionProps) => {
+const ScriptSection = ({
+  tenantSlug,
+  script,
+  isLoading,
+  isSaving,
+  canUpload = false,
+  t,
+}: ScriptSectionProps) => {
   const scriptFileRef = useRef<HTMLInputElement>(null);
   const [showPreview, setShowPreview] = useState(false);
 
@@ -2262,8 +3002,12 @@ const ScriptSection = ({ tenantSlug, script, isLoading, isSaving, canUpload = fa
     <div className="bg-white dark:bg-zinc-800 rounded-xl border border-gray-200 dark:border-zinc-700 p-4">
       <div className="flex justify-between items-center mb-3">
         <div>
-          <h3 className="font-medium text-gray-800 dark:text-gray-200">{t("agent-admin.script-title")}</h3>
-          <p className="text-xs text-gray-500 dark:text-gray-400">{t("agent-admin.script-description")}</p>
+          <h3 className="font-medium text-gray-800 dark:text-gray-200">
+            {t("agent-admin.script-title")}
+          </h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            {t("agent-admin.script-description")}
+          </p>
         </div>
         {script && (
           <Chip size="sm" color="success" variant="soft">
@@ -2285,10 +3029,12 @@ const ScriptSection = ({ tenantSlug, script, isLoading, isSaving, canUpload = fa
                   SCRIPT.MD
                 </div>
                 <div className="text-xs text-gray-500 mt-1">
-                  {t("agent-admin.imported-at")}: {new Date(script.importedAt).toLocaleString()}
+                  {t("agent-admin.imported-at")}:{" "}
+                  {new Date(script.importedAt).toLocaleString()}
                 </div>
                 <div className="text-xs text-gray-400">
-                  Version: {script.version} • Hash: {script.contentHash?.slice(0, 12)}...
+                  Version: {script.version} • Hash:{" "}
+                  {script.contentHash?.slice(0, 12)}...
                 </div>
               </div>
               <div className="flex gap-2">
@@ -2348,7 +3094,9 @@ const ScriptSection = ({ tenantSlug, script, isLoading, isSaving, canUpload = fa
       ) : (
         <div className="text-center py-6">
           <FileTextIcon className="w-10 h-10 mx-auto mb-2 text-gray-300" />
-          <p className="text-sm text-gray-500 mb-4">{t("agent-admin.no-script")}</p>
+          <p className="text-sm text-gray-500 mb-4">
+            {t("agent-admin.no-script")}
+          </p>
           {canUpload && (
             <>
               <input
@@ -2386,10 +3134,18 @@ interface LLMConfigSectionProps {
   t: (key: any, params?: any) => string;
 }
 
-const LLMConfigSection = ({ tenantSlug, config, isSaving, canEdit = false, t }: LLMConfigSectionProps) => {
+const LLMConfigSection = ({
+  tenantSlug,
+  config,
+  isSaving,
+  canEdit = false,
+  t,
+}: LLMConfigSectionProps) => {
   const [model, setModel] = useState(config?.llmModel || "");
   const [customModel, setCustomModel] = useState("");
-  const [simHumanModel, setSimHumanModel] = useState(config?.simulationHumanModel || "");
+  const [simHumanModel, setSimHumanModel] = useState(
+    config?.simulationHumanModel || "",
+  );
   const [customSimHumanModel, setCustomSimHumanModel] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
@@ -2406,7 +3162,9 @@ const LLMConfigSection = ({ tenantSlug, config, isSaving, canEdit = false, t }: 
     // Handle simulation human model
     const simModelValue = config?.simulationHumanModel || "";
     setSimHumanModel(simModelValue);
-    const isSimPreset = LLM_MODEL_OPTIONS.some((opt) => opt.value === simModelValue);
+    const isSimPreset = LLM_MODEL_OPTIONS.some(
+      (opt) => opt.value === simModelValue,
+    );
     if (simModelValue && !isSimPreset) {
       setCustomSimHumanModel(simModelValue);
       setSimHumanModel("custom");
@@ -2415,7 +3173,8 @@ const LLMConfigSection = ({ tenantSlug, config, isSaving, canEdit = false, t }: 
 
   const handleSave = async () => {
     const selectedModel = model === "custom" ? customModel : model;
-    const selectedSimModel = simHumanModel === "custom" ? customSimHumanModel : simHumanModel;
+    const selectedSimModel =
+      simHumanModel === "custom" ? customSimHumanModel : simHumanModel;
     const success = await agentAdminStore.updateLLMConfig(tenantSlug, {
       llmModel: selectedModel,
       simulationHumanModel: selectedSimModel,
@@ -2429,7 +3188,9 @@ const LLMConfigSection = ({ tenantSlug, config, isSaving, canEdit = false, t }: 
 
   return (
     <div className="bg-white dark:bg-zinc-800 rounded-xl border border-gray-200 dark:border-zinc-700 p-4">
-      <h3 className="font-medium text-gray-800 dark:text-gray-200 mb-4">LLM Configuration</h3>
+      <h3 className="font-medium text-gray-800 dark:text-gray-200 mb-4">
+        LLM Configuration
+      </h3>
 
       <div className="space-y-4">
         <FormControl>
@@ -2476,7 +3237,9 @@ const LLMConfigSection = ({ tenantSlug, config, isSaving, canEdit = false, t }: 
             ))}
             <Option value="custom">Custom Model...</Option>
           </Select>
-          <FormHelperText>{t("agent-admin.simulation-human-model-hint")}</FormHelperText>
+          <FormHelperText>
+            {t("agent-admin.simulation-human-model-hint")}
+          </FormHelperText>
         </FormControl>
 
         {simHumanModel === "custom" && (
@@ -2502,7 +3265,9 @@ const LLMConfigSection = ({ tenantSlug, config, isSaving, canEdit = false, t }: 
           </FormLabel>
           <Input
             type={showApiKey ? "text" : "password"}
-            placeholder={config?.hasApiKey ? "Enter new key to replace" : "sk-or-v1-..."}
+            placeholder={
+              config?.hasApiKey ? "Enter new key to replace" : "sk-or-v1-..."
+            }
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
             disabled={!canEdit}
@@ -2514,7 +3279,11 @@ const LLMConfigSection = ({ tenantSlug, config, isSaving, canEdit = false, t }: 
                 onClick={() => setShowApiKey(!showApiKey)}
                 tabIndex={-1}
               >
-                {showApiKey ? <EyeOffIcon className="w-4 h-4" /> : <EyeIcon className="w-4 h-4" />}
+                {showApiKey ? (
+                  <EyeOffIcon className="w-4 h-4" />
+                ) : (
+                  <EyeIcon className="w-4 h-4" />
+                )}
               </Button>
             }
           />
@@ -2542,8 +3311,15 @@ interface ReasoningModelInputProps {
   t: (key: any, params?: any) => string;
 }
 
-const ReasoningModelInput = ({ tenantSlug, config, isSaving, t }: ReasoningModelInputProps) => {
-  const [reasoningModel, setReasoningModel] = useState(config?.reasoningModel || "");
+const ReasoningModelInput = ({
+  tenantSlug,
+  config,
+  isSaving,
+  t,
+}: ReasoningModelInputProps) => {
+  const [reasoningModel, setReasoningModel] = useState(
+    config?.reasoningModel || "",
+  );
 
   useEffect(() => {
     setReasoningModel(config?.reasoningModel || "");
@@ -2563,7 +3339,9 @@ const ReasoningModelInput = ({ tenantSlug, config, isSaving, t }: ReasoningModel
   return (
     <div className="flex items-center gap-3 bg-white dark:bg-zinc-900 rounded-lg border border-purple-200 dark:border-purple-700 p-3">
       <FormControl sx={{ flex: 1 }}>
-        <FormLabel sx={{ fontSize: "0.875rem", color: "var(--joy-palette-purple-700)" }}>
+        <FormLabel
+          sx={{ fontSize: "0.875rem", color: "var(--joy-palette-purple-700)" }}
+        >
           {t("agent-admin.reasoning-model")}
         </FormLabel>
         <Input
@@ -2572,7 +3350,9 @@ const ReasoningModelInput = ({ tenantSlug, config, isSaving, t }: ReasoningModel
           value={reasoningModel}
           onChange={(e) => setReasoningModel(e.target.value)}
         />
-        <FormHelperText sx={{ fontSize: "0.75rem" }}>{t("agent-admin.reasoning-model-hint")}</FormHelperText>
+        <FormHelperText sx={{ fontSize: "0.75rem" }}>
+          {t("agent-admin.reasoning-model-hint")}
+        </FormHelperText>
       </FormControl>
       <Button
         size="sm"
@@ -2597,159 +3377,180 @@ interface UserPermissionsSectionProps {
   isSaving: boolean;
 }
 
-const UserPermissionsSection = observer(({ tenantSlug, permissions, isSaving }: UserPermissionsSectionProps) => {
-  const [showGrantModal, setShowGrantModal] = useState(false);
-  const [selectedUserId, setSelectedUserId] = useState<string>("");
-  const [selectedPreset, setSelectedPreset] = useState<string>("tester");
-  const [isLoadingUsers, setIsLoadingUsers] = useState(false);
-  const allUsers = agentAdminStore.state.allUsers;
+const UserPermissionsSection = observer(
+  ({ tenantSlug, permissions, isSaving }: UserPermissionsSectionProps) => {
+    const [showGrantModal, setShowGrantModal] = useState(false);
+    const [selectedUserId, setSelectedUserId] = useState<string>("");
+    const [selectedPreset, setSelectedPreset] = useState<string>("tester");
+    const [isLoadingUsers, setIsLoadingUsers] = useState(false);
+    const allUsers = agentAdminStore.state.allUsers;
 
-  // Filter out users who already have permissions
-  const existingUserIds = new Set(permissions.map((p) => p.userId));
-  const availableUsers = allUsers.filter((u) => !existingUserIds.has(u.id));
+    // Filter out users who already have permissions
+    const existingUserIds = new Set(permissions.map((p) => p.userId));
+    const availableUsers = allUsers.filter((u) => !existingUserIds.has(u.id));
 
-  const handleOpenModal = async () => {
-    setIsLoadingUsers(true);
-    setShowGrantModal(true);
-    await agentAdminStore.fetchUsers();
-    setIsLoadingUsers(false);
-  };
+    const handleOpenModal = async () => {
+      setIsLoadingUsers(true);
+      setShowGrantModal(true);
+      await agentAdminStore.fetchUsers();
+      setIsLoadingUsers(false);
+    };
 
-  const handleGrant = async () => {
-    if (!selectedUserId) {
-      toast.error("Please select a user");
-      return;
-    }
+    const handleGrant = async () => {
+      if (!selectedUserId) {
+        toast.error("Please select a user");
+        return;
+      }
 
-    const userId = parseInt(selectedUserId, 10);
-    const perms = PERMISSION_PRESETS[selectedPreset as keyof typeof PERMISSION_PRESETS] || [];
-    const success = await agentAdminStore.grantPermission(tenantSlug, {
-      userId,
-      permissions: perms,
-    });
+      const userId = parseInt(selectedUserId, 10);
+      const perms =
+        PERMISSION_PRESETS[selectedPreset as keyof typeof PERMISSION_PRESETS] ||
+        [];
+      const success = await agentAdminStore.grantPermission(tenantSlug, {
+        userId,
+        permissions: perms,
+      });
 
-    if (success) {
-      toast.success("Permission granted");
-      setShowGrantModal(false);
-      setSelectedUserId("");
-    }
-  };
+      if (success) {
+        toast.success("Permission granted");
+        setShowGrantModal(false);
+        setSelectedUserId("");
+      }
+    };
 
-  const handleRevoke = async (userId: number) => {
-    const success = await agentAdminStore.revokePermission(tenantSlug, userId);
-    if (success) {
-      toast.success("Permission revoked");
-    }
-  };
+    const handleRevoke = async (userId: number) => {
+      const success = await agentAdminStore.revokePermission(
+        tenantSlug,
+        userId,
+      );
+      if (success) {
+        toast.success("Permission revoked");
+      }
+    };
 
-  return (
-    <div className="bg-white dark:bg-zinc-800 rounded-xl border border-gray-200 dark:border-zinc-700 p-4">
-      <div className="flex justify-between items-center mb-4">
-        <h3 className="font-medium text-gray-800 dark:text-gray-200">User Access</h3>
-        <Button
-          size="sm"
-          startDecorator={<PlusIcon className="w-4 h-4" />}
-          onClick={handleOpenModal}
-        >
-          Add User
-        </Button>
-      </div>
-
-      {permissions.length === 0 ? (
-        <div className="text-center text-gray-500 py-4">
-          No users have been granted access to this tenant.
+    return (
+      <div className="bg-white dark:bg-zinc-800 rounded-xl border border-gray-200 dark:border-zinc-700 p-4">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="font-medium text-gray-800 dark:text-gray-200">
+            User Access
+          </h3>
+          <Button
+            size="sm"
+            startDecorator={<PlusIcon className="w-4 h-4" />}
+            onClick={handleOpenModal}
+          >
+            Add User
+          </Button>
         </div>
-      ) : (
-        <div className="space-y-2">
-          {permissions.map((perm) => (
-            <div
-              key={perm.userId}
-              className="flex justify-between items-center p-3 bg-gray-50 dark:bg-zinc-700 rounded-lg"
-            >
-              <div>
-                <div className="font-medium text-sm">{perm.username}</div>
-                <div className="text-xs text-gray-500">
-                  {perm.permissions.join(", ")}
-                </div>
-              </div>
-              <Button
-                size="sm"
-                variant="plain"
-                color="danger"
-                onClick={() => handleRevoke(perm.userId)}
-                loading={isSaving}
+
+        {permissions.length === 0 ? (
+          <div className="text-center text-gray-500 py-4">
+            No users have been granted access to this tenant.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {permissions.map((perm) => (
+              <div
+                key={perm.userId}
+                className="flex justify-between items-center p-3 bg-gray-50 dark:bg-zinc-700 rounded-lg"
               >
-                Revoke
-              </Button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Grant Permission Modal */}
-      <Modal open={showGrantModal} onClose={() => setShowGrantModal(false)}>
-        <ModalDialog sx={{ maxWidth: 400, width: "100%" }}>
-          <DialogTitle>Grant User Access</DialogTitle>
-          <Divider />
-          <DialogContent>
-            <div className="space-y-4">
-              <FormControl>
-                <FormLabel>User</FormLabel>
-                {isLoadingUsers ? (
-                  <div className="text-sm text-gray-500 py-2">Loading users...</div>
-                ) : availableUsers.length === 0 ? (
-                  <div className="text-sm text-gray-500 py-2">
-                    {allUsers.length > 0 ? "All users already have permissions" : "No users found"}
+                <div>
+                  <div className="font-medium text-sm">{perm.username}</div>
+                  <div className="text-xs text-gray-500">
+                    {perm.permissions.join(", ")}
                   </div>
-                ) : (
-                  <Select
-                    placeholder="Select a user"
-                    value={selectedUserId || null}
-                    onChange={(_, val) => {
-                      setSelectedUserId(val as string || "");
-                    }}
-                    slotProps={{
-                      listbox: {
-                        sx: { zIndex: 99999 },
-                      },
-                    }}
-                  >
-                    {availableUsers.map((user) => (
-                      <Option key={user.id} value={String(user.id)}>
-                        {user.username} ({user.name || user.role})
-                      </Option>
-                    ))}
-                  </Select>
-                )}
-              </FormControl>
-
-              <FormControl>
-                <FormLabel>Permission Preset</FormLabel>
-                <Select
-                  value={selectedPreset}
-                  onChange={(_, val) => setSelectedPreset(val as string)}
+                </div>
+                <Button
+                  size="sm"
+                  variant="plain"
+                  color="danger"
+                  onClick={() => handleRevoke(perm.userId)}
+                  loading={isSaving}
                 >
-                  <Option value="viewer">Viewer (read-only)</Option>
-                  <Option value="tester">Tester (read + test chat)</Option>
-                  <Option value="analyst">Analyst (read + view logs)</Option>
-                  <Option value="editor">Editor (read + write + upload)</Option>
-                  <Option value="tenant_admin">Tenant Admin (full access)</Option>
-                </Select>
-              </FormControl>
-            </div>
-          </DialogContent>
-          <DialogActions>
-            <Button variant="plain" color="neutral" onClick={() => setShowGrantModal(false)}>
-              Cancel
-            </Button>
-            <Button color="primary" onClick={handleGrant} loading={isSaving}>
-              Grant Access
-            </Button>
-          </DialogActions>
-        </ModalDialog>
-      </Modal>
-    </div>
-  );
-});
+                  Revoke
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Grant Permission Modal */}
+        <Modal open={showGrantModal} onClose={() => setShowGrantModal(false)}>
+          <ModalDialog sx={{ maxWidth: 400, width: "100%" }}>
+            <DialogTitle>Grant User Access</DialogTitle>
+            <Divider />
+            <DialogContent>
+              <div className="space-y-4">
+                <FormControl>
+                  <FormLabel>User</FormLabel>
+                  {isLoadingUsers ? (
+                    <div className="text-sm text-gray-500 py-2">
+                      Loading users...
+                    </div>
+                  ) : availableUsers.length === 0 ? (
+                    <div className="text-sm text-gray-500 py-2">
+                      {allUsers.length > 0
+                        ? "All users already have permissions"
+                        : "No users found"}
+                    </div>
+                  ) : (
+                    <Select
+                      placeholder="Select a user"
+                      value={selectedUserId || null}
+                      onChange={(_, val) => {
+                        setSelectedUserId((val as string) || "");
+                      }}
+                      slotProps={{
+                        listbox: {
+                          sx: { zIndex: 99999 },
+                        },
+                      }}
+                    >
+                      {availableUsers.map((user) => (
+                        <Option key={user.id} value={String(user.id)}>
+                          {user.username} ({user.name || user.role})
+                        </Option>
+                      ))}
+                    </Select>
+                  )}
+                </FormControl>
+
+                <FormControl>
+                  <FormLabel>Permission Preset</FormLabel>
+                  <Select
+                    value={selectedPreset}
+                    onChange={(_, val) => setSelectedPreset(val as string)}
+                  >
+                    <Option value="viewer">Viewer (read-only)</Option>
+                    <Option value="tester">Tester (read + test chat)</Option>
+                    <Option value="analyst">Analyst (read + view logs)</Option>
+                    <Option value="editor">
+                      Editor (read + write + upload)
+                    </Option>
+                    <Option value="tenant_admin">
+                      Tenant Admin (full access)
+                    </Option>
+                  </Select>
+                </FormControl>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button
+                variant="plain"
+                color="neutral"
+                onClick={() => setShowGrantModal(false)}
+              >
+                Cancel
+              </Button>
+              <Button color="primary" onClick={handleGrant} loading={isSaving}>
+                Grant Access
+              </Button>
+            </DialogActions>
+          </ModalDialog>
+        </Modal>
+      </div>
+    );
+  },
+);
 
 export default AgentAdmin;

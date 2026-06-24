@@ -63,7 +63,7 @@ const InternalAgent = observer(() => {
   };
 
   return (
-    <section className="@container w-full max-w-4xl min-h-full flex flex-col justify-start items-center sm:pt-3 md:pt-6 pb-8">
+    <section className="chat-font @container w-full max-w-[700px] min-h-full flex flex-col justify-start items-center sm:pt-3 md:pt-6 pb-8">
       {!md && <MobileHeader />}
       <div className="w-full h-full px-4 sm:px-6 flex flex-col" style={{ minHeight: "calc(100vh - 200px)" }}>
         {/* Header */}
@@ -144,7 +144,7 @@ const InternalAgent = observer(() => {
             )}
 
             {/* Messages Container */}
-            <div className="flex-1 w-full overflow-y-auto bg-white dark:bg-zinc-800 rounded-xl shadow-sm border border-gray-200 dark:border-zinc-700 p-4 mb-4">
+            <div className="flex-1 w-full overflow-y-auto bg-transparent p-4 mb-4">
               {messages.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-gray-500 min-h-[300px]">
                   <MessageSquareIcon className="w-12 h-12 mb-4 opacity-30" />
@@ -152,28 +152,33 @@ const InternalAgent = observer(() => {
                   <p className="text-sm mt-2 text-gray-400">{t("internal-agent.start-hint")}</p>
                 </div>
               ) : (
-                <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-3">
                   {messages.map((message, index) => (
                     <div
                       key={index}
                       className={cn(
-                        "max-w-[80%] p-3 rounded-lg",
+                        "max-w-[85%] p-3 rounded-lg",
                         message.role === "user"
-                          ? "ml-auto bg-teal-500 text-white"
-                          : "mr-auto bg-gray-100 dark:bg-zinc-700 text-gray-800 dark:text-gray-200",
+                          ? "ml-auto ml-8 bg-blue-100 dark:bg-blue-950/40 text-gray-800 dark:text-gray-200 border border-blue-200 dark:border-blue-900"
+                          : "mr-auto mr-8 bg-zinc-100 dark:bg-zinc-800 text-gray-800 dark:text-gray-200 border border-zinc-200 dark:border-zinc-700",
                       )}
                     >
+                      <div className="flex justify-between items-center mb-1">
+                        <span className={cn("text-xs font-medium", message.role === "user" ? "text-blue-600 dark:text-blue-400" : "text-zinc-600 dark:text-zinc-400")}>
+                          {message.role === "user" ? "Customer" : "Agent"}
+                        </span>
+                        <span className="text-xs text-zinc-500 dark:text-zinc-400">{message.timestamp.toLocaleTimeString()}</span>
+                      </div>
                       <p className="whitespace-pre-wrap">{message.content}</p>
-                      <span className="text-xs opacity-60 mt-1 block">{message.timestamp.toLocaleTimeString()}</span>
                     </div>
                   ))}
                   {isLoading && (
-                    <div className="mr-auto bg-gray-100 dark:bg-zinc-700 p-3 rounded-lg text-gray-500">
+                    <div className="mr-auto mr-8 bg-zinc-100 dark:bg-zinc-800 p-3 rounded-lg text-gray-500 max-w-[85%]">
                       <span className="animate-pulse">{t("chat.loading")}</span>
                     </div>
                   )}
                   {error && (
-                    <div className="mr-auto bg-red-100 dark:bg-red-900/30 p-3 rounded-lg text-red-600 dark:text-red-300">{error}</div>
+                    <div className="mr-auto mr-8 bg-red-100 dark:bg-red-900/30 p-3 rounded-lg text-red-600 dark:text-red-300 max-w-[85%]">{error}</div>
                   )}
                   <div ref={messagesEndRef} />
                 </div>
@@ -183,7 +188,7 @@ const InternalAgent = observer(() => {
             {/* Input Area */}
             <div className="w-full flex flex-row gap-2">
               <Textarea
-                className="flex-1"
+                className="flex-1 bg-transparent text-gray-800 dark:text-gray-200 outline-none placeholder:text-gray-400 dark:placeholder:text-gray-500"
                 placeholder={t("internal-agent.placeholder")}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -191,9 +196,13 @@ const InternalAgent = observer(() => {
                 minRows={1}
                 maxRows={4}
                 disabled={isLoading}
+                sx={{ 
+                  '& .MuiTextarea-root': { p: 0 },
+                  '& .MuiTextarea-input': { py: 1, px: 2, fontSize: '0.875rem', bgcolor: 'transparent' },
+                }}
               />
-              <Button onClick={handleSend} disabled={!input.trim() || isLoading} loading={isLoading} color="primary">
-                <SendIcon className="w-5 h-5" />
+              <Button onClick={handleSend} disabled={!input.trim() || isLoading} loading={isLoading} color="primary" sx={{ borderRadius: 1, minWidth: 36, height: 36 }}>
+                <SendIcon className="w-4 h-4" />
               </Button>
             </div>
           </>
