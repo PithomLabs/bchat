@@ -50,12 +50,35 @@ func (s *APIV1Service) CreateResource(ctx context.Context, request *v1pb.CreateR
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to get current user: %v", err)
 	}
+	if user == nil {
+		return nil, status.Errorf(codes.Unauthenticated, "unauthorized access")
+	}
+
+	var memoID *int32
+	if request.Resource.Memo != nil {
+		memoUID, err := ExtractMemoUIDFromName(*request.Resource.Memo)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid memo name: %v", err)
+		}
+		memo, err := s.Store.GetMemo(ctx, &store.FindMemo{UID: &memoUID})
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to find memo: %v", err)
+		}
+		if memo == nil {
+			return nil, status.Errorf(codes.NotFound, "memo not found")
+		}
+		if err := s.checkMemoWriteAccess(ctx, memo); err != nil {
+			return nil, err
+		}
+		memoID = &memo.ID
+	}
 
 	create := &store.Resource{
 		UID:       shortuuid.New(),
 		CreatorID: user.ID,
 		Filename:  request.Resource.Filename,
 		Type:      request.Resource.Type,
+		MemoID:    memoID,
 	}
 
 	workspaceStorageSetting, err := s.Store.GetWorkspaceStorageSetting(ctx)
@@ -76,17 +99,6 @@ func (s *APIV1Service) CreateResource(ctx context.Context, request *v1pb.CreateR
 		return nil, status.Errorf(codes.Internal, "failed to save resource blob: %v", err)
 	}
 
-	if request.Resource.Memo != nil {
-		memoUID, err := ExtractMemoUIDFromName(*request.Resource.Memo)
-		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "invalid memo name: %v", err)
-		}
-		memo, err := s.Store.GetMemo(ctx, &store.FindMemo{UID: &memoUID})
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to find memo: %v", err)
-		}
-		create.MemoID = &memo.ID
-	}
 	resource, err := s.Store.CreateResource(ctx, create)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create resource: %v", err)
@@ -100,9 +112,14 @@ func (s *APIV1Service) ListResources(ctx context.Context, _ *v1pb.ListResourcesR
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to get current user: %v", err)
 	}
-	resources, err := s.Store.ListResources(ctx, &store.FindResource{
-		CreatorID: &user.ID,
-	})
+	if user == nil {
+		return nil, status.Errorf(codes.Unauthenticated, "unauthorized access")
+	}
+	findResource := &store.FindResource{}
+	if !isSuperUser(user) {
+		findResource.CreatorID = &user.ID
+	}
+	resources, err := s.Store.ListResources(ctx, findResource)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list resources: %v", err)
 	}
@@ -126,6 +143,9 @@ func (s *APIV1Service) GetResource(ctx context.Context, request *v1pb.GetResourc
 	if resource == nil {
 		return nil, status.Errorf(codes.NotFound, "resource not found")
 	}
+	if err := s.checkResourceAccess(ctx, resource, ActionRead); err != nil {
+		return nil, err
+	}
 	return s.convertResourceFromStore(ctx, resource), nil
 }
 
@@ -144,26 +164,8 @@ func (s *APIV1Service) GetResourceBinary(ctx context.Context, request *v1pb.GetR
 	if resource == nil {
 		return nil, status.Errorf(codes.NotFound, "resource not found")
 	}
-	// Check the related memo visibility.
-	if resource.MemoID != nil {
-		memo, err := s.Store.GetMemo(ctx, &store.FindMemo{
-			ID: resource.MemoID,
-		})
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to find memo by ID: %v", resource.MemoID)
-		}
-		if memo != nil && memo.Visibility != store.Public {
-			user, err := s.GetCurrentUser(ctx)
-			if err != nil {
-				return nil, status.Errorf(codes.Internal, "failed to get current user: %v", err)
-			}
-			if user == nil {
-				return nil, status.Errorf(codes.Unauthenticated, "unauthorized access")
-			}
-			if memo.Visibility == store.Private && user.ID != resource.CreatorID {
-				return nil, status.Errorf(codes.Unauthenticated, "unauthorized access")
-			}
-		}
+	if err := s.checkResourceAccess(ctx, resource, ActionRead); err != nil {
+		return nil, err
 	}
 
 	if request.Thumbnail && util.HasPrefixes(resource.Type, SupportedThumbnailMimeTypes...) {
@@ -214,6 +216,12 @@ func (s *APIV1Service) UpdateResource(ctx context.Context, request *v1pb.UpdateR
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to get resource: %v", err)
 	}
+	if resource == nil {
+		return nil, status.Errorf(codes.NotFound, "resource not found")
+	}
+	if err := s.checkResourceAccess(ctx, resource, ActionWrite); err != nil {
+		return nil, err
+	}
 
 	currentTs := time.Now().Unix()
 	update := &store.UpdateResource{
@@ -243,15 +251,20 @@ func (s *APIV1Service) DeleteResource(ctx context.Context, request *v1pb.DeleteR
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to get current user: %v", err)
 	}
+	if user == nil {
+		return nil, status.Errorf(codes.Unauthenticated, "unauthorized access")
+	}
 	resource, err := s.Store.GetResource(ctx, &store.FindResource{
-		UID:       &resourceUID,
-		CreatorID: &user.ID,
+		UID: &resourceUID,
 	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to find resource: %v", err)
 	}
 	if resource == nil {
 		return nil, status.Errorf(codes.NotFound, "resource not found")
+	}
+	if err := s.checkResourceAccess(ctx, resource, ActionDelete); err != nil {
+		return nil, err
 	}
 	// Delete the resource from the database.
 	if err := s.Store.DeleteResource(ctx, &store.DeleteResource{
@@ -471,3 +484,150 @@ func replaceFilenameWithPathTemplate(path, filename string) string {
 	})
 	return path
 }
+
+type ResourceAction int
+
+const (
+	ActionRead ResourceAction = iota
+	ActionWrite
+	ActionDelete
+)
+
+func (s *APIV1Service) resolveRootMemo(ctx context.Context, startMemo *store.Memo) (*store.Memo, error) {
+	curr := startMemo
+	visited := map[int32]bool{curr.ID: true}
+	const maxDepth = 10
+
+	for depth := 0; depth <= maxDepth; depth++ {
+		if curr.ParentID == nil {
+			return curr, nil
+		}
+		if depth == maxDepth {
+			break
+		}
+
+		parentID := *curr.ParentID
+		if visited[parentID] {
+			return nil, status.Errorf(codes.Internal, "circular memo relation detected")
+		}
+		visited[parentID] = true
+
+		parent, err := s.Store.GetMemo(ctx, &store.FindMemo{ID: &parentID})
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to query parent memo: %v", err)
+		}
+		if parent == nil {
+			return nil, status.Errorf(codes.NotFound, "parent memo not found")
+		}
+		curr = parent
+	}
+
+	return nil, status.Errorf(codes.FailedPrecondition, "memo traversal depth limit exceeded")
+}
+
+func (s *APIV1Service) checkMemoReadAccess(ctx context.Context, memo *store.Memo) error {
+	user, err := s.GetCurrentUser(ctx)
+	if err != nil {
+		return status.Errorf(codes.Internal, "failed to get current user: %v", err)
+	}
+
+	rootMemo, err := s.resolveRootMemo(ctx, memo)
+	if err != nil {
+		return err
+	}
+
+	if rootMemo.Visibility == store.Public {
+		return nil
+	}
+
+	if user == nil {
+		return status.Errorf(codes.Unauthenticated, "unauthorized access")
+	}
+
+	if isSuperUser(user) {
+		return nil
+	}
+
+	if rootMemo.Visibility == store.Protected {
+		return nil
+	}
+
+	// For Private visibility
+	if user.ID == rootMemo.CreatorID || user.ID == memo.CreatorID {
+		return nil
+	}
+
+	return status.Errorf(codes.PermissionDenied, "permission denied")
+}
+
+func (s *APIV1Service) checkMemoWriteAccess(ctx context.Context, memo *store.Memo) error {
+	user, err := s.GetCurrentUser(ctx)
+	if err != nil {
+		return status.Errorf(codes.Internal, "failed to get current user: %v", err)
+	}
+	if user == nil {
+		return status.Errorf(codes.Unauthenticated, "unauthorized access")
+	}
+	if memo.CreatorID != user.ID && !isSuperUser(user) {
+		return status.Errorf(codes.PermissionDenied, "permission denied")
+	}
+	return nil
+}
+
+func (s *APIV1Service) checkResourceAccess(ctx context.Context, resource *store.Resource, action ResourceAction) error {
+	user, err := s.GetCurrentUser(ctx)
+	if err != nil {
+		return status.Errorf(codes.Internal, "failed to get current user: %v", err)
+	}
+
+	// 1. Host and Admin (Superusers) always have read access across all users,
+	// but are restricted from write and delete operations on resources they do not own.
+	if user != nil && isSuperUser(user) {
+		if action == ActionRead {
+			return nil
+		}
+	}
+
+	// 2. Destructive and rename actions are restricted strictly to the resource creator
+	switch action {
+	case ActionWrite, ActionDelete:
+		if user == nil {
+			return status.Errorf(codes.Unauthenticated, "unauthorized access")
+		}
+		if user.ID != resource.CreatorID {
+			return status.Errorf(codes.PermissionDenied, "permission denied")
+		}
+		return nil
+
+	case ActionRead:
+		// Resource Creator always has read access
+		if user != nil && user.ID == resource.CreatorID {
+			return nil
+		}
+
+		// Unattached resources are strictly private to creator and superusers
+		if resource.MemoID == nil {
+			if user == nil {
+				return status.Errorf(codes.Unauthenticated, "unauthorized access")
+			}
+			return status.Errorf(codes.PermissionDenied, "permission denied")
+		}
+
+		// Resolve attached memo and its parent hierarchy
+		memo, err := s.Store.GetMemo(ctx, &store.FindMemo{ID: resource.MemoID})
+		if err != nil {
+			return status.Errorf(codes.Internal, "failed to find memo: %v", err)
+		}
+		if memo == nil {
+			if user == nil {
+				return status.Errorf(codes.Unauthenticated, "unauthorized access")
+			}
+			return status.Errorf(codes.PermissionDenied, "permission denied")
+		}
+		return s.checkMemoReadAccess(ctx, memo)
+
+	default:
+		return status.Errorf(codes.InvalidArgument, "invalid resource action")
+	}
+}
+
