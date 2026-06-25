@@ -215,10 +215,17 @@ type AssigneeUser struct {
 func (s *APIV1Service) ListTicketAssignees(c echo.Context) error {
 	ctx := c.Request().Context()
 
-	// Verify user is logged in
-	_, ok := c.Get(getUserIDContextKey()).(int32)
+	userID, ok := c.Get(getUserIDContextKey()).(int32)
 	if !ok {
 		return echo.NewHTTPError(http.StatusUnauthorized, "Missing user in context")
+	}
+
+	user, err := s.Store.GetUser(ctx, &store.FindUser{ID: &userID})
+	if err != nil || user == nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "User not found")
+	}
+	if !isSuperUser(user) {
+		return echo.NewHTTPError(http.StatusForbidden, "Only internal staff can list ticket assignees")
 	}
 
 	// List all users for assignee dropdown
@@ -418,8 +425,6 @@ func convertTicketFromStore(ticket *store.Ticket) *Ticket {
 		Tags:        ticket.Tags,
 	}
 }
-
-
 
 // Helper to match the key used in common/auth.go checks
 func getUserIDContextKey() string {
