@@ -73,16 +73,18 @@ export function getStyles(config: WidgetConfig): string {
       position: fixed;
       bottom: 20px;
       ${positionRight ? 'right: 20px;' : 'left: 20px;'}
-      width: min(700px, 90vw);
-      height: min(600px, 90vh);
-      background: #18181b;
-      border: 1px solid #27272a;
-      border-radius: 12px;
-      box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
+      width: min(420px, 92vw);
+      height: min(680px, 85vh);
+      background: rgba(18, 18, 26, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 24px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
       display: none;
       flex-direction: column;
       overflow: hidden;
       z-index: 9999;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
       transform-origin: bottom ${positionRight ? 'right' : 'left'};
       animation: acw-slide-up 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     }
@@ -112,11 +114,12 @@ export function getStyles(config: WidgetConfig): string {
 
     /* Header */
     #acw-header {
-      background: rgba(24, 24, 27, 0.96);
-      padding: 14px 16px;
+      background: rgba(18, 18, 26, 0.75);
+      padding: 16px 20px;
       color: #e4e4e7;
-      border-bottom: 1px solid #27272a;
-      backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
     }
 
     #acw-header-title {
@@ -138,7 +141,7 @@ export function getStyles(config: WidgetConfig): string {
     }
 
     #acw-header-title span {
-      font-size: 15px;
+      font-size: 16px;
       font-weight: 600;
       letter-spacing: -0.015em;
     }
@@ -178,7 +181,7 @@ export function getStyles(config: WidgetConfig): string {
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      background: #09090b;
+      background: #0a0a0f;
       position: relative;
       z-index: 1;
     }
@@ -187,10 +190,10 @@ export function getStyles(config: WidgetConfig): string {
     #acw-messages {
       flex: 1;
       overflow-y: auto;
-      padding: 0;
+      padding: 24px 20px;
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 20px;
       scroll-behavior: smooth;
     }
 
@@ -258,10 +261,9 @@ export function getStyles(config: WidgetConfig): string {
     /* Message Bubble */
     .acw-msg-bubble {
       min-width: 120px;
-      padding: 14px 16px;
-      border-radius: 8px;
-      font-size: 14px;
-      line-height: 1.75;
+      padding: 14px 18px;
+      font-size: 15px;
+      line-height: 1.625;
       text-align: left;
       word-wrap: break-word;
       white-space: pre-wrap;
@@ -269,16 +271,22 @@ export function getStyles(config: WidgetConfig): string {
 
     /* Customer (User) Bubble Specifics */
     .acw-msg-user .acw-msg-bubble {
-      background-color: #1e3a5f;
-      border: 1px solid #2563eb;
-      color: #e4e4e7;
+      background-color: ${color};
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      color: #ffffff;
+      border-radius: 8px;
+      width: 75%;
+      box-shadow: 0 4px 16px ${hexToRgba(color, 0.25)};
     }
 
     /* Agent (Assistant) Bubble Specifics */
     .acw-msg-assistant .acw-msg-bubble {
-      background-color: #3f3f46;
-      border: 1px solid #52525b;
-      color: #e4e4e7;
+      background-color: #1a1a28;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      color: #e8e8f0;
+      border-radius: 16px 16px 16px 4px;
+      width: 75%;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
     }
 
     /* Header inside bubble */
@@ -296,26 +304,41 @@ export function getStyles(config: WidgetConfig): string {
     }
 
     .acw-msg-user .acw-msg-role {
-      color: #60a5fa;
+      color: rgba(255, 255, 255, 0.85);
     }
 
     .acw-msg-assistant .acw-msg-role {
-      color: #71717a;
+      color: #8888a0;
     }
 
     /* Timestamp */
     .acw-msg-time {
       font-size: 12px;
-      color: #71717a;
+      color: #6e6e85;
+    }
+
+    .acw-msg-user .acw-msg-time {
+      color: rgba(255, 255, 255, 0.7);
+    }
+
+    .acw-msg-assistant .acw-msg-time {
+      color: #6e6e85;
     }
 
     /* Content text */
     .acw-msg-content {
-      font-size: 14px;
-      color: #e4e4e7;
-      line-height: 1.6;
+      font-size: 15px;
+      line-height: 1.625;
       text-align: left;
       white-space: pre-wrap;
+    }
+
+    .acw-msg-user .acw-msg-content {
+      color: #ffffff;
+    }
+
+    .acw-msg-assistant .acw-msg-content {
+      color: #e8e8f0;
     }
 
     /* Typing Indicator */
@@ -326,11 +349,12 @@ export function getStyles(config: WidgetConfig): string {
     }
 
     .acw-typing-bubble {
-      background: #18181b;
-      padding: 13px 17px;
-      border: 1px solid #27272a;
-      border-radius: 12px;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+      background: #1a1a28;
+      padding: 14px 18px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 16px 16px 16px 4px;
+      width: 75%;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
     }
 
     .acw-typing-dots {
@@ -379,32 +403,35 @@ export function getStyles(config: WidgetConfig): string {
 
     /* Input Area */
     #acw-input-area {
-      background: #18181b;
-      padding: 12px 16px 16px;
-      border-top: 1px solid #27272a;
+      background: rgba(18, 18, 26, 0.75);
+      padding: 16px 20px 20px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
     }
 
     #acw-input-wrapper {
       display: flex;
       align-items: flex-end;
       gap: 8px;
-      background: #3f3f46;
-      border: 1px solid #52525b;
-      border-radius: 8px;
-      padding: 14px 16px;
-      transition: border-color 0.2s ease;
+      background: #1a1a28;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 12px;
+      padding: 12px 16px;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
     }
 
     #acw-input-wrapper:focus-within {
       border-color: ${color};
+      box-shadow: 0 0 12px ${hexToRgba(color, 0.20)};
     }
 
     #acw-input {
       flex: 1;
       border: none;
       background: transparent;
-      font-size: 14px;
-      line-height: 1.75;
+      font-size: 16px;
+      line-height: 1.5;
       resize: none;
       outline: none;
       min-height: 24px;
@@ -432,16 +459,19 @@ export function getStyles(config: WidgetConfig): string {
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: opacity 0.15s ease;
+      transition: opacity 0.15s ease, transform 0.2s ease, box-shadow 0.3s ease;
       flex-shrink: 0;
     }
 
     #acw-send:hover:not(:disabled) {
-      opacity: 0.9;
+      opacity: 0.95;
+      transform: scale(1.05);
+      box-shadow: 0 4px 12px ${hexToRgba(color, 0.35)};
     }
 
     #acw-send:active:not(:disabled) {
       opacity: 0.75;
+      transform: scale(0.95);
     }
 
     #acw-send:disabled {
