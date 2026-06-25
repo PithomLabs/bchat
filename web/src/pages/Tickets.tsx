@@ -113,8 +113,12 @@ const Tickets = observer(() => {
 
     useEffect(() => {
         fetchTickets();
-        fetchUsers();
-    }, [searchParams]);
+        if (isAdmin) {
+            fetchUsers();
+        } else {
+            setUsers([]);
+        }
+    }, [searchParams, isAdmin]);
 
     // Handle reactive refresh of comments when store changes
     useEffect(() => {
@@ -400,7 +404,7 @@ const Tickets = observer(() => {
                                     <th>Description</th>
                                     <th>Status</th>
                                     <th>Priority</th>
-                                    <th>Assignee</th>
+                                    {isAdmin && <th>Assignee</th>}
                                     <th>Updated</th>
                                     <th style={{ width: "80px" }}></th>
                                 </tr>
@@ -442,11 +446,13 @@ const Tickets = observer(() => {
                                                 {ticket.priority}
                                             </span>
                                         </td>
-                                        <td>
-                                            <span className="text-sm text-gray-600 dark:text-gray-400">
-                                                {getUserDisplayName(ticket.assigneeId)}
-                                            </span>
-                                        </td>
+                                        {isAdmin && (
+                                            <td>
+                                                <span className="text-sm text-gray-600 dark:text-gray-400">
+                                                    {getUserDisplayName(ticket.assigneeId)}
+                                                </span>
+                                            </td>
+                                        )}
                                         <td>{new Date(ticket.updatedTs * 1000).toLocaleDateString()}</td>
                                         <td>
                                             {isAdmin && (
@@ -459,7 +465,7 @@ const Tickets = observer(() => {
                                 ))}
                                 {tickets.length === 0 && (
                                     <tr>
-                                        <td colSpan={8} className="text-center py-8 text-gray-500">
+                                        <td colSpan={isAdmin ? 9 : 7} className="text-center py-8 text-gray-500">
                                             No tickets found.
                                         </td>
                                     </tr>
@@ -610,14 +616,6 @@ const Tickets = observer(() => {
                                                 </Chip>
                                             </div>
                                         </div>
-                                        {assigneeId && (
-                                            <div>
-                                                <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">Assignee</label>
-                                                <div className="py-2 text-sm font-medium text-gray-600 dark:text-gray-400">
-                                                    {getUserDisplayName(assigneeId)}
-                                                </div>
-                                            </div>
-                                        )}
                                     </>
                                 )}
                             </div>
