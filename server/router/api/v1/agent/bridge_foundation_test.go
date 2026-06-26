@@ -140,6 +140,181 @@ func TestChatExternalNormalAIBehaviorUnchanged(t *testing.T) {
 	require.Equal(t, "bridge,omitempty", responseType.Field(4).Tag.Get("json"))
 }
 
+func TestChatExternalRequiresExternalAudience(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("RAG_PIPELINE_ENABLED", "false")
+	ctx := context.Background()
+	ts := teststore.NewTestingStore(ctx, t)
+	defer ts.Close()
+
+	tenant, err := ts.CreateAgentTenant(ctx, &store.AgentTenant{
+		Slug: "external-audience-required", CompanyName: "test", Vertical: "test", IsActive: true,
+	})
+	require.NoError(t, err)
+	_, err = ts.CreateAgentAudience(ctx, &store.AgentAudience{
+		TenantID: tenant.ID, AudienceType: "internal", Role: "internal-only", Tone: "helpful", RateLimitRPM: 60,
+	})
+	require.NoError(t, err)
+
+	service := NewService(ts, &profile.Profile{Driver: "sqlite", Mode: "prod"})
+	_, err = service.ChatExternal(ctx, tenant.Slug, "127.0.0.1", "test", ChatRequest{
+		SessionID: "widget-session", Message: "hello",
+	})
+	require.ErrorContains(t, err, "/external")
+}
+
+func TestChatExternalClientMessageIDIsIdempotent(t *testing.T) {
+	ctx, ts, service, tenant := newBridgeChatTestService(t, "chat-client-idempotency")
+	defer ts.Close()
+
+	request := ChatRequest{
+		SessionID:       "widget-session",
+		Message:         "hello",
+		ClientMessageID: "4e0c8d2a-a718-4fd2-bfd1-a23eef418843",
+	}
+	first, err := service.ChatExternal(ctx, tenant.Slug, "127.0.0.1", "test", request)
+	require.NoError(t, err)
+	session := service.memorySessions.Get(tenant.ID, request.SessionID)
+	require.NotNil(t, session)
+	require.Len(t, session.Messages, 2)
+
+	second, err := service.ChatExternal(ctx, tenant.Slug, "127.0.0.1", "test", request)
+	require.NoError(t, err)
+	require.Equal(t, first.Message.Content, second.Message.Content)
+	require.Equal(t, first.Message.Timestamp.Truncate(time.Second), second.Message.Timestamp.Truncate(time.Second))
+	require.Len(t, session.Messages, 2)
+}
+
+func TestChatExternalClientMessageIDIsIdempotent_Concurrent(t *testing.T) {
+	ctx, ts, service, tenant := newBridgeChatTestService(t, "chat-client-concurrent")
+	defer ts.Close()
+
+	request := ChatRequest{
+		SessionID:       "widget-concurrent",
+		Message:         "concurrent-hello",
+		ClientMessageID: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+	}
+
+	var wg sync.WaitGroup
+	results := make([]*ChatResponse, 10)
+	errors := make([]error, 10)
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			resp, err := service.ChatExternal(ctx, tenant.Slug, "127.0.0.1", "test", request)
+			results[i] = resp
+			errors[i] = err
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errors {
+		require.NoError(t, err, "goroutine %d errored", i)
+	}
+	for i, resp := range results {
+		require.NotNil(t, resp, "goroutine %d got nil response", i)
+		require.Equal(t, results[0].Message.Content, resp.Message.Content, "goroutine %d content mismatch", i)
+		require.Equal(t, results[0].Message.Timestamp.Truncate(time.Second), resp.Message.Timestamp.Truncate(time.Second), "goroutine %d timestamp mismatch", i)
+	}
+
+	session := service.memorySessions.Get(tenant.ID, request.SessionID)
+	require.NotNil(t, session)
+	require.Len(t, session.Messages, 2)
+}
+
+func TestChatExternalClientMessageIDIsIdempotent_Restart(t *testing.T) {
+	ctx, ts, service, tenant := newBridgeChatTestService(t, "chat-client-restart")
+	defer ts.Close()
+
+	request := ChatRequest{
+		SessionID:       "widget-restart",
+		Message:         "restart-hello",
+		ClientMessageID: "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+	}
+
+	first, err := service.ChatExternal(ctx, tenant.Slug, "127.0.0.1", "test", request)
+	require.NoError(t, err)
+
+	service2 := NewService(ts, &profile.Profile{Driver: "sqlite", Mode: "prod"})
+	second, err := service2.ChatExternal(ctx, tenant.Slug, "127.0.0.1", "test", request)
+	require.NoError(t, err)
+	require.Equal(t, first.Message.Content, second.Message.Content)
+	require.Equal(t, first.Message.Timestamp.Truncate(time.Second), second.Message.Timestamp.Truncate(time.Second))
+}
+
+func TestChatExternalClientMessageIDPersistsToDatabase(t *testing.T) {
+	ctx, ts, service, tenant := newBridgeChatTestService(t, "chat-client-persist")
+	defer ts.Close()
+
+	request := ChatRequest{
+		SessionID:       "widget-persist",
+		Message:         "persist-hello",
+		ClientMessageID: "d4e5f6a7-b8c9-0123-defa-234567890123",
+	}
+
+	_, err := service.ChatExternal(ctx, tenant.Slug, "127.0.0.1", "test", request)
+	require.NoError(t, err)
+
+	// Verify the assistant message row was actually written to the DB.
+	var assistantCount int
+	err = ts.GetDriver().GetDB().QueryRowContext(ctx,
+		"SELECT COUNT(1) FROM agent_messages WHERE session_id = ? AND source = 'external_response' AND source_id = ?",
+		"widget-persist", request.ClientMessageID,
+	).Scan(&assistantCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, assistantCount, "exactly one assistant message row should be persisted")
+
+	// Verify the user message row was also written.
+	var userCount int
+	err = ts.GetDriver().GetDB().QueryRowContext(ctx,
+		"SELECT COUNT(1) FROM agent_messages WHERE session_id = ? AND source = 'external_client_message' AND source_id = ?",
+		"widget-persist", request.ClientMessageID,
+	).Scan(&userCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, userCount, "exactly one user message row should be persisted")
+}
+
+func TestCreateAgentMessagesNilSlice(t *testing.T) {
+	ctx, ts, _, _ := newBridgeChatTestService(t, "chat-nil-slice")
+	defer ts.Close()
+
+	// Verify nil slice does not error.
+	err := ts.CreateAgentMessages(ctx, nil)
+	require.NoError(t, err)
+
+	// Verify empty slice does not error.
+	err = ts.CreateAgentMessages(ctx, []*store.AgentMessageRecord{})
+	require.NoError(t, err)
+}
+
+func TestChatExternalClientMessageIDContentMismatch(t *testing.T) {
+	ctx, ts, service, tenant := newBridgeChatTestService(t, "chat-client-content-mismatch")
+	defer ts.Close()
+
+	request1 := ChatRequest{
+		SessionID:       "widget-content-mismatch",
+		Message:         "original-question",
+		ClientMessageID: "c3d4e5f6-a7b8-9012-cdef-123456789012",
+	}
+	_, err := service.ChatExternal(ctx, tenant.Slug, "127.0.0.1", "test", request1)
+	require.NoError(t, err)
+
+	request2 := ChatRequest{
+		SessionID:       "widget-content-mismatch",
+		Message:         "different-question",
+		ClientMessageID: "c3d4e5f6-a7b8-9012-cdef-123456789012",
+	}
+	_, err = service.ChatExternal(ctx, tenant.Slug, "127.0.0.1", "test", request2)
+	require.NoError(t, err)
+
+	session := service.memorySessions.Get(tenant.ID, request1.SessionID)
+	require.NotNil(t, session)
+	require.Len(t, session.Messages, 4)
+	require.Equal(t, "original-question", session.Messages[0].Content)
+	require.Equal(t, "different-question", session.Messages[2].Content)
+}
+
 func newBridgeChatTestService(t *testing.T, slug string) (context.Context, *store.Store, *Service, *store.AgentTenant) {
 	t.Helper()
 	t.Setenv("OPENROUTER_API_KEY", "")
@@ -149,7 +324,7 @@ func newBridgeChatTestService(t *testing.T, slug string) (context.Context, *stor
 	tenant, err := ts.CreateAgentTenant(ctx, &store.AgentTenant{Slug: slug, CompanyName: slug, Vertical: "test", IsActive: true})
 	require.NoError(t, err)
 	_, err = ts.CreateAgentAudience(ctx, &store.AgentAudience{
-		TenantID: tenant.ID, AudienceType: "internal", Role: "assistant", Tone: "helpful",
+		TenantID: tenant.ID, AudienceType: "external", Role: "assistant", Tone: "helpful",
 		EmergencyPhone: "", RateLimitRPM: 60,
 	})
 	require.NoError(t, err)
@@ -271,7 +446,7 @@ func TestUnsupportedDBPathCreatesNoWarnings(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = ts.CreateAgentAudience(ctx, &store.AgentAudience{
-		TenantID: tenant.ID, AudienceType: "internal", Role: "assistant", Tone: "helpful",
+		TenantID: tenant.ID, AudienceType: "external", Role: "assistant", Tone: "helpful",
 		EmergencyPhone: "", RateLimitRPM: 60,
 	})
 	require.NoError(t, err)

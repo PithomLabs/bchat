@@ -27,6 +27,7 @@ import {
   ChevronUpIcon,
   CodeIcon,
   CopyIcon,
+  DownloadIcon,
   EditIcon,
   EyeIcon,
   EyeOffIcon,
@@ -51,6 +52,7 @@ import useResponsiveWidth from "@/hooks/useResponsiveWidth";
 import { agentAdminStore, userStore } from "@/store/v2";
 import type {
   AgentTenant,
+  AgentLead,
   AgentTranscript,
   CreateTenantRequest,
   LLMConfig,
@@ -109,6 +111,7 @@ const AgentAdmin = observer(() => {
 
   // Transcripts state
   const [showTranscripts, setShowTranscripts] = useState(false);
+  const [showLeads, setShowLeads] = useState(false);
   const [selectedTranscript, setSelectedTranscript] =
     useState<AgentTranscript | null>(null);
   const [showTranscriptModal, setShowTranscriptModal] = useState(false);
@@ -147,10 +150,12 @@ const AgentAdmin = observer(() => {
     isTestingQA,
     ragSearchResults,
     isSearchingRAG,
-    transcripts,
-    isLoadingTranscripts,
-    tenantSettings,
-  } = agentAdminStore.state;
+  transcripts,
+  isLoadingTranscripts,
+  leads,
+  isLoadingLeads,
+  tenantSettings,
+} = agentAdminStore.state;
 
   // Get current user and determine if they're an admin
   const currentUserName = userStore.state.currentUser;
@@ -217,6 +222,7 @@ const AgentAdmin = observer(() => {
         // Fetch tenant settings and transcripts
         agentAdminStore.fetchTenantSettings(selectedTenant.tenant.slug);
         agentAdminStore.fetchTranscripts(selectedTenant.tenant.slug);
+        agentAdminStore.fetchLeads(selectedTenant.tenant.slug);
       }
     }
   }, [selectedTenant?.tenant.slug, selectedTenant?.tenant.id, isAdmin]);
@@ -1815,6 +1821,135 @@ const AgentAdmin = observer(() => {
                             the index.
                           </div>
                         )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Captured Leads - Admin only */}
+            {isAdmin && (
+              <div className="bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800 p-4">
+                <div className="flex justify-between items-center mb-3">
+                  <div>
+                    <h3 className="font-medium text-blue-700 dark:text-blue-300">
+                      Captured Leads
+                    </h3>
+                    <p className="text-sm text-blue-600 dark:text-blue-400">
+                      Visitors who shared a name plus email or phone during chat.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      color="primary"
+                      variant="outlined"
+                      onClick={() => agentAdminStore.exportLeads(selectedTenant.tenant.slug)}
+                      disabled={leads.length === 0}
+                    >
+                      <DownloadIcon className="w-4 h-4 mr-2" />
+                      Export
+                    </Button>
+                    <Button
+                      color="primary"
+                      variant="outlined"
+                      onClick={() => setShowLeads(!showLeads)}
+                    >
+                      <MessageCircleIcon className="w-4 h-4 mr-2" />
+                      {showLeads ? t("common.close") : "View Leads"} ({leads.length})
+                    </Button>
+                  </div>
+                </div>
+
+                {showLeads && (
+                  <div className="mt-4 space-y-3">
+                    {isLoadingLeads ? (
+                      <div className="text-center py-4 text-gray-500">
+                        Loading...
+                      </div>
+                    ) : leads.length === 0 ? (
+                      <div className="text-center py-4 text-gray-500">
+                        No captured leads yet.
+                      </div>
+                    ) : (
+                      <div className="space-y-2 max-h-96 overflow-y-auto">
+                        {leads.map((lead) => (
+                          <div
+                            key={lead.id}
+                            className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-3 hover:border-blue-300 dark:hover:border-blue-700 transition-colors"
+                          >
+                            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2 mb-1">
+                                  <span className="font-medium text-gray-800 dark:text-gray-100">
+                                    {lead.name}
+                                  </span>
+                                  <Chip size="sm" variant="soft" color={lead.status === "converted" ? "success" : lead.status === "closed" ? "neutral" : "primary"}>
+                                    {lead.status}
+                                  </Chip>
+                                  <span className="text-xs text-gray-500">
+                                    {new Date(lead.updatedAt).toLocaleString()}
+                                  </span>
+                                </div>
+                                <div className="text-sm text-gray-600 dark:text-gray-300">
+                                  {[lead.email, lead.phone].filter(Boolean).join(" · ")}
+                                </div>
+                                {lead.topic && (
+                                  <div className="mt-1 text-sm text-gray-500 dark:text-gray-400 line-clamp-2">
+                                    {lead.topic}
+                                  </div>
+                                )}
+                                {lead.detectedIntent && (
+                                  <div className="mt-1 text-xs text-gray-400">
+                                    {lead.detectedIntent}
+                                  </div>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Select
+                                  size="sm"
+                                  value={lead.status}
+                                  onChange={async (_, value) => {
+                                    if (!value) return;
+                                    const success = await agentAdminStore.updateLeadStatus(
+                                      selectedTenant.tenant.slug,
+                                      lead.id,
+                                      value as AgentLead["status"],
+                                    );
+                                    if (success) {
+                                      toast.success("Lead updated");
+                                    }
+                                  }}
+                                  sx={{ minWidth: 132 }}
+                                >
+                                  <Option value="new">New</Option>
+                                  <Option value="contacted">Contacted</Option>
+                                  <Option value="qualified">Qualified</Option>
+                                  <Option value="converted">Converted</Option>
+                                  <Option value="closed">Closed</Option>
+                                </Select>
+                                {lead.transcriptId && (
+                                  <Button
+                                    size="sm"
+                                    variant="plain"
+                                    color="primary"
+                                    onClick={() => {
+                                      const transcript = transcripts.find((item) => item.id === lead.transcriptId);
+                                      if (transcript) {
+                                        setSelectedTranscript(transcript);
+                                        setShowTranscriptModal(true);
+                                      } else {
+                                        toast.error("Transcript is not loaded");
+                                      }
+                                    }}
+                                  >
+                                    <EyeIcon className="w-4 h-4" />
+                                  </Button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>

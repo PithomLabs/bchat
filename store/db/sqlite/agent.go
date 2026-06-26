@@ -834,6 +834,65 @@ func (d *DB) DeleteAgentRules(ctx context.Context, tenantID int32, audienceType 
 }
 
 // ============================================================================
+// MESSAGE OPERATIONS
+// ============================================================================
+
+func (d *DB) CreateAgentMessages(ctx context.Context, messages []*store.AgentMessageRecord) error {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	stmt := `
+		INSERT INTO agent_messages (session_id, tenant_id, source, source_id, role, content, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`
+	for _, m := range messages {
+		if _, err := d.db.ExecContext(ctx, stmt, m.SessionID, m.TenantID, m.Source, m.SourceID, m.Role, m.Content, m.CreatedAt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *DB) GetAssistantMessageBySourceID(ctx context.Context, sessionID, sourceID string) (*store.AgentMessageRecord, error) {
+	query := `
+		SELECT id, session_id, tenant_id, source, source_id, role, content, created_at
+		FROM agent_messages
+		WHERE session_id = ? AND source = 'external_response' AND source_id = ?
+		LIMIT 1
+	`
+	var m store.AgentMessageRecord
+	if err := d.db.QueryRowContext(ctx, query, sessionID, sourceID).Scan(
+		&m.ID, &m.SessionID, &m.TenantID, &m.Source, &m.SourceID, &m.Role, &m.Content, &m.CreatedAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &m, nil
+}
+
+func (d *DB) GetUserMessageBySourceID(ctx context.Context, sessionID, sourceID string) (*store.AgentMessageRecord, error) {
+	query := `
+		SELECT id, session_id, tenant_id, source, source_id, role, content, created_at
+		FROM agent_messages
+		WHERE session_id = ? AND source = 'external_client_message' AND source_id = ?
+		LIMIT 1
+	`
+	var m store.AgentMessageRecord
+	if err := d.db.QueryRowContext(ctx, query, sessionID, sourceID).Scan(
+		&m.ID, &m.SessionID, &m.TenantID, &m.Source, &m.SourceID, &m.Role, &m.Content, &m.CreatedAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &m, nil
+}
+
+// ============================================================================
 // SESSION OPERATIONS
 // ============================================================================
 
@@ -2155,6 +2214,152 @@ func (d *DB) DeleteAgentTranscript(ctx context.Context, id string) error {
 	return err
 }
 
+func (d *DB) UpsertAgentLead(ctx context.Context, lead *store.AgentLead) (*store.AgentLead, error) {
+	if lead.ID == "" {
+		lead.ID = uuid.NewString()
+	}
+	if lead.Status == "" {
+		lead.Status = "new"
+	}
+	now := time.Now()
+	if lead.CreatedAt.IsZero() {
+		lead.CreatedAt = now
+	}
+	lead.UpdatedAt = now
+	if lead.LastMessageAt.IsZero() {
+		lead.LastMessageAt = now
+	}
+
+	stmt := `
+		INSERT INTO agent_leads (
+			id, tenant_id, session_id, transcript_id, name, email, phone, topic,
+			location, detected_intent, status, created_at, updated_at, last_message_at, converted_at
+		) VALUES (?, ?, ?, NULLIF(?, ''), ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''),
+			NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?)
+		ON CONFLICT(tenant_id, session_id) DO UPDATE SET
+			transcript_id = COALESCE(excluded.transcript_id, agent_leads.transcript_id),
+			name = excluded.name,
+			email = COALESCE(excluded.email, agent_leads.email),
+			phone = COALESCE(excluded.phone, agent_leads.phone),
+			topic = COALESCE(excluded.topic, agent_leads.topic),
+			location = COALESCE(excluded.location, agent_leads.location),
+			detected_intent = COALESCE(excluded.detected_intent, agent_leads.detected_intent),
+			updated_at = excluded.updated_at,
+			last_message_at = excluded.last_message_at
+	`
+	if _, err := d.db.ExecContext(ctx, stmt,
+		lead.ID, lead.TenantID, lead.SessionID, lead.TranscriptID, lead.Name, lead.Email, lead.Phone,
+		lead.Topic, lead.Location, lead.DetectedIntent, lead.Status, lead.CreatedAt, lead.UpdatedAt,
+		lead.LastMessageAt, lead.ConvertedAt,
+	); err != nil {
+		return nil, fmt.Errorf("failed to upsert agent lead: %w", err)
+	}
+	return d.GetAgentLead(ctx, &store.FindAgentLead{TenantID: &lead.TenantID, SessionID: &lead.SessionID})
+}
+
+func (d *DB) GetAgentLead(ctx context.Context, find *store.FindAgentLead) (*store.AgentLead, error) {
+	leads, err := d.ListAgentLeads(ctx, &store.FindAgentLead{
+		ID:        find.ID,
+		TenantID:  find.TenantID,
+		SessionID: find.SessionID,
+		Status:    find.Status,
+		Limit:     1,
+	})
+	if err != nil || len(leads) == 0 {
+		return nil, err
+	}
+	return leads[0], nil
+}
+
+func (d *DB) ListAgentLeads(ctx context.Context, find *store.FindAgentLead) ([]*store.AgentLead, error) {
+	where := []string{"1 = 1"}
+	args := []interface{}{}
+	if find.ID != nil {
+		where = append(where, "id = ?")
+		args = append(args, *find.ID)
+	}
+	if find.TenantID != nil {
+		where = append(where, "tenant_id = ?")
+		args = append(args, *find.TenantID)
+	}
+	if find.SessionID != nil {
+		where = append(where, "session_id = ?")
+		args = append(args, *find.SessionID)
+	}
+	if find.Status != nil {
+		where = append(where, "status = ?")
+		args = append(args, *find.Status)
+	}
+	limit := 100
+	if find.Limit > 0 {
+		limit = find.Limit
+	}
+	query := fmt.Sprintf(`
+		SELECT id, tenant_id, session_id, transcript_id, name, email, phone, topic,
+			location, detected_intent, status, created_at, updated_at, last_message_at, converted_at
+		FROM agent_leads
+		WHERE %s
+		ORDER BY updated_at DESC
+		LIMIT ? OFFSET ?
+	`, strings.Join(where, " AND "))
+	args = append(args, limit, find.Offset)
+	rows, err := d.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list agent leads: %w", err)
+	}
+	defer rows.Close()
+
+	var leads []*store.AgentLead
+	for rows.Next() {
+		lead, err := scanAgentLead(rows)
+		if err != nil {
+			return nil, err
+		}
+		leads = append(leads, lead)
+	}
+	return leads, rows.Err()
+}
+
+func (d *DB) UpdateAgentLeadStatus(ctx context.Context, tenantID int32, id string, status string, convertedAt *time.Time) (*store.AgentLead, error) {
+	updatedAt := time.Now()
+	_, err := d.db.ExecContext(ctx, `
+		UPDATE agent_leads
+		SET status = ?, converted_at = ?, updated_at = ?
+		WHERE tenant_id = ? AND id = ?
+	`, status, convertedAt, updatedAt, tenantID, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update agent lead status: %w", err)
+	}
+	return d.GetAgentLead(ctx, &store.FindAgentLead{ID: &id, TenantID: &tenantID})
+}
+
+type agentLeadScanner interface {
+	Scan(dest ...interface{}) error
+}
+
+func scanAgentLead(scanner agentLeadScanner) (*store.AgentLead, error) {
+	var lead store.AgentLead
+	var transcriptID, email, phone, topic, location, detectedIntent sql.NullString
+	var convertedAt sql.NullTime
+	if err := scanner.Scan(
+		&lead.ID, &lead.TenantID, &lead.SessionID, &transcriptID, &lead.Name, &email, &phone,
+		&topic, &location, &detectedIntent, &lead.Status, &lead.CreatedAt, &lead.UpdatedAt,
+		&lead.LastMessageAt, &convertedAt,
+	); err != nil {
+		return nil, fmt.Errorf("failed to scan agent lead: %w", err)
+	}
+	lead.TranscriptID = transcriptID.String
+	lead.Email = email.String
+	lead.Phone = phone.String
+	lead.Topic = topic.String
+	lead.Location = location.String
+	lead.DetectedIntent = detectedIntent.String
+	if convertedAt.Valid {
+		lead.ConvertedAt = &convertedAt.Time
+	}
+	return &lead, nil
+}
+
 // UpsertReindexCheckpoint creates or updates a reindex checkpoint.
 func (d *DB) UpsertReindexCheckpoint(ctx context.Context, checkpoint *store.ReindexCheckpoint) (*store.ReindexCheckpoint, error) {
 	now := time.Now()
@@ -2269,4 +2474,8 @@ func (d *DB) DeleteReindexCheckpoint(ctx context.Context, tenantID int32, audien
 		tenantID, audience,
 	)
 	return err
+}
+
+func (d *DB) SupportsBridgeDelivery() bool {
+	return false
 }

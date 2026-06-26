@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"time"
 )
 
@@ -253,6 +255,9 @@ type AgentSession struct {
 	OutOfCoverageCount int    // Tracks how many times out-of-coverage was explained
 	SafetyGiven        bool   // Tracks if full safety instructions were given
 	EscalationTicket   string // Ticket number if escalation was created
+
+	// Not persisted; guards concurrent ChatExternal calls for the same session.
+	IdempotencyMu sync.Mutex `json:"-"`
 }
 
 // AgentMessage represents a single message in a chat session.
@@ -262,6 +267,26 @@ type AgentMessage struct {
 	Timestamp time.Time `json:"timestamp"`
 	Source    string    `json:"source,omitempty"`
 	SourceID  string    `json:"source_id,omitempty"`
+}
+
+// FindAgentMessage contains filters for finding agent messages.
+type FindAgentMessage struct {
+	SessionID *string
+	Source    *string
+	SourceID  *string
+	TenantID  *int32
+}
+
+// AgentMessageRecord represents a durable message row in the database.
+type AgentMessageRecord struct {
+	ID        int32
+	SessionID string
+	TenantID  int32
+	Source    string
+	SourceID  string
+	Role      string
+	Content   string
+	CreatedAt time.Time
 }
 
 // FindAgentSession contains filters for finding sessions.
@@ -588,6 +613,35 @@ type FindAgentTranscript struct {
 	Offset       int
 }
 
+// AgentLead represents a tenant-scoped sales/support lead captured from chat.
+type AgentLead struct {
+	ID             string     `json:"id"`
+	TenantID       int32      `json:"tenantId"`
+	SessionID      string     `json:"sessionId"`
+	TranscriptID   string     `json:"transcriptId,omitempty"`
+	Name           string     `json:"name"`
+	Email          string     `json:"email,omitempty"`
+	Phone          string     `json:"phone,omitempty"`
+	Topic          string     `json:"topic,omitempty"`
+	Location       string     `json:"location,omitempty"`
+	DetectedIntent string     `json:"detectedIntent,omitempty"`
+	Status         string     `json:"status"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
+	LastMessageAt  time.Time  `json:"lastMessageAt"`
+	ConvertedAt    *time.Time `json:"convertedAt,omitempty"`
+}
+
+// FindAgentLead contains filters for finding captured leads.
+type FindAgentLead struct {
+	ID        *string
+	TenantID  *int32
+	SessionID *string
+	Status    *string
+	Limit     int
+	Offset    int
+}
+
 // ObservationLog represents the compressed memory state for a session.
 type ObservationLog struct {
 	SessionID            string    `json:"session_id"`
@@ -665,6 +719,11 @@ type AgentStore interface {
 	UpdateAgentSession(ctx context.Context, update *UpdateAgentSession) (*AgentSession, error)
 	DeleteAgentSession(ctx context.Context, id string) error
 
+	// Agent message operations
+	CreateAgentMessages(ctx context.Context, messages []*AgentMessageRecord) error
+	GetAssistantMessageBySourceID(ctx context.Context, sessionID, sourceID string) (*AgentMessageRecord, error)
+	GetUserMessageBySourceID(ctx context.Context, sessionID, sourceID string) (*AgentMessageRecord, error)
+
 	// Source file operations
 	UpsertAgentSourceFile(ctx context.Context, file *AgentSourceFile) (*AgentSourceFile, error)
 	GetAgentSourceFile(ctx context.Context, find *FindAgentSourceFile) (*AgentSourceFile, error)
@@ -720,10 +779,19 @@ type AgentStore interface {
 	UpdateAgentTranscript(ctx context.Context, transcript *AgentTranscript) error
 	DeleteAgentTranscript(ctx context.Context, id string) error
 
+	// Lead operations
+	UpsertAgentLead(ctx context.Context, lead *AgentLead) (*AgentLead, error)
+	GetAgentLead(ctx context.Context, find *FindAgentLead) (*AgentLead, error)
+	ListAgentLeads(ctx context.Context, find *FindAgentLead) ([]*AgentLead, error)
+	UpdateAgentLeadStatus(ctx context.Context, tenantID int32, id string, status string, convertedAt *time.Time) (*AgentLead, error)
+
 	// Observation Log operations (Observational Memory)
 	UpsertObservationLog(ctx context.Context, log *ObservationLog) (*ObservationLog, error)
 	GetObservationLog(ctx context.Context, sessionID string) (*ObservationLog, error)
 	GetObservationLogByResource(ctx context.Context, resourceID string) (*ObservationLog, error)
+
+	// Bridge delivery operations
+	SupportsBridgeDelivery() bool
 }
 
 // Store methods that delegate to the driver
@@ -884,6 +952,25 @@ func (s *Store) DeleteAgentSession(ctx context.Context, id string) error {
 	return s.driver.DeleteAgentSession(ctx, id)
 }
 
+func (s *Store) CreateAgentMessages(ctx context.Context, messages []*AgentMessageRecord) error {
+	return s.driver.CreateAgentMessages(ctx, messages)
+}
+
+func (s *Store) GetAssistantMessageBySourceID(ctx context.Context, sessionID, sourceID string) (*AgentMessageRecord, error) {
+	return s.driver.GetAssistantMessageBySourceID(ctx, sessionID, sourceID)
+}
+
+func (s *Store) GetUserMessageBySourceID(ctx context.Context, sessionID, sourceID string) (*AgentMessageRecord, error) {
+	return s.driver.GetUserMessageBySourceID(ctx, sessionID, sourceID)
+}
+
+func (s *Store) SupportsBridgeDelivery() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err := s.driver.ClaimBridgeReplyOutboxByOutboxID(ctx, 0, "", "", time.Time{}, 0)
+	return !errors.Is(err, ErrBridgeUnsupportedDatabase)
+}
+
 func (s *Store) UpsertAgentSourceFile(ctx context.Context, file *AgentSourceFile) (*AgentSourceFile, error) {
 	return s.driver.UpsertAgentSourceFile(ctx, file)
 }
@@ -1022,6 +1109,22 @@ func (s *Store) UpdateAgentTranscript(ctx context.Context, transcript *AgentTran
 
 func (s *Store) DeleteAgentTranscript(ctx context.Context, id string) error {
 	return s.driver.DeleteAgentTranscript(ctx, id)
+}
+
+func (s *Store) UpsertAgentLead(ctx context.Context, lead *AgentLead) (*AgentLead, error) {
+	return s.driver.UpsertAgentLead(ctx, lead)
+}
+
+func (s *Store) GetAgentLead(ctx context.Context, find *FindAgentLead) (*AgentLead, error) {
+	return s.driver.GetAgentLead(ctx, find)
+}
+
+func (s *Store) ListAgentLeads(ctx context.Context, find *FindAgentLead) ([]*AgentLead, error) {
+	return s.driver.ListAgentLeads(ctx, find)
+}
+
+func (s *Store) UpdateAgentLeadStatus(ctx context.Context, tenantID int32, id string, status string, convertedAt *time.Time) (*AgentLead, error) {
+	return s.driver.UpdateAgentLeadStatus(ctx, tenantID, id, status, convertedAt)
 }
 
 // ReindexCheckpoint tracks reindex progress for resume-from-error support.

@@ -231,13 +231,16 @@ export class Widget {
     // Clear any previous error
     this.state.setError(null);
     this.state.setLoading(true);
+    const clientMessageId = this.state.getOrCreatePendingMessageID(message);
 
     try {
       const response = await sendMessage(
         this.config,
         message,
-        state.sessionId
+        state.sessionId,
+        clientMessageId
       );
+      this.state.acknowledgePendingMessage(message, clientMessageId);
 
       // Update session ID
       this.state.setSessionId(response.session_id);

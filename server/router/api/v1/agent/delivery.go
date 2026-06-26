@@ -17,8 +17,13 @@ func (s *Service) DeliverWebChatReply(ctx context.Context, tenantID int32, outbo
 		return store.ErrBridgeInvalidArgument
 	}
 
+	if !s.store.SupportsBridgeDelivery() {
+		slog.Warn("bridge delivery not supported by database driver", "tenant_id", tenantID, "outbox_id", outboxID)
+		return store.ErrBridgeUnsupportedDatabase
+	}
+
 	// 1. Claim exactly the newly created outbox row
-	row, err := s.store.ClaimBridgeReplyOutboxByOutboxID(ctx, tenantID, outboxID, "webchat-delivery-worker", time.Now(), 60)
+	row, err := s.store.ClaimBridgeReplyOutboxByOutboxID(ctx, tenantID, outboxID, "webchat-delivery-worker", time.Now(), 5*60)
 	if err != nil {
 		// Return error directly so caller can inspect completed/failed/conflict states
 		return err

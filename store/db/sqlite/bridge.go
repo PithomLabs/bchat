@@ -739,10 +739,14 @@ func (d *DB) ClaimPendingBridgeReplyOutbox(ctx context.Context, tenantID int32, 
 	rows, err := conn.QueryContext(ctx, `
 		SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at, completed_at, failed_at, failure_code, failure_message
 		FROM bridge_reply_outbox
-		WHERE tenant_id = ? AND status = 'pending'
+		WHERE tenant_id = ?
+		  AND (
+		    status = 'pending'
+		    OR (status = 'claimed' AND claim_expires_at <= ?)
+		  )
 		ORDER BY created_at ASC, id ASC
 		LIMIT ?
-	`, tenantID, limit)
+	`, tenantID, nowUnix, limit)
 	if err != nil {
 		rollback()
 		return nil, fmt.Errorf("query pending rows: %w", err)
@@ -781,8 +785,13 @@ func (d *DB) ClaimPendingBridgeReplyOutbox(ctx context.Context, tenantID int32, 
 			    claimed_at=?,
 			    claim_expires_at=?,
 			    attempt_count=attempt_count+1
-			WHERE id=? AND tenant_id=? AND status='pending'
-		`, claimToken, claimedBy, nowUnix, expiresAt, ob.ID, tenantID)
+			WHERE id=?
+			  AND tenant_id=?
+			  AND (
+			    status='pending'
+			    OR (status='claimed' AND claim_expires_at <= ?)
+			  )
+		`, claimToken, claimedBy, nowUnix, expiresAt, ob.ID, tenantID, nowUnix)
 		if err != nil {
 			rollback()
 			return nil, fmt.Errorf("update claim: %w", err)
@@ -1075,7 +1084,7 @@ func (d *DB) ClaimBridgeReplyOutboxByOutboxID(ctx context.Context, tenantID int3
 		rollback()
 		return nil, store.ErrBridgeOutboxAlreadyFailed
 	}
-	if ob.Status != "pending" {
+	if ob.Status != "pending" && !(ob.Status == "claimed" && ob.ClaimExpiresAt != nil && *ob.ClaimExpiresAt <= nowUnix) {
 		rollback()
 		return nil, store.ErrBridgeOutboxConflict
 	}
@@ -1091,8 +1100,13 @@ func (d *DB) ClaimBridgeReplyOutboxByOutboxID(ctx context.Context, tenantID int3
 		    claimed_at=?,
 		    claim_expires_at=?,
 		    attempt_count=attempt_count+1
-		WHERE id=? AND tenant_id=? AND status='pending'
-	`, claimToken, claimedBy, nowUnix, expiresAt, ob.ID, tenantID)
+		WHERE id=?
+		  AND tenant_id=?
+		  AND (
+		    status='pending'
+		    OR (status='claimed' AND claim_expires_at <= ?)
+		  )
+	`, claimToken, claimedBy, nowUnix, expiresAt, ob.ID, tenantID, nowUnix)
 	if err != nil {
 		rollback()
 		return nil, fmt.Errorf("update claim: %w", err)
@@ -1123,4 +1137,3 @@ func (d *DB) ClaimBridgeReplyOutboxByOutboxID(ctx context.Context, tenantID int3
 	rollback()
 	return nil, store.ErrBridgeOutboxConflict
 }
-

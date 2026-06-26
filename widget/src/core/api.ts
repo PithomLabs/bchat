@@ -6,7 +6,8 @@ import type { ChatResponse, ErrorResponse, WidgetConfig } from './types';
 export async function sendMessage(
   config: WidgetConfig,
   message: string,
-  sessionId: string | null
+  sessionId: string | null,
+  clientMessageId: string
 ): Promise<ChatResponse> {
   const url = `${config.baseUrl}/api/v1/agent/${config.tenant}/chat/ext`;
 
@@ -18,6 +19,7 @@ export async function sendMessage(
     body: JSON.stringify({
       session_id: sessionId,
       message: message,
+      client_message_id: clientMessageId,
     }),
   });
 

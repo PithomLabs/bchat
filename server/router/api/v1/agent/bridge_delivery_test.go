@@ -681,7 +681,7 @@ func TestBChatLiveBridgeReplyResponseAddsOnlyWebChatDeliveryTelemetry(t *testing
 
 	// Create agent audience
 	_, err := ts.CreateAgentAudience(ctx, &store.AgentAudience{
-		TenantID: tenant.ID, AudienceType: "internal", Role: "assistant", Tone: "helpful",
+		TenantID: tenant.ID, AudienceType: "external", Role: "assistant", Tone: "helpful",
 		EmergencyPhone: "", RateLimitRPM: 60,
 	})
 	require.NoError(t, err)
@@ -809,7 +809,7 @@ func TestBChatLiveEndToEndVisitorHumanReplyFlow(t *testing.T) {
 
 	// Create agent audience
 	_, err := ts.CreateAgentAudience(ctx, &store.AgentAudience{
-		TenantID: tenant.ID, AudienceType: "internal", Role: "assistant", Tone: "helpful",
+		TenantID: tenant.ID, AudienceType: "external", Role: "assistant", Tone: "helpful",
 		EmergencyPhone: "", RateLimitRPM: 60,
 	})
 	require.NoError(t, err)
