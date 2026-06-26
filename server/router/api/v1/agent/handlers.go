@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -274,6 +275,9 @@ func (h *Handler) HandleBridgeReply(c echo.Context) error {
 			deliveryStatus.Status = "skipped_failed"
 		} else if errors.Is(dErr, store.ErrBridgeOutboxConflict) {
 			deliveryStatus.Status = "skipped_claimed_or_conflict"
+		} else if errors.Is(dErr, store.ErrBridgeUnsupportedDatabase) {
+			deliveryStatus.Status = "skipped_unsupported_driver"
+			slog.Warn("bridge delivery skipped: unsupported database driver", "outbox_id", result.Outbox.OutboxID)
 		} else {
 			deliveryStatus.Status = "failed"
 			slog.Error("webchat delivery failed during bridge reply", "outbox_id", result.Outbox.OutboxID, "error", dErr)
@@ -4400,6 +4404,100 @@ func truncateString(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
+// HandleTenantRAGSearch allows tenant-scoped RAG search from the admin panel.
+// POST /api/v1/agent/:slug/rag/search
+// Requires: ADMIN role
+func (h *Handler) HandleTenantRAGSearch(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	// Check admin role
+	if !h.isAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
+	}
+
+	// Get tenant by slug
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	// Parse request
+	var req struct {
+		Query        string `json:"query"`
+		AudienceType string `json:"audience_type"`
+		TopK         int    `json:"top_k"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
+	}
+
+	if req.Query == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Query is required")
+	}
+
+	// Set defaults
+	if req.TopK <= 0 {
+		req.TopK = 5
+	}
+	if req.TopK > 20 {
+		req.TopK = 20
+	}
+	if req.AudienceType == "" {
+		req.AudienceType = "external"
+	}
+
+	// Execute search
+	searchQuery := SearchQuery{
+		QueryText:    req.Query,
+		TenantID:     tenant.ID,
+		AudienceType: req.AudienceType,
+		TopK:         req.TopK,
+		MinScore:     0.0,
+		ActiveOnly:   true,
+	}
+
+	result, err := h.service.vectorDB.Search(ctx, searchQuery)
+	if err != nil {
+		slog.Error("Tenant RAG search failed", "error", err, "tenantID", tenant.ID)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Search failed: "+err.Error())
+	}
+
+	// Build response
+	results := make([]RAGSearchResult, len(result.Chunks))
+	for i, chunk := range result.Chunks {
+		indexedAt := ""
+		if !chunk.IndexedAt.IsZero() {
+			indexedAt = chunk.IndexedAt.Format(time.RFC3339)
+		}
+
+		results[i] = RAGSearchResult{
+			Chunk: ChunkInfo{
+				ID:           chunk.ID,
+				ContentType:  chunk.ContentType,
+				AudienceType: chunk.AudienceType,
+				Title:        chunk.Title,
+				Content:      truncateString(chunk.Content, 300),
+				Code:         chunk.Code,
+				IsActive:     chunk.IsActive,
+				IsEmergency:  chunk.IsEmergency,
+				Priority:     chunk.Priority,
+				IndexedAt:    indexedAt,
+			},
+			Score: result.Scores[i],
+		}
+	}
+
+	response := RAGSearchResponse{
+		SearchMode:   result.SearchMode,
+		LatencyMs:    result.Latency.Milliseconds(),
+		TotalResults: result.Total,
+		Results:      results,
+	}
+
+	return c.JSON(http.StatusOK, response)
+}
+
 // ============================================================================
 // AUTO-GENERATE ANNOTATED KB.MD / POLICY.MD
 // ============================================================================
@@ -5452,6 +5550,165 @@ func (h *Handler) HandleDeleteTranscript(c echo.Context) error {
 	}
 
 	return c.NoContent(http.StatusNoContent)
+}
+
+// HandleListLeads returns captured leads for a tenant.
+// GET /api/v1/agent/:slug/leads
+func (h *Handler) HandleListLeads(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+	limit := parsePositiveInt(c.QueryParam("limit"), 100)
+	if limit > 500 {
+		limit = 500
+	}
+	offset := parsePositiveInt(c.QueryParam("offset"), 0)
+	statusValue := strings.TrimSpace(c.QueryParam("status"))
+	var status *string
+	if statusValue != "" {
+		status = &statusValue
+	}
+	leads, err := h.store.ListAgentLeads(ctx, &store.FindAgentLead{
+		TenantID: &tenant.ID,
+		Status:   status,
+		Limit:    limit,
+		Offset:   offset,
+	})
+	if err != nil {
+		slog.Error("Failed to list leads", "tenantID", tenant.ID, "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list leads")
+	}
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"leads": leads,
+		"total": len(leads),
+	})
+}
+
+// HandleGetLead returns a single captured lead.
+// GET /api/v1/agent/:slug/leads/:id
+func (h *Handler) HandleGetLead(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+	leadID := c.Param("id")
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+	lead, err := h.store.GetAgentLead(ctx, &store.FindAgentLead{ID: &leadID, TenantID: &tenant.ID})
+	if err != nil {
+		slog.Error("Failed to get lead", "leadID", leadID, "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get lead")
+	}
+	if lead == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Lead not found")
+	}
+	return c.JSON(http.StatusOK, lead)
+}
+
+// HandleUpdateLeadStatus updates a captured lead status.
+// PATCH /api/v1/agent/:slug/leads/:id/status
+func (h *Handler) HandleUpdateLeadStatus(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+	leadID := c.Param("id")
+	var req struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(c.Request().Body).Decode(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
+	}
+	req.Status = strings.TrimSpace(req.Status)
+	if !isValidLeadStatus(req.Status) {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid lead status")
+	}
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+	var convertedAt *time.Time
+	if req.Status == "converted" {
+		now := time.Now()
+		convertedAt = &now
+	}
+	lead, err := h.store.UpdateAgentLeadStatus(ctx, tenant.ID, leadID, req.Status, convertedAt)
+	if err != nil {
+		slog.Error("Failed to update lead status", "leadID", leadID, "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update lead status")
+	}
+	if lead == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Lead not found")
+	}
+	return c.JSON(http.StatusOK, lead)
+}
+
+// HandleExportLeads returns captured leads as CSV.
+// GET /api/v1/agent/:slug/leads/export
+func (h *Handler) HandleExportLeads(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+	leads, err := h.store.ListAgentLeads(ctx, &store.FindAgentLead{TenantID: &tenant.ID, Limit: 10000})
+	if err != nil {
+		slog.Error("Failed to export leads", "tenantID", tenant.ID, "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to export leads")
+	}
+	filename := fmt.Sprintf("%s-leads.csv", tenant.Slug)
+	c.Response().Header().Set(echo.HeaderContentType, "text/csv; charset=utf-8")
+	c.Response().Header().Set(echo.HeaderContentDisposition, fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Response().WriteHeader(http.StatusOK)
+	writer := csv.NewWriter(c.Response())
+	_ = writer.Write([]string{"id", "tenant_id", "session_id", "transcript_id", "name", "email", "phone", "topic", "location", "detected_intent", "status", "created_at", "updated_at", "last_message_at", "converted_at"})
+	for _, lead := range leads {
+		convertedAt := ""
+		if lead.ConvertedAt != nil {
+			convertedAt = lead.ConvertedAt.Format(time.RFC3339)
+		}
+		_ = writer.Write([]string{
+			lead.ID,
+			strconv.FormatInt(int64(lead.TenantID), 10),
+			lead.SessionID,
+			lead.TranscriptID,
+			lead.Name,
+			lead.Email,
+			lead.Phone,
+			lead.Topic,
+			lead.Location,
+			lead.DetectedIntent,
+			lead.Status,
+			lead.CreatedAt.Format(time.RFC3339),
+			lead.UpdatedAt.Format(time.RFC3339),
+			lead.LastMessageAt.Format(time.RFC3339),
+			convertedAt,
+		})
+	}
+	writer.Flush()
+	return writer.Error()
+}
+
+func parsePositiveInt(value string, fallback int) int {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
+		return fallback
+	}
+	return parsed
+}
+
+func isValidLeadStatus(status string) bool {
+	switch status {
+	case "new", "contacted", "qualified", "converted", "closed":
+		return true
+	default:
+		return false
+	}
 }
 
 // ============================================================================

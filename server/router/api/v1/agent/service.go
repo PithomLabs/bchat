@@ -879,9 +879,11 @@ func extractBatchFromError(err error) *int32 {
 
 // MemorySessionStore manages in-memory sessions for external users.
 type MemorySessionStore struct {
-	sessions map[memorySessionKey]*store.AgentSession
-	mu       sync.RWMutex
-	ttl      time.Duration
+	sessions     map[memorySessionKey]*store.AgentSession
+	mu           sync.RWMutex
+	ttl          time.Duration
+	sessionLocks map[memorySessionKey]*sync.Mutex
+	locksMu      sync.Mutex
 }
 
 type memorySessionKey struct {
@@ -892,8 +894,9 @@ type memorySessionKey struct {
 // NewMemorySessionStore creates a new memory session store.
 func NewMemorySessionStore(ttl time.Duration) *MemorySessionStore {
 	store := &MemorySessionStore{
-		sessions: make(map[memorySessionKey]*store.AgentSession),
-		ttl:      ttl,
+		sessions:     make(map[memorySessionKey]*store.AgentSession),
+		ttl:          ttl,
+		sessionLocks: make(map[memorySessionKey]*sync.Mutex),
 	}
 	go store.cleanupLoop()
 	return store
@@ -945,6 +948,20 @@ func (s *MemorySessionStore) Get(tenantID int32, sessionID string) *store.AgentS
 		return nil
 	}
 	return session
+}
+
+// SessionLock returns the per-session mutex for the given key, creating it if absent.
+// Callers must unlock the returned mutex when done.
+func (s *MemorySessionStore) SessionLock(tenantID int32, sessionID string) *sync.Mutex {
+	key := memorySessionKey{TenantID: tenantID, SessionID: sessionID}
+	s.locksMu.Lock()
+	defer s.locksMu.Unlock()
+	if mu, ok := s.sessionLocks[key]; ok {
+		return mu
+	}
+	mu := &sync.Mutex{}
+	s.sessionLocks[key] = mu
+	return mu
 }
 
 // Update updates a session in the store.
@@ -1372,8 +1389,9 @@ func (s *Service) LoadConfig(ctx context.Context, tenantSlug, audienceType strin
 
 // ChatRequest represents a chat request.
 type ChatRequest struct {
-	SessionID string `json:"session_id"`
-	Message   string `json:"message"`
+	SessionID       string `json:"session_id"`
+	Message         string `json:"message"`
+	ClientMessageID string `json:"client_message_id,omitempty"`
 }
 
 // BridgeRuntimeState represents the state of an active human handoff.
@@ -1407,12 +1425,14 @@ type ChatMetadata struct {
 }
 
 // ChatExternal handles chat for external (anonymous) users.
-// Uses internal audience config (cleaned/production-ready content).
+// Uses the external audience configuration and RAG generation.
 func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAgent string, req ChatRequest) (*ChatResponse, error) {
-	// Load config - use internal audience (cleaned content) for external users
-	config, err := s.LoadConfig(ctx, tenantSlug, "internal")
+	config, err := s.LoadConfig(ctx, tenantSlug, "external")
 	if err != nil {
 		return nil, err
+	}
+	if len(req.ClientMessageID) > 128 {
+		return nil, fmt.Errorf("client_message_id must be at most 128 characters")
 	}
 
 	// Validate before any per-session memory or durable lookup. Missing IDs are
@@ -1433,6 +1453,52 @@ func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAg
 
 	// Get or create a tenant-scoped in-memory session.
 	session := s.memorySessions.GetOrCreate(config.TenantID, sessionID)
+
+	// Durable idempotency check. Survives process restart and multi-instance
+	// deployments because the lookup hits the database, not in-memory state.
+	if req.ClientMessageID != "" {
+		// Acquire the per-session lock BEFORE accessing session state to prevent
+		// concurrent goroutines from both passing the idempotency check.
+		sessionLock := s.memorySessions.SessionLock(config.TenantID, sessionID)
+		sessionLock.Lock()
+		defer sessionLock.Unlock()
+
+		if cached, derr := s.store.GetAssistantMessageBySourceID(ctx, session.ID, req.ClientMessageID); derr == nil && cached != nil {
+			if usr, uerr := s.store.GetUserMessageBySourceID(ctx, session.ID, req.ClientMessageID); uerr == nil && usr != nil && usr.Content == req.Message {
+				return &ChatResponse{
+					SessionID: session.ID,
+					Message: ResponseMessage{
+						Role:      cached.Role,
+						Content:   cached.Content,
+						Timestamp: cached.CreatedAt,
+					},
+					Metadata: ChatMetadata{Phase: session.Phase},
+				}, nil
+			}
+		}
+
+		for i, message := range session.Messages {
+			if message.Role != "user" || message.Source != "external_client_message" || message.SourceID != req.ClientMessageID {
+				continue
+			}
+			if message.Content != req.Message {
+				break
+			}
+			for _, candidate := range session.Messages[i+1:] {
+				if candidate.Role == "assistant" && candidate.Source == "external_response" && candidate.SourceID == req.ClientMessageID {
+					return &ChatResponse{
+						SessionID: session.ID,
+						Message: ResponseMessage{
+							Role:      candidate.Role,
+							Content:   candidate.Content,
+							Timestamp: candidate.Timestamp,
+						},
+						Metadata: ChatMetadata{Phase: session.Phase},
+					}, nil
+				}
+			}
+		}
+	}
 
 	// Materialization is best-effort until bridge routing is enabled. Unsupported
 	// database drivers are expected and intentionally do not produce per-request logs.
@@ -1459,13 +1525,18 @@ func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAg
 			Role:      "user",
 			Content:   req.Message,
 			Timestamp: now,
+			Source:    "external_client_message",
+			SourceID:  req.ClientMessageID,
 		})
 		session.MessageCount = len(session.Messages)
 		s.memorySessions.Update(session)
 
 		if s.shouldRecordTranscript(ctx, config.TenantID) {
-			_ = s.saveTranscript(ctx, session, clientIP, userAgent)
+			if err := s.saveTranscript(ctx, session, clientIP, userAgent); err != nil {
+				slog.Warn("Failed to save transcript", "sessionID", session.ID, "error", err)
+			}
 		}
+		s.captureLeadFromSession(ctx, config, session)
 
 		return &ChatResponse{
 			SessionID: session.ID,
@@ -1491,6 +1562,38 @@ func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAg
 	if err != nil {
 		return nil, err
 	}
+	if req.ClientMessageID != "" && len(session.Messages) >= 2 {
+		userMessage := &session.Messages[len(session.Messages)-2]
+		assistantMessage := &session.Messages[len(session.Messages)-1]
+		userMessage.Source = "external_client_message"
+		userMessage.SourceID = req.ClientMessageID
+		assistantMessage.Source = "external_response"
+		assistantMessage.SourceID = req.ClientMessageID
+
+		records := []*store.AgentMessageRecord{
+			{
+				SessionID: session.ID,
+				TenantID:  config.TenantID,
+				Source:    "external_client_message",
+				SourceID:  req.ClientMessageID,
+				Role:      "user",
+				Content:   req.Message,
+				CreatedAt: userMessage.Timestamp,
+			},
+			{
+				SessionID: session.ID,
+				TenantID:  config.TenantID,
+				Source:    "external_response",
+				SourceID:  req.ClientMessageID,
+				Role:      "assistant",
+				Content:   assistantMessage.Content,
+				CreatedAt: assistantMessage.Timestamp,
+			},
+		}
+		if perr := s.store.CreateAgentMessages(ctx, records); perr != nil {
+			slog.Warn("failed to persist agent_messages for idempotency", "error", perr)
+		}
+	}
 
 	// Update memory session
 	if err := s.memorySessions.Update(session); err != nil {
@@ -1504,6 +1607,7 @@ func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAg
 			// Don't fail the request, just log the error
 		}
 	}
+	s.captureLeadFromSession(ctx, config, session)
 
 	return response, nil
 }
@@ -1776,11 +1880,13 @@ func (s *Service) processChat(ctx context.Context, config *AudienceConfig, sessi
 		MarkSafetyGiven(session)
 	}
 
-	// Add assistant message to history
+	// Add assistant message to history. Reuse the same timestamp in the response
+	// so an idempotent retry can return the original response exactly.
+	assistantTimestamp := time.Now()
 	session.Messages = append(session.Messages, store.AgentMessage{
 		Role:      "assistant",
 		Content:   response,
-		Timestamp: time.Now(),
+		Timestamp: assistantTimestamp,
 	})
 	session.MessageCount++
 	session.Phase = decision.Phase
@@ -1790,7 +1896,7 @@ func (s *Service) processChat(ctx context.Context, config *AudienceConfig, sessi
 		Message: ResponseMessage{
 			Role:      "assistant",
 			Content:   response,
-			Timestamp: time.Now(),
+			Timestamp: assistantTimestamp,
 		},
 		Metadata: ChatMetadata{
 			Intent:  classification.PrimaryIntent,
@@ -2170,7 +2276,7 @@ func (s *Service) buildSystemPrompt(ctx context.Context, config *AudienceConfig,
 	sb.WriteString("=== CRITICAL CONSTRAINTS (YOU MUST FOLLOW THESE) ===\n\n")
 
 	sb.WriteString("1. DO NOT INVENT SERVICES: You may ONLY mention services listed in the \"SERVICES WE OFFER\" section below. ")
-	sb.WriteString("If a customer asks about a service not listed, say \"I don't have information about that service\" or offer to connect them with someone who can help.\n\n")
+	sb.WriteString("If a customer asks about a service not listed, say \"I don't have information about that service\" and offer to collect their name plus email or phone for follow-up.\n\n")
 
 	sb.WriteString("2. DO NOT INVENT CONTACT INFO: You may ONLY provide phone numbers and emails listed in the \"AUTHORIZED CONTACT INFO\" section below. ")
 	sb.WriteString("Never make up or guess contact information.\n\n")
@@ -2200,6 +2306,7 @@ func (s *Service) buildSystemPrompt(ctx context.Context, config *AudienceConfig,
 	}
 	sb.WriteString("   - CUSTOMER CONTACT: When echoing back a customer's phone, use EXACTLY what they said\n")
 	sb.WriteString("   - NEVER modify or 'correct' a customer-provided phone number\n")
+	sb.WriteString("   - FOLLOW-UP CAPTURE: When follow-up is useful and the customer has not provided contact details, ask for their name and either email or phone. Do not require contact details before answering questions you can answer from the business knowledge base.\n")
 	sb.WriteString("   - Example: Customer says '555-123-4567' → You respond '555-123-4567'\n\n")
 
 	// =========================================================================
@@ -2601,7 +2708,8 @@ func (s *Service) buildRAGSystemPrompt(
 	if config.CompanyName != "" {
 		sb.WriteString(fmt.Sprintf("- You assist with %s topics ONLY - decline unrelated queries\n", config.CompanyName))
 	}
-	sb.WriteString("- If topic not in retrieved context, politely decline and offer relevant help\n")
+	sb.WriteString("- If topic not in retrieved context, politely decline and offer to collect the customer's name plus email or phone for follow-up\n")
+	sb.WriteString("- Do not require contact details before answering questions that are supported by the retrieved business context\n")
 	sb.WriteString("\n")
 
 	// =========================================================================
@@ -2781,10 +2889,12 @@ func extractCollectedInfo(messages []store.AgentMessage, tenantPhone string) *Co
 	info := &CollectedCustomerInfo{}
 
 	// Patterns for extracting info
-	// Name patterns: "I'm John", "My name is John Smith", "This is John"
+	// Name patterns: "I'm John", "My name is John Smith", "This is John", or standalone "john smith"
 	namePatterns := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)(?:I'm|I am|my name is|this is|it's|call me)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)`),
-		regexp.MustCompile(`(?i)^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)[,.]?\s+(?:here|speaking)`),
+		regexp.MustCompile(`(?i)(?:I'm|I am|my name is|this is|it's|call me)\s+([A-Za-z][a-z]+(?:\s+[A-Za-z][a-z]+)?)`),
+		regexp.MustCompile(`(?i)^([A-Za-z][a-z]+(?:\s+[A-Za-z][a-z]+)?)[,.]?\s+(?:here|speaking)`),
+		// Standalone name: a 1-2 word name-like string (e.g. "izak zuk", "john")
+		regexp.MustCompile(`(?i)^([a-z]{2,}(?:\s+[a-z]{2,})?)$`),
 	}
 
 	// Phone pattern (10 digits with various formats)
@@ -2931,13 +3041,22 @@ func isCommonWord(s string) bool {
 		"hello": true, "hi": true, "hey": true, "the": true, "a": true,
 		"an": true, "is": true, "it": true, "my": true, "your": true,
 		"here": true, "there": true, "this": true, "that": true,
-		"yes": true, "no": true, "okay": true, "ok": true,
+		"yes": true, "no": true, "okay": true, "ok": true, "need": true,
 		// Affirmation words that could be falsely extracted as names
 		"sure": true, "yeah": true, "yep": true, "right": true,
 		"absolutely": true, "certainly": true, "definitely": true,
 		"great": true, "perfect": true, "thanks": true, "thank": true,
+		"please": true, "sorry": true, "well": true, "just": true,
+		"maybe": true, "probably": true, "about": true, "very": true,
 	}
-	return commonWords[strings.ToLower(s)]
+	// Check if the whole string or any word in a multi-word string is common
+	words := strings.Fields(s)
+	for _, w := range words {
+		if commonWords[strings.ToLower(w)] {
+			return true
+		}
+	}
+	return false
 }
 
 // ============================================================================
@@ -3400,6 +3519,14 @@ func (s *Service) shouldRecordTranscript(ctx context.Context, tenantID int32) bo
 
 // saveTranscript persists the chat session to the transcripts table.
 func (s *Service) saveTranscript(ctx context.Context, session *store.AgentSession, clientIP, userAgent string) error {
+	customerInfo := extractCollectedInfo(session.Messages, "")
+	if session.CustomerName == "" && customerInfo.Name != "" {
+		session.CustomerName = customerInfo.Name
+	}
+	if session.CustomerPhone == "" && customerInfo.Phone != "" {
+		session.CustomerPhone = customerInfo.Phone
+	}
+
 	transcript := &store.AgentTranscript{
 		ID:               session.ID,
 		TenantID:         session.TenantID,
@@ -3411,7 +3538,8 @@ func (s *Service) saveTranscript(ctx context.Context, session *store.AgentSessio
 		UserAgent:        userAgent,
 		CustomerName:     session.CustomerName,
 		CustomerPhone:    session.CustomerPhone,
-		CustomerLocation: session.CustomerLocation,
+		CustomerEmail:    customerInfo.Email,
+		CustomerLocation: firstNonEmpty(session.CustomerLocation, customerInfo.Address),
 		DetectedIntent:   session.CurrentIntent,
 		StartedAt:        session.CreatedAt,
 		LastMessageAt:    time.Now(),
@@ -3433,6 +3561,80 @@ func (s *Service) saveTranscript(ctx context.Context, session *store.AgentSessio
 	// Create new transcript
 	_, err = s.store.CreateAgentTranscript(ctx, transcript)
 	return err
+}
+
+func (s *Service) captureLeadFromSession(ctx context.Context, config *AudienceConfig, session *store.AgentSession) {
+	if session == nil || config == nil || session.AudienceType != "external" || len(session.Messages) == 0 {
+		return
+	}
+	var tenantPhone string
+	if config.Audience != nil {
+		tenantPhone = GetValidatedReplacementPhone(config.Audience.EmergencyPhone, config.RawKB)
+	}
+
+	// Use the new robust extraction pipeline
+	existingDraft := GetOrCreateLeadDraft(session)
+	draft := ExtractContactInfoFull(ctx, "", session.Messages, tenantPhone, existingDraft)
+
+	// Check if customer declined
+	if draft != nil && draft.Declined {
+		return
+	}
+
+	// Fall back to session-level customer data (populated by transcript saving)
+	name := firstNonEmpty(draft.Name, session.CustomerName)
+	email := draft.Email
+	phone := firstNonEmpty(draft.Phone, session.CustomerPhone)
+	location := firstNonEmpty(draft.Location, session.CustomerLocation)
+
+	if name == "" || (email == "" && phone == "") {
+		return
+	}
+	lead := &store.AgentLead{
+		TenantID:       config.TenantID,
+		SessionID:      session.ID,
+		TranscriptID:   session.ID,
+		Name:           name,
+		Email:          email,
+		Phone:          phone,
+		Topic:          summarizeLeadTopic(session),
+		Location:       location,
+		DetectedIntent: session.CurrentIntent,
+		Status:         "new",
+		LastMessageAt:  session.UpdatedAt,
+	}
+	if lead.LastMessageAt.IsZero() {
+		lead.LastMessageAt = time.Now()
+	}
+	if _, err := s.store.UpsertAgentLead(ctx, lead); err != nil {
+		slog.Warn("failed to upsert agent lead", "tenant_id", config.TenantID, "session_id", session.ID, "error", err)
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func summarizeLeadTopic(session *store.AgentSession) string {
+	if session == nil {
+		return ""
+	}
+	for i := len(session.Messages) - 1; i >= 0; i-- {
+		msg := session.Messages[i]
+		if msg.Role == "user" && strings.TrimSpace(msg.Content) != "" {
+			content := strings.TrimSpace(msg.Content)
+			if len(content) > 240 {
+				return content[:240]
+			}
+			return content
+		}
+	}
+	return ""
 }
 
 // ProcessTicketChat processes a support ticket message using the advanced agent pipelines.
@@ -3502,7 +3704,6 @@ type BridgeReplyResponse struct {
 	Outbox          *BridgeReplyOutboxResponse `json:"outbox,omitempty"`
 	WebChatDelivery *WebChatDeliveryStatus     `json:"webchat_delivery,omitempty"`
 }
-
 
 type BridgeReleaseRequest struct {
 	SessionID string  `json:"session_id"`

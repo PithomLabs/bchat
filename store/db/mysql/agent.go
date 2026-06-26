@@ -3,6 +3,7 @@ package mysql
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/usememos/memos/store"
 )
@@ -347,6 +348,22 @@ func (d *DB) DeleteAgentTranscript(ctx context.Context, id string) error {
 	return errNotImplemented
 }
 
+func (d *DB) UpsertAgentLead(ctx context.Context, lead *store.AgentLead) (*store.AgentLead, error) {
+	return nil, errNotImplemented
+}
+
+func (d *DB) GetAgentLead(ctx context.Context, find *store.FindAgentLead) (*store.AgentLead, error) {
+	return nil, errNotImplemented
+}
+
+func (d *DB) ListAgentLeads(ctx context.Context, find *store.FindAgentLead) ([]*store.AgentLead, error) {
+	return nil, errNotImplemented
+}
+
+func (d *DB) UpdateAgentLeadStatus(ctx context.Context, tenantID int32, id string, status string, convertedAt *time.Time) (*store.AgentLead, error) {
+	return nil, errNotImplemented
+}
+
 // Reindex Checkpoint methods
 
 func (d *DB) UpsertReindexCheckpoint(ctx context.Context, checkpoint *store.ReindexCheckpoint) (*store.ReindexCheckpoint, error) {
@@ -359,4 +376,20 @@ func (d *DB) GetReindexCheckpoint(ctx context.Context, find *store.FindReindexCh
 
 func (d *DB) DeleteReindexCheckpoint(ctx context.Context, tenantID int32, audience string) error {
 	return errNotImplemented
+}
+
+func (d *DB) SupportsBridgeDelivery() bool {
+	return false
+}
+
+func (d *DB) CreateAgentMessages(ctx context.Context, messages []*store.AgentMessageRecord) error {
+	return errNotImplemented
+}
+
+func (d *DB) GetAssistantMessageBySourceID(ctx context.Context, sessionID, sourceID string) (*store.AgentMessageRecord, error) {
+	return nil, errNotImplemented
+}
+
+func (d *DB) GetUserMessageBySourceID(ctx context.Context, sessionID, sourceID string) (*store.AgentMessageRecord, error) {
+	return nil, errNotImplemented
 }

@@ -145,6 +145,12 @@ type Driver interface {
 	UpdateAgentSession(ctx context.Context, update *UpdateAgentSession) (*AgentSession, error)
 	DeleteAgentSession(ctx context.Context, id string) error
 
+	CreateAgentMessages(ctx context.Context, messages []*AgentMessageRecord) error
+	GetAssistantMessageBySourceID(ctx context.Context, sessionID, sourceID string) (*AgentMessageRecord, error)
+	GetUserMessageBySourceID(ctx context.Context, sessionID, sourceID string) (*AgentMessageRecord, error)
+
+	SupportsBridgeDelivery() bool
+
 	EnsureBridgeExternalSession(ctx context.Context, tenantID int32, sessionID string, now, expiresAt time.Time) (*BridgeExternalSession, bool, error)
 	FindBridgeExternalSession(ctx context.Context, tenantID int32, sessionID string) (*BridgeExternalSession, error)
 	TouchBridgeExternalSession(ctx context.Context, tenantID int32, sessionID string, now, expiresAt time.Time) error
@@ -227,6 +233,12 @@ type Driver interface {
 	UpdateAgentTranscript(ctx context.Context, transcript *AgentTranscript) error
 	DeleteAgentTranscript(ctx context.Context, id string) error
 
+	// Lead model related methods.
+	UpsertAgentLead(ctx context.Context, lead *AgentLead) (*AgentLead, error)
+	GetAgentLead(ctx context.Context, find *FindAgentLead) (*AgentLead, error)
+	ListAgentLeads(ctx context.Context, find *FindAgentLead) ([]*AgentLead, error)
+	UpdateAgentLeadStatus(ctx context.Context, tenantID int32, id string, status string, convertedAt *time.Time) (*AgentLead, error)
+
 	// Reindex checkpoint model related methods (resume-from-error).
 	UpsertReindexCheckpoint(ctx context.Context, checkpoint *ReindexCheckpoint) (*ReindexCheckpoint, error)
 	GetReindexCheckpoint(ctx context.Context, find *FindReindexCheckpoint) (*ReindexCheckpoint, error)
@@ -246,4 +258,3 @@ type Driver interface {
 	StoreBridgeAuthNonce(ctx context.Context, nonce *BridgeAuthNonce) error
 	CleanupBridgeAuthNonces(ctx context.Context, now time.Time) error
 }
-

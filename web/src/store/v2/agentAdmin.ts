@@ -260,6 +260,24 @@ export interface AgentTranscript {
   completionReason?: string;
 }
 
+export interface AgentLead {
+  id: string;
+  tenantId: number;
+  sessionId: string;
+  transcriptId?: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  topic?: string;
+  location?: string;
+  detectedIntent?: string;
+  status: "new" | "contacted" | "qualified" | "converted" | "closed";
+  createdAt: string;
+  updatedAt: string;
+  lastMessageAt: string;
+  convertedAt?: string;
+}
+
 export interface TenantSettings {
   recordTranscripts: boolean;
 }
@@ -444,6 +462,8 @@ class LocalState {
   // Transcripts
   transcripts: AgentTranscript[] = [];
   isLoadingTranscripts: boolean = false;
+  leads: AgentLead[] = [];
+  isLoadingLeads: boolean = false;
   tenantSettings: TenantSettings | null = null;
   reindexStatus: ReindexStatus | null = null;
   isPollingReindex: boolean = false;
@@ -1055,6 +1075,47 @@ const agentAdminStore = (() => {
     state.setPartial({ transcripts: [], isLoadingTranscripts: false });
   };
 
+  const fetchLeads = async (slug: string): Promise<void> => {
+    state.setPartial({ isLoadingLeads: true });
+    try {
+      const response = await axios.get<{ leads: AgentLead[] }>(
+        `/api/v1/agent/${slug}/leads`
+      );
+      runInAction(() => {
+        state.leads = response.data.leads || [];
+        state.isLoadingLeads = false;
+      });
+    } catch (error) {
+      runInAction(() => {
+        state.isLoadingLeads = false;
+        state.leads = [];
+      });
+    }
+  };
+
+  const updateLeadStatus = async (slug: string, leadId: string, status: AgentLead["status"]): Promise<boolean> => {
+    try {
+      const response = await axios.patch<AgentLead>(
+        `/api/v1/agent/${slug}/leads/${leadId}/status`,
+        { status }
+      );
+      runInAction(() => {
+        state.leads = state.leads.map((lead) => lead.id === leadId ? response.data : lead);
+      });
+      return true;
+    } catch (error) {
+      return false;
+    }
+  };
+
+  const exportLeads = (slug: string) => {
+    window.open(`/api/v1/agent/${slug}/leads/export`, "_blank", "noopener,noreferrer");
+  };
+
+  const clearLeads = () => {
+    state.setPartial({ leads: [], isLoadingLeads: false });
+  };
+
   const fetchTenantSettings = async (slug: string): Promise<void> => {
     try {
       const response = await axios.get<{ record_transcripts: boolean }>(
@@ -1417,6 +1478,10 @@ const agentAdminStore = (() => {
     fetchTranscripts,
     deleteTranscript,
     clearTranscripts,
+    fetchLeads,
+    updateLeadStatus,
+    exportLeads,
+    clearLeads,
     fetchTenantSettings,
     updateTenantSettings,
   };

@@ -294,6 +294,15 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	adminGroup.GET("/:slug/transcripts/:id", s.agentHandler.HandleGetTranscript)
 	adminGroup.DELETE("/:slug/transcripts/:id", s.agentHandler.HandleDeleteTranscript)
 
+	// Lead routes (admin only)
+	adminGroup.GET("/:slug/leads", s.agentHandler.HandleListLeads)
+	adminGroup.GET("/:slug/leads/export", s.agentHandler.HandleExportLeads)
+	adminGroup.GET("/:slug/leads/:id", s.agentHandler.HandleGetLead)
+	adminGroup.PATCH("/:slug/leads/:id/status", s.agentHandler.HandleUpdateLeadStatus)
+
+	// Tenant-scoped RAG search (admin only, for admin panel debug)
+	adminGroup.POST("/:slug/rag/search", s.agentHandler.HandleTenantRAGSearch)
+
 	// Tenant settings routes (admin only)
 	adminGroup.GET("/:slug/settings", s.agentHandler.HandleGetTenantSettings)
 	adminGroup.PUT("/:slug/settings", s.agentHandler.HandleUpdateTenantSettings)

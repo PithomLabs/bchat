@@ -570,7 +570,7 @@ func TestCreateBridgeHandoffReplyIfActiveDeliveryStatusConstraint(t *testing.T) 
 			client_message_id, text, delivery_status, created_at
 		) VALUES ('reply-fail', ?, ?, ?, ?, 'msg-fail', 'some text', 'delivered', ?)
 	`, tenant.ID, session.SessionID, handoff.HandoffID, handoff.Generation, time.Now().Unix())
-	
+
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "constraint failed")
 }
@@ -794,7 +794,7 @@ func TestCreateBridgeReplyOutboxStatusConstraint(t *testing.T) {
 			outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at
 		) VALUES ('ffffffff-ffff-ffff-ffff-ffffffffffff', ?, ?, ?, '11111111-1111-1111-1111-111111111111', 'delivered', 0, ?)
 	`, tenant.ID, session.SessionID, handoff.HandoffID, now)
-	
+
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "constraint failed")
 }
@@ -822,7 +822,7 @@ func TestCreateBridgeReplyOutboxAttemptCountConstraint(t *testing.T) {
 			outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at
 		) VALUES ('ffffffff-ffff-ffff-ffff-ffffffffffff', ?, ?, ?, '11111111-1111-1111-1111-111111111111', 'pending', 1, ?)
 	`, tenant.ID, session.SessionID, handoff.HandoffID, now)
-	
+
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "constraint failed")
 }
@@ -1183,7 +1183,7 @@ func TestBridgeReplyOutbox_CrossTenantIsolation(t *testing.T) {
 	require.Equal(t, tenant1.ID, claimedRows[0].TenantID)
 }
 
-func TestBridgeReplyOutbox_ExpiredClaimNotReclaimed(t *testing.T) {
+func TestBridgeReplyOutbox_ExpiredClaimReclaimed(t *testing.T) {
 	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "claim-expired")
 	defer ts.Close()
 
@@ -1207,15 +1207,50 @@ func TestBridgeReplyOutbox_ExpiredClaimNotReclaimed(t *testing.T) {
 	// wait for expiry
 	time.Sleep(1200 * time.Millisecond)
 
-	// Since we do not have an expired claim recycling loop/query, a second call should NOT pick it up
+	firstClaimToken := *claimedRows[0].ClaimToken
+
+	// Expired processing leases are reclaimed so crashed workers cannot strand delivery.
 	claimedRows2, err := ts.ClaimPendingBridgeReplyOutbox(ctx, tenant.ID, 1, "worker-2", time.Now(), 300)
 	require.NoError(t, err)
-	require.Empty(t, claimedRows2)
+	require.Len(t, claimedRows2, 1)
+	require.Equal(t, "worker-2", *claimedRows2[0].ClaimedBy)
+	require.NotEqual(t, firstClaimToken, *claimedRows2[0].ClaimToken)
+	require.Equal(t, 2, claimedRows2[0].AttemptCount)
 
-	// Verify status is still claimed
+	// Verify the durable row now belongs to the replacement worker.
 	ob, err := ts.GetBridgeReplyOutboxByReplyID(ctx, tenant.ID, res.Reply.ReplyID)
 	require.NoError(t, err)
 	require.Equal(t, "claimed", ob.Status)
+	require.Equal(t, "worker-2", *ob.ClaimedBy)
+	require.Equal(t, 2, ob.AttemptCount)
+}
+
+func TestBridgeReplyOutbox_DirectClaimReclaimsExpiredLease(t *testing.T) {
+	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "direct-claim-expired")
+	defer ts.Close()
+
+	res, err := ts.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
+		ReplyID:         uuid.NewString(),
+		TenantID:        tenant.ID,
+		SessionID:       session.SessionID,
+		HandoffID:       handoff.HandoffID,
+		ClientMessageID: "msg-direct-exp",
+		Text:            "t",
+		Now:             time.Now().Unix(),
+	})
+	require.NoError(t, err)
+
+	first, err := ts.ClaimBridgeReplyOutboxByOutboxID(ctx, tenant.ID, res.Outbox.OutboxID, "worker-1", time.Now(), 1)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+
+	time.Sleep(1200 * time.Millisecond)
+
+	second, err := ts.ClaimBridgeReplyOutboxByOutboxID(ctx, tenant.ID, res.Outbox.OutboxID, "worker-2", time.Now(), 300)
+	require.NoError(t, err)
+	require.Equal(t, "worker-2", *second.ClaimedBy)
+	require.NotEqual(t, *first.ClaimToken, *second.ClaimToken)
+	require.Equal(t, 2, second.AttemptCount)
 }
 
 func TestBridgeReplyOutbox_RejectsInvalidLimit(t *testing.T) {
@@ -1300,5 +1335,3 @@ func TestBridgeReplyOutbox_ClaimDeterministicOrder(t *testing.T) {
 	require.Equal(t, replies[0], claimedRows[0].ReplyID)
 	require.Equal(t, replies[1], claimedRows[1].ReplyID)
 }
-
-
