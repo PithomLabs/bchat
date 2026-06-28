@@ -2214,37 +2214,15 @@ func (s *Service) buildSystemPrompt(ctx context.Context, config *AudienceConfig,
 	// This prevents telling the LLM to use placeholder phones like (555) 000-0000
 	validatedPhone := GetValidatedReplacementPhone(config.Audience.EmergencyPhone, config.RawKB)
 
+	// Get contact state and instructions
+	contactState := getContactState(session, validatedPhone)
+	contactInstruction := buildContactInstruction(contactState, classification, validatedPhone)
+
 	// =========================================================================
 	// SECTION 0: CUSTOMER INFO ALREADY PROVIDED (Context Retention)
 	// =========================================================================
-	// Extract info the customer has already provided to prevent re-asking
-	if session != nil && len(session.Messages) > 0 {
-		collectedInfo := extractCollectedInfo(session.Messages, validatedPhone)
-		hasInfo := collectedInfo.Name != "" || collectedInfo.Phone != "" || collectedInfo.Email != "" || collectedInfo.Address != ""
-
-		if hasInfo {
-			sb.WriteString("=== CUSTOMER INFO ALREADY PROVIDED (DO NOT ASK AGAIN) ===\n\n")
-			sb.WriteString("The customer has already provided the following information in this conversation:\n")
-			if collectedInfo.Name != "" {
-				sb.WriteString("- Customer Name: " + collectedInfo.Name + "\n")
-			}
-			if collectedInfo.Phone != "" {
-				sb.WriteString("- Customer Phone: " + collectedInfo.Phone + "\n")
-			}
-			if collectedInfo.Email != "" {
-				sb.WriteString("- Customer Email: " + collectedInfo.Email + "\n")
-			}
-			if collectedInfo.Address != "" {
-				sb.WriteString("- Customer Address: " + collectedInfo.Address + "\n")
-			}
-			sb.WriteString("\nIMPORTANT: Do NOT ask for this information again. Acknowledge that you have it.\n")
-			// CRITICAL: Add explicit instruction to preserve customer phone verbatim
-			if collectedInfo.Phone != "" {
-				sb.WriteString("CRITICAL: When echoing back the customer's phone number, use EXACTLY: " + collectedInfo.Phone + "\n")
-				sb.WriteString("This is the CUSTOMER's phone - do NOT replace it with the company phone number!\n")
-			}
-			sb.WriteString("\n")
-		}
+	if contactInstruction.Section0Addition != "" {
+		sb.WriteString(contactInstruction.Section0Addition)
 	}
 
 	// =========================================================================
@@ -2280,8 +2258,7 @@ func (s *Service) buildSystemPrompt(ctx context.Context, config *AudienceConfig,
 	// =========================================================================
 	sb.WriteString("=== CRITICAL CONSTRAINTS (YOU MUST FOLLOW THESE) ===\n\n")
 
-	sb.WriteString("1. DO NOT INVENT SERVICES: You may ONLY mention services listed in the \"SERVICES WE OFFER\" section below. ")
-	sb.WriteString("If a customer asks about a service not listed, say \"I don't have information about that service\" and offer to collect their name plus email or phone for follow-up.\n\n")
+	sb.WriteString(contactInstruction.Rule1Text)
 
 	sb.WriteString("2. DO NOT INVENT CONTACT INFO: You may ONLY provide phone numbers and emails listed in the \"AUTHORIZED CONTACT INFO\" section below. ")
 	sb.WriteString("Never make up or guess contact information.\n\n")
@@ -2305,14 +2282,7 @@ func (s *Service) buildSystemPrompt(ctx context.Context, config *AudienceConfig,
 	sb.WriteString("7. WHEN UNCERTAIN: If you're unsure about any information, acknowledge it honestly. ")
 	sb.WriteString("Say \"I'm not certain about that\" rather than guessing.\n\n")
 
-	sb.WriteString("8. CONTACT INFORMATION HANDLING:\n")
-	if validatedPhone != "" {
-		sb.WriteString("   - COMPANY CONTACT: When providing YOUR phone number, use ONLY: " + validatedPhone + "\n")
-	}
-	sb.WriteString("   - CUSTOMER CONTACT: When echoing back a customer's phone, use EXACTLY what they said\n")
-	sb.WriteString("   - NEVER modify or 'correct' a customer-provided phone number\n")
-	sb.WriteString("   - FOLLOW-UP CAPTURE: When follow-up is useful and the customer has not provided contact details, ask for their name and either email or phone. Do not require contact details before answering questions you can answer from the business knowledge base.\n")
-	sb.WriteString("   - Example: Customer says '555-123-4567' → You respond '555-123-4567'\n\n")
+	sb.WriteString(contactInstruction.Rule8Text)
 
 	// =========================================================================
 	// SECTION 1B: SCOPE OF KNOWLEDGE (Tenant Boundary)
@@ -2672,29 +2642,15 @@ func (s *Service) buildRAGSystemPrompt(
 	}
 	sb.WriteString("\n")
 
-	// =========================================================================
-	// SECTION 2: CUSTOMER CONTEXT (Info already collected - critical)
-	// =========================================================================
-	if session != nil && len(session.Messages) > 0 {
-		collectedInfo := extractCollectedInfo(session.Messages, validatedPhone)
-		hasInfo := collectedInfo.Name != "" || collectedInfo.Phone != "" || collectedInfo.Email != "" || collectedInfo.Address != ""
+	// Get contact state and instructions
+	contactState := getContactState(session, validatedPhone)
+	contactInstruction := buildContactInstruction(contactState, classification, validatedPhone)
 
-		if hasInfo {
-			sb.WriteString("=== CUSTOMER INFO (DO NOT ASK AGAIN) ===\n")
-			if collectedInfo.Name != "" {
-				sb.WriteString("Name: " + collectedInfo.Name + "\n")
-			}
-			if collectedInfo.Phone != "" {
-				sb.WriteString("Phone: " + collectedInfo.Phone + " (use exactly this when echoing back)\n")
-			}
-			if collectedInfo.Email != "" {
-				sb.WriteString("Email: " + collectedInfo.Email + "\n")
-			}
-			if collectedInfo.Address != "" {
-				sb.WriteString("Address: " + collectedInfo.Address + "\n")
-			}
-			sb.WriteString("\n")
-		}
+	// =========================================================================
+	// SECTION 0: CUSTOMER INFO (DO NOT ASK AGAIN)
+	// =========================================================================
+	if section0 := buildRAGSection0(contactState); section0 != "" {
+		sb.WriteString(section0)
 	}
 
 	// =========================================================================
@@ -2713,7 +2669,7 @@ func (s *Service) buildRAGSystemPrompt(
 	if config.CompanyName != "" {
 		sb.WriteString(fmt.Sprintf("- You assist with %s topics ONLY - decline unrelated queries\n", config.CompanyName))
 	}
-	sb.WriteString("- If topic not in retrieved context, politely decline and offer to collect the customer's name plus email or phone for follow-up\n")
+	sb.WriteString(contactInstruction.RAGFallbackText)
 	sb.WriteString("- Do not require contact details before answering questions that are supported by the retrieved business context\n")
 	sb.WriteString("\n")
 
@@ -2887,6 +2843,181 @@ type CollectedCustomerInfo struct {
 	Address string
 }
 
+type ContactState struct {
+	Name            string
+	Phone           string
+	Email           string
+	Address         string
+	HasName         bool
+	HasEmailOrPhone bool
+	IsComplete      bool
+}
+
+func getContactState(session *store.AgentSession, validatedPhone string) ContactState {
+	state := ContactState{}
+	if session == nil || len(session.Messages) == 0 {
+		return state
+	}
+	info := extractCollectedInfo(session.Messages, validatedPhone)
+	if info == nil {
+		return state
+	}
+	state.Name = info.Name
+	state.Phone = info.Phone
+	state.Email = info.Email
+	state.Address = info.Address
+	state.HasName = info.Name != ""
+	state.HasEmailOrPhone = info.Phone != "" || info.Email != ""
+	state.IsComplete = state.HasName && state.HasEmailOrPhone
+	return state
+}
+
+type ContactInstruction struct {
+	Section0Addition string
+	Rule1Text        string
+	Rule8Text        string
+	RAGFallbackText  string
+}
+
+func isFallbackIntent(intent string) bool {
+	switch intent {
+	case "out_of_coverage", "out_of_scope", "not_found", "unsupported", "unknown":
+		return true
+	}
+	return false
+}
+
+func buildContactInstruction(state ContactState, classification *Classification, validatedPhone string) ContactInstruction {
+	fallback := false
+	if classification != nil {
+		fallback = isFallbackIntent(classification.PrimaryIntent)
+	}
+
+	return ContactInstruction{
+		Section0Addition: buildSection0(state),
+		Rule1Text:        buildRule1(state, fallback),
+		Rule8Text:        buildRule8(state, validatedPhone),
+		RAGFallbackText:  buildRAGFallback(state, fallback),
+	}
+}
+
+func buildSection0(state ContactState) string {
+	hasInfo := state.Name != "" || state.Phone != "" || state.Email != "" || state.Address != ""
+	if !hasInfo {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("=== CUSTOMER INFO ALREADY PROVIDED (DO NOT ASK AGAIN) ===\n\n")
+	sb.WriteString("The customer has already provided the following information in this conversation:\n")
+	if state.Name != "" {
+		sb.WriteString("- Customer Name: " + state.Name + "\n")
+	}
+	if state.Phone != "" {
+		sb.WriteString("- Customer Phone: " + state.Phone + "\n")
+	}
+	if state.Email != "" {
+		sb.WriteString("- Customer Email: " + state.Email + "\n")
+	}
+	if state.Address != "" {
+		sb.WriteString("- Customer Address: " + state.Address + "\n")
+	}
+	sb.WriteString("\nIMPORTANT: Do NOT ask for this information again. Acknowledge that you have it.\n")
+	if state.Phone != "" {
+		sb.WriteString("CRITICAL: When echoing back the customer's phone number, use EXACTLY: " + state.Phone + "\n")
+		sb.WriteString("This is the CUSTOMER's phone - do NOT replace it with the company phone number!\n")
+	}
+	sb.WriteString("\n")
+	return sb.String()
+}
+
+func buildRAGSection0(state ContactState) string {
+	hasInfo := state.Name != "" || state.Phone != "" || state.Email != "" || state.Address != ""
+	if !hasInfo {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("=== CUSTOMER INFO ALREADY PROVIDED (DO NOT ASK AGAIN) ===\n\n")
+	sb.WriteString("The customer has already provided the following information in this conversation:\n")
+	if state.Name != "" {
+		sb.WriteString("- Customer Name: " + state.Name + "\n")
+	}
+	if state.Phone != "" {
+		sb.WriteString("- Customer Phone: " + state.Phone + " (use exactly this when echoing back)\n")
+	}
+	if state.Email != "" {
+		sb.WriteString("- Customer Email: " + state.Email + "\n")
+	}
+	if state.Address != "" {
+		sb.WriteString("- Customer Address: " + state.Address + "\n")
+	}
+	sb.WriteString("\nIMPORTANT: Do NOT ask for this information again. Acknowledge that you have it.\n\n")
+	return sb.String()
+}
+
+func buildRule1(state ContactState, fallback bool) string {
+	base := "1. DO NOT INVENT SERVICES: You may ONLY mention services listed in the \"SERVICES WE OFFER\" section below. "
+	if fallback {
+		if state.IsComplete {
+			return base + "If a customer asks about a service not listed, say \"I don't have information about that service\". Since you already have their contact info, do NOT ask for it again; simply state that our team will follow up.\n\n"
+		}
+		if state.HasName {
+			return base + "If a customer asks about a service not listed, say \"I don't have information about that service\" and ask only for their email or phone for follow-up.\n\n"
+		}
+		if state.HasEmailOrPhone {
+			return base + "If a customer asks about a service not listed, say \"I don't have information about that service\" and ask only for their name for follow-up.\n\n"
+		}
+		return base + "If a customer asks about a service not listed, say \"I don't have information about that service\" and offer to collect their name plus email or phone for follow-up.\n\n"
+	}
+
+	if state.IsComplete {
+		return base + "If a customer asks about a service not listed, say \"I don't have information about that service\". Since they have already provided their contact information, do NOT ask for it again.\n\n"
+	}
+	return base + "If a customer asks about a service not listed, say \"I don't have information about that service\" and offer to collect their name plus email or phone for follow-up.\n\n"
+}
+
+func buildRule8(state ContactState, validatedPhone string) string {
+	var sb strings.Builder
+	sb.WriteString("8. CONTACT INFORMATION HANDLING:\n")
+	if validatedPhone != "" {
+		sb.WriteString("   - COMPANY CONTACT: When providing YOUR phone number, use ONLY: " + validatedPhone + "\n")
+	}
+	sb.WriteString("   - CUSTOMER CONTACT: When echoing back a customer's phone, use EXACTLY what they said\n")
+	sb.WriteString("   - NEVER modify or 'correct' a customer-provided phone number\n")
+
+	if state.IsComplete {
+		sb.WriteString("   - FOLLOW-UP CAPTURE: Do NOT ask to collect contact details because the customer has already provided complete contact details (name and email/phone). Tell the customer that a member of the team will follow up using the information they already provided. Do not phrase follow-up as 'I can collect your contact information.'\n")
+	} else if state.HasName {
+		sb.WriteString("   - FOLLOW-UP CAPTURE: The customer has provided their name but is missing email/phone. When follow-up is useful, ask only for their email or phone. Do not ask for their name again.\n")
+	} else if state.HasEmailOrPhone {
+		sb.WriteString("   - FOLLOW-UP CAPTURE: The customer has provided email/phone but is missing their name. When follow-up is useful, ask only for their name. Do not ask for their email or phone again.\n")
+	} else {
+		sb.WriteString("   - FOLLOW-UP CAPTURE: When follow-up is useful and the customer has not provided contact details, ask for their name and either email or phone. Do not require contact details before answering questions you can answer from the business knowledge base.\n")
+	}
+	sb.WriteString("   - Example: Customer says '555-123-4567' → You respond '555-123-4567'\n\n")
+	return sb.String()
+}
+
+func buildRAGFallback(state ContactState, fallback bool) string {
+	base := "- If topic not in retrieved context, politely decline"
+	if fallback {
+		if state.IsComplete {
+			return base + " and acknowledge you have their contact information so a team member can follow up. Do not ask for it again.\n"
+		}
+		if state.HasName {
+			return base + " and ask only for their email or phone for follow-up. Do not ask for their name again.\n"
+		}
+		if state.HasEmailOrPhone {
+			return base + " and ask only for their name for follow-up. Do not ask for their email or phone again.\n"
+		}
+		return base + " and offer to collect the customer's name plus email or phone for follow-up\n"
+	}
+
+	if state.IsComplete {
+		return base + " and acknowledge you have their contact information so a team member can follow up. Do not ask for it again.\n"
+	}
+	return base + " and offer to collect the customer's name plus email or phone for follow-up\n"
+}
+
 // extractCollectedInfo scans conversation history to find customer-provided information.
 // This helps prevent the agent from re-asking for info already provided.
 // It also detects corrections (e.g., "my phone is actually X") and updates accordingly.
@@ -2921,6 +3052,10 @@ func extractCollectedInfo(messages []store.AgentMessage, tenantPhone string) *Co
 	// Address pattern (simple: number + street name + optional city/state/zip)
 	addressPattern := regexp.MustCompile(`\b(\d+\s+[A-Za-z]+(?:\s+[A-Za-z]+)*(?:\s+(?:St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ln|Lane|Blvd|Boulevard|Way|Ct|Court|Pl|Place)\.?)?)(?:,?\s+([A-Za-z\s]+),?\s+([A-Z]{2})?\s*(\d{5}(?:-\d{4})?)?)?`)
 
+	// Negation/Retraction patterns (only for user role)
+	phoneRetractPattern := regexp.MustCompile(`(?i)(?:don't|do not|stop|never)\s+(?:call|contact|phone|reach)\b|(?i)(?:forget|remove|delete|clear|wrong|retract)\s+(?:my\s+)?(?:phone|number)\b|(?i)rather\s+not\s+(?:give|provide)\s+(?:my\s+)?(?:phone|number)\b`)
+	emailRetractPattern := regexp.MustCompile(`(?i)(?:don't|do not|stop|never)\s+(?:email|contact|reach)\b|(?i)(?:forget|remove|delete|clear|wrong|retract)\s+(?:my\s+)?email\b|(?i)rather\s+not\s+(?:give|provide)\s+(?:my\s+)?email\b`)
+
 	// Normalize tenant phone for comparison
 	tenantPhoneNorm := normalizePhoneDigits(tenantPhone)
 
@@ -2946,12 +3081,14 @@ func extractCollectedInfo(messages []store.AgentMessage, tenantPhone string) *Co
 		}
 
 		// Check for phone corrections FIRST (these override any previous phone)
+		phoneExtracted := false
 		for _, corrPattern := range phoneCorrectionPatterns {
 			if match := corrPattern.FindStringSubmatch(content); len(match) > 1 {
 				correctedPhone := match[1]
 				phoneNorm := normalizePhoneDigits(correctedPhone)
 				if phoneNorm != tenantPhoneNorm && !isPlaceholderPhoneDigits(phoneNorm) {
 					info.Phone = correctedPhone // Override with corrected phone
+					phoneExtracted = true
 					break
 				}
 			}
@@ -2964,16 +3101,33 @@ func extractCollectedInfo(messages []store.AgentMessage, tenantPhone string) *Co
 				// Don't capture the tenant's own phone number
 				if phoneNorm != tenantPhoneNorm && !isPlaceholderPhoneDigits(phoneNorm) {
 					info.Phone = match
+					phoneExtracted = true
+				}
+			}
+		} else if !phoneExtracted {
+			// If phone is already set, but this message has another phone, check if it matches
+			if match := phonePattern.FindString(content); match != "" {
+				phoneNorm := normalizePhoneDigits(match)
+				if phoneNorm != tenantPhoneNorm && !isPlaceholderPhoneDigits(phoneNorm) {
+					phoneExtracted = true
 				}
 			}
 		}
 
 		// Extract email (only if not already found)
+		emailExtracted := false
 		if info.Email == "" {
 			if match := emailPattern.FindString(content); match != "" {
 				// Filter out placeholder emails
 				if !isPlaceholderEmailCheck(match) {
 					info.Email = match
+					emailExtracted = true
+				}
+			}
+		} else {
+			if match := emailPattern.FindString(content); match != "" {
+				if !isPlaceholderEmailCheck(match) {
+					emailExtracted = true
 				}
 			}
 		}
@@ -2986,6 +3140,14 @@ func extractCollectedInfo(messages []store.AgentMessage, tenantPhone string) *Co
 					info.Address = addr
 				}
 			}
+		}
+
+		// Apply negation detection - ONLY if no new info of that type was extracted in this turn
+		if phoneRetractPattern.MatchString(content) && !phoneExtracted {
+			info.Phone = ""
+		}
+		if emailRetractPattern.MatchString(content) && !emailExtracted {
+			info.Email = ""
 		}
 	}
 
