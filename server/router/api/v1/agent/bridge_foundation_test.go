@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -273,6 +274,90 @@ func TestChatExternalClientMessageIDPersistsToDatabase(t *testing.T) {
 	).Scan(&userCount)
 	require.NoError(t, err)
 	require.Equal(t, 1, userCount, "exactly one user message row should be persisted")
+}
+
+func TestChatExternalEscalationCreatesLeadAndTicketWithoutHandoff(t *testing.T) {
+	ctx, ts, service, tenant := newBridgeChatTestService(t, "chat-escalation-lead-ticket")
+	defer ts.Close()
+
+	resp, err := service.ChatExternal(ctx, tenant.Slug, "127.0.0.1", "test", ChatRequest{
+		SessionID: "session-escalate-lead",
+		Message:   "I need to speak to a manager. My name is Ada Lovelace, my email is ada@example.org.",
+	})
+	require.NoError(t, err)
+	require.Nil(t, resp.Bridge)
+	require.Contains(t, resp.Message.Content, "I've created ticket TKT-")
+	require.Contains(t, resp.Message.Content, "using the contact information you provided")
+
+	leads, err := ts.ListAgentLeads(ctx, &store.FindAgentLead{TenantID: &tenant.ID})
+	require.NoError(t, err)
+	require.Len(t, leads, 1)
+	require.Equal(t, "Ada Lovelace", leads[0].Name)
+	require.Equal(t, "ada@example.org", leads[0].Email)
+	require.Equal(t, "escalation", leads[0].DetectedIntent)
+
+	ticketType := "agent_escalation"
+	tickets, err := ts.ListTickets(ctx, &store.FindTicket{Type: &ticketType})
+	require.NoError(t, err)
+	require.Len(t, tickets, 1)
+	require.Equal(t, store.TicketPriorityMedium, tickets[0].Priority)
+
+	memoUID := strings.TrimPrefix(tickets[0].Description, "/m/")
+	memo, err := ts.GetMemo(ctx, &store.FindMemo{UID: &memoUID})
+	require.NoError(t, err)
+	require.NotNil(t, memo)
+	require.Contains(t, memo.Content, "Session ID:** session-escalate-lead")
+	require.Contains(t, memo.Content, "Lead ID:** "+leads[0].ID)
+	require.Contains(t, memo.Content, "Email:** ada@example.org")
+
+	activeHandoff, err := ts.FindActiveBridgeHandoff(ctx, tenant.ID, "session-escalate-lead")
+	require.NoError(t, err)
+	require.Nil(t, activeHandoff)
+}
+
+func TestChatExternalEscalationDedupesTicketAcrossServiceRestart(t *testing.T) {
+	ctx, ts, service, tenant := newBridgeChatTestService(t, "chat-escalation-dedupe")
+	defer ts.Close()
+
+	req := ChatRequest{
+		SessionID: "session-escalate-dedupe",
+		Message:   "I want a supervisor. My name is Grace Hopper and my phone is 415-555-1212.",
+	}
+	first, err := service.ChatExternal(ctx, tenant.Slug, "127.0.0.1", "test", req)
+	require.NoError(t, err)
+	require.Contains(t, first.Message.Content, "I've created ticket TKT-")
+
+	service2 := NewService(ts, &profile.Profile{Driver: "sqlite", Mode: "prod"})
+	second, err := service2.ChatExternal(ctx, tenant.Slug, "127.0.0.1", "test", req)
+	require.NoError(t, err)
+	require.Contains(t, second.Message.Content, "I've created ticket TKT-")
+
+	ticketType := "agent_escalation"
+	tickets, err := ts.ListTickets(ctx, &store.FindTicket{Type: &ticketType})
+	require.NoError(t, err)
+	require.Len(t, tickets, 1)
+}
+
+func TestChatExternalEscalationWithIncompleteContactAsksForContactInfo(t *testing.T) {
+	ctx, ts, service, tenant := newBridgeChatTestService(t, "chat-escalation-incomplete-contact")
+	defer ts.Close()
+
+	resp, err := service.ChatExternal(ctx, tenant.Slug, "127.0.0.1", "test", ChatRequest{
+		SessionID: "session-escalate-incomplete",
+		Message:   "I want to speak to your supervisor.",
+	})
+	require.NoError(t, err)
+	require.Contains(t, resp.Message.Content, "I've created ticket TKT-")
+	require.Contains(t, resp.Message.Content, "Please share your name and either a phone number or email address")
+
+	leads, err := ts.ListAgentLeads(ctx, &store.FindAgentLead{TenantID: &tenant.ID})
+	require.NoError(t, err)
+	require.Empty(t, leads)
+
+	ticketType := "agent_escalation"
+	tickets, err := ts.ListTickets(ctx, &store.FindTicket{Type: &ticketType})
+	require.NoError(t, err)
+	require.Len(t, tickets, 1)
 }
 
 func TestCreateAgentMessagesNilSlice(t *testing.T) {

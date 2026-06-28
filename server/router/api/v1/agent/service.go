@@ -1709,7 +1709,6 @@ func (s *Service) processChat(ctx context.Context, config *AudienceConfig, sessi
 
 	// Score the user message for urgency, sentiment, escalation signals, etc.
 	messageScore := ScoreUserMessage(userMessage, config)
-	_ = messageScore // Score available for future use in routing decisions
 
 	// Classify intent
 	classification, err := s.classifyIntent(ctx, config, userMessage)
@@ -1728,20 +1727,27 @@ func (s *Service) processChat(ctx context.Context, config *AudienceConfig, sessi
 	session.CurrentIntent = classification.PrimaryIntent
 	session.UrgencyLevel = classification.Urgency
 
-	// Handle escalation intent - create ticket if needed
-	if classification.PrimaryIntent == "escalation" && GetEscalationTicket(session) == "" {
-		// Extract customer info for ticket
-		customerInfo := map[string]string{
-			"name":  session.CustomerName,
-			"phone": session.CustomerPhone,
-		}
-		// Create escalation ticket
-		ticketInfo, err := s.CreateEscalationTicket(ctx, config.TenantID, "supervisor_request", customerInfo, userMessage)
-		if err != nil {
-			slog.Error("failed to create escalation ticket", "error", err)
+	// Handle escalation intent - create/reuse a ticket if needed.
+	if s.shouldCreateEscalationTicket(config, classification, messageScore) && GetEscalationTicket(session) == "" {
+		if config.AudienceType == "external" {
+			if ticketInfo, err := s.handleExternalEscalation(ctx, config, session, userMessage, messageScore); err != nil {
+				slog.Error("failed to handle external escalation", "error", err, "session_id", session.ID)
+			} else if ticketInfo != nil {
+				SetEscalationTicket(session, ticketInfo.TicketNumber)
+				slog.Info("external escalation ticket ready", "ticket", ticketInfo.TicketNumber, "session_id", session.ID)
+			}
 		} else {
-			SetEscalationTicket(session, ticketInfo.TicketNumber)
-			slog.Info("escalation ticket created", "ticket", ticketInfo.TicketNumber, "session_id", session.ID)
+			customerInfo := map[string]string{
+				"name":  session.CustomerName,
+				"phone": session.CustomerPhone,
+			}
+			ticketInfo, err := s.CreateEscalationTicket(ctx, config.TenantID, "supervisor_request", customerInfo, userMessage)
+			if err != nil {
+				slog.Error("failed to create escalation ticket", "error", err)
+			} else {
+				SetEscalationTicket(session, ticketInfo.TicketNumber)
+				slog.Info("escalation ticket created", "ticket", ticketInfo.TicketNumber, "session_id", session.ID)
+			}
 		}
 	}
 
@@ -1870,8 +1876,7 @@ func (s *Service) processChat(ctx context.Context, config *AudienceConfig, sessi
 	if ticketNum := GetEscalationTicket(session); ticketNum != "" {
 		// Check if response doesn't already contain a ticket number
 		if !strings.Contains(response, "TKT-") && !strings.Contains(response, "CMP-") {
-			// Add ticket number to response
-			response = fmt.Sprintf("I've created ticket %s for your request. A supervisor will call you at the phone number you provided within 30 minutes.\n\n%s", ticketNum, response)
+			response = fmt.Sprintf("%s\n\n%s", buildEscalationAcknowledgement(session, ticketNum), response)
 		}
 	}
 
@@ -3104,6 +3109,193 @@ type EscalationTicketInfo struct {
 	Issue         string
 }
 
+func (s *Service) shouldCreateEscalationTicket(config *AudienceConfig, classification *Classification, score *ConversationScore) bool {
+	if classification != nil && classification.PrimaryIntent == "escalation" {
+		return true
+	}
+	if config == nil || config.AudienceType != "external" || score == nil || !score.ShouldEscalate {
+		return false
+	}
+	if cat, ok := score.Categories["escalation_signal"]; ok {
+		return cat.Level == "high"
+	}
+	return false
+}
+
+func (s *Service) handleExternalEscalation(ctx context.Context, config *AudienceConfig, session *store.AgentSession, userMessage string, score *ConversationScore) (*EscalationTicketInfo, error) {
+	if session.CurrentIntent == "" || session.CurrentIntent == "unknown" {
+		session.CurrentIntent = "escalation"
+	}
+
+	draft, lead := s.refreshLeadFromSession(ctx, config, session)
+
+	customerInfo := map[string]string{
+		"name":            firstNonEmpty(valueFromDraft(draft, "name"), session.CustomerName),
+		"phone":           firstNonEmpty(valueFromDraft(draft, "phone"), session.CustomerPhone),
+		"email":           valueFromDraft(draft, "email"),
+		"location":        firstNonEmpty(valueFromDraft(draft, "location"), session.CustomerLocation),
+		"tenant_id":       fmt.Sprintf("%d", config.TenantID),
+		"session_id":      session.ID,
+		"detected_intent": session.CurrentIntent,
+	}
+	if lead != nil {
+		customerInfo["lead_id"] = lead.ID
+	}
+
+	if existing := s.findExistingEscalationTicket(ctx, config.TenantID, session.ID); existing != nil {
+		ticketNumber := extractEscalationTicketNumber(existing.Title)
+		if ticketNumber == "" {
+			ticketNumber = fmt.Sprintf("TICKET-%d", existing.ID)
+		}
+		return &EscalationTicketInfo{
+			TicketNumber:  ticketNumber,
+			TicketID:      existing.ID,
+			Type:          "supervisor_request",
+			CustomerPhone: customerInfo["phone"],
+			CustomerEmail: customerInfo["email"],
+			CustomerName:  customerInfo["name"],
+			Issue:         userMessage,
+		}, nil
+	}
+
+	ticketType := "supervisor_request"
+	if isComplaintEscalation(userMessage, score) {
+		ticketType = "complaint"
+	}
+	return s.CreateEscalationTicket(ctx, config.TenantID, ticketType, customerInfo, userMessage)
+}
+
+func (s *Service) refreshLeadFromSession(ctx context.Context, config *AudienceConfig, session *store.AgentSession) (*LeadDraft, *store.AgentLead) {
+	if session == nil || config == nil || session.AudienceType != "external" {
+		return nil, nil
+	}
+	var tenantPhone string
+	if config.Audience != nil {
+		tenantPhone = GetValidatedReplacementPhone(config.Audience.EmergencyPhone, config.RawKB)
+	}
+	draft := ExtractContactInfoFull(ctx, "", session.Messages, tenantPhone, GetOrCreateLeadDraft(session))
+	if draft != nil {
+		if session.CustomerName == "" && draft.Name != "" {
+			session.CustomerName = draft.Name
+		}
+		if session.CustomerPhone == "" && draft.Phone != "" {
+			session.CustomerPhone = draft.Phone
+		}
+		if session.CustomerLocation == "" && draft.Location != "" {
+			session.CustomerLocation = draft.Location
+		}
+	}
+	return draft, s.captureLeadFromSession(ctx, config, session)
+}
+
+func (s *Service) findExistingEscalationTicket(ctx context.Context, tenantID int32, sessionID string) *store.Ticket {
+	if sessionID == "" {
+		return nil
+	}
+	ticketType := "agent_escalation"
+	tickets, err := s.store.ListTickets(ctx, &store.FindTicket{Type: &ticketType})
+	if err != nil {
+		slog.Warn("failed to list escalation tickets for dedupe", "tenant_id", tenantID, "session_id", sessionID, "error", err)
+		return nil
+	}
+	tenantMarker := fmt.Sprintf("Tenant ID:** %d", tenantID)
+	sessionMarker := fmt.Sprintf("Session ID:** %s", sessionID)
+	fallbackTenantMarker := fmt.Sprintf("Tenant ID: %d", tenantID)
+	fallbackSessionMarker := fmt.Sprintf("Session ID: %s", sessionID)
+	for _, ticket := range tickets {
+		if strings.Contains(ticket.Description, fallbackTenantMarker) && strings.Contains(ticket.Description, fallbackSessionMarker) {
+			return ticket
+		}
+		memoUID := strings.TrimPrefix(ticket.Description, "/m/")
+		if memoUID == ticket.Description || memoUID == "" {
+			continue
+		}
+		memo, err := s.store.GetMemo(ctx, &store.FindMemo{UID: &memoUID})
+		if err != nil || memo == nil {
+			continue
+		}
+		if strings.Contains(memo.Content, tenantMarker) && strings.Contains(memo.Content, sessionMarker) {
+			return ticket
+		}
+	}
+	return nil
+}
+
+func (s *Service) systemTicketCreatorID(ctx context.Context) int32 {
+	limit := 1
+	users, err := s.store.ListUsers(ctx, &store.FindUser{Limit: &limit})
+	if err == nil && len(users) > 0 {
+		return users[0].ID
+	}
+
+	user, err := s.store.CreateUser(ctx, &store.User{
+		Username: "agent_system",
+		Role:     store.RoleAdmin,
+		Email:    "",
+		Nickname: "Agent System",
+	})
+	if err == nil && user != nil {
+		return user.ID
+	}
+
+	username := "agent_system"
+	existing, getErr := s.store.GetUser(ctx, &store.FindUser{Username: &username})
+	if getErr == nil && existing != nil {
+		return existing.ID
+	}
+
+	slog.Warn("failed to resolve persisted ticket creator, falling back to user 1", "create_error", err)
+	return 1
+}
+
+func extractEscalationTicketNumber(title string) string {
+	start := strings.Index(title, "[")
+	end := strings.Index(title, "]")
+	if start >= 0 && end > start+1 {
+		return title[start+1 : end]
+	}
+	return ""
+}
+
+func isComplaintEscalation(message string, score *ConversationScore) bool {
+	messageLower := strings.ToLower(message)
+	complaintSignals := []string{
+		"complaint", "bbb", "better business bureau", "lawyer", "attorney",
+		"lawsuit", "sue", "suing", "legal action", "report you",
+	}
+	for _, signal := range complaintSignals {
+		if strings.Contains(messageLower, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+func valueFromDraft(draft *LeadDraft, field string) string {
+	if draft == nil {
+		return ""
+	}
+	return getField(draft, field)
+}
+
+func buildEscalationAcknowledgement(session *store.AgentSession, ticketNum string) string {
+	if hasCompleteEscalationContact(session) {
+		return fmt.Sprintf("I've created ticket %s for your request. A supervisor will follow up using the contact information you provided.", ticketNum)
+	}
+	return fmt.Sprintf("I've created ticket %s for your request. Please share your name and either a phone number or email address so a human can follow up.", ticketNum)
+}
+
+func hasCompleteEscalationContact(session *store.AgentSession) bool {
+	if session == nil {
+		return false
+	}
+	draft := getSessionLeadDraft(session.ID)
+	name := firstNonEmpty(draft.Name, session.CustomerName)
+	phone := firstNonEmpty(draft.Phone, session.CustomerPhone)
+	email := draft.Email
+	return name != "" && (phone != "" || email != "")
+}
+
 // CreateEscalationTicket creates a ticket with a linked memo for supervisor request or complaint
 func (s *Service) CreateEscalationTicket(ctx context.Context, tenantID int32, ticketType string, customerInfo map[string]string, issue string) (*EscalationTicketInfo, error) {
 	// Generate ticket number based on type
@@ -3123,6 +3315,19 @@ func (s *Service) CreateEscalationTicket(ctx context.Context, tenantID int32, ti
 	memoContent.WriteString(fmt.Sprintf("**Type:** %s\n", ticketType))
 	memoContent.WriteString(fmt.Sprintf("**Created:** %s\n\n", time.Now().Format("2006-01-02 15:04:05")))
 
+	memoContent.WriteString("### Conversation Context\n\n")
+	memoContent.WriteString(fmt.Sprintf("- **Tenant ID:** %d\n", tenantID))
+	if sessionID, ok := customerInfo["session_id"]; ok && sessionID != "" {
+		memoContent.WriteString(fmt.Sprintf("- **Session ID:** %s\n", sessionID))
+	}
+	if leadID, ok := customerInfo["lead_id"]; ok && leadID != "" {
+		memoContent.WriteString(fmt.Sprintf("- **Lead ID:** %s\n", leadID))
+	}
+	if detectedIntent, ok := customerInfo["detected_intent"]; ok && detectedIntent != "" {
+		memoContent.WriteString(fmt.Sprintf("- **Detected Intent:** %s\n", detectedIntent))
+	}
+	memoContent.WriteString("\n")
+
 	memoContent.WriteString("### Customer Information\n\n")
 	if name, ok := customerInfo["name"]; ok && name != "" {
 		memoContent.WriteString(fmt.Sprintf("- **Name:** %s\n", name))
@@ -3133,6 +3338,9 @@ func (s *Service) CreateEscalationTicket(ctx context.Context, tenantID int32, ti
 	if email, ok := customerInfo["email"]; ok && email != "" {
 		memoContent.WriteString(fmt.Sprintf("- **Email:** %s\n", email))
 	}
+	if location, ok := customerInfo["location"]; ok && location != "" {
+		memoContent.WriteString(fmt.Sprintf("- **Location:** %s\n", location))
+	}
 
 	if issue != "" {
 		memoContent.WriteString("\n### Issue Summary\n\n")
@@ -3140,10 +3348,12 @@ func (s *Service) CreateEscalationTicket(ctx context.Context, tenantID int32, ti
 		memoContent.WriteString("\n")
 	}
 
+	creatorID := s.systemTicketCreatorID(ctx)
+
 	// Create the memo with Protected visibility (visible to logged-in users)
 	memo := &store.Memo{
 		UID:        memoUID,
-		CreatorID:  1, // System user
+		CreatorID:  creatorID,
 		Content:    memoContent.String(),
 		Visibility: store.Protected,
 	}
@@ -3168,7 +3378,7 @@ func (s *Service) CreateEscalationTicket(ctx context.Context, tenantID int32, ti
 		Description: "/m/" + createdMemo.UID, // Only the memo link
 		Status:      store.TicketStatusOpen,
 		Priority:    priority,
-		CreatorID:   1, // System user for agent-created tickets
+		CreatorID:   creatorID,
 		CreatedTs:   now,
 		UpdatedTs:   now,
 		Type:        "agent_escalation",
@@ -3197,6 +3407,13 @@ func (s *Service) CreateEscalationTicket(ctx context.Context, tenantID int32, ti
 func (s *Service) createEscalationTicketFallback(ctx context.Context, ticketNumber, ticketType string, customerInfo map[string]string, issue string) (*EscalationTicketInfo, error) {
 	// Build description with embedded content (fallback)
 	description := fmt.Sprintf("/m/agent-escalation\n\nTicket: %s\nType: %s\n", ticketNumber, ticketType)
+	description += fmt.Sprintf("Tenant ID: %s\n", customerInfo["tenant_id"])
+	if sessionID, ok := customerInfo["session_id"]; ok && sessionID != "" {
+		description += fmt.Sprintf("Session ID: %s\n", sessionID)
+	}
+	if leadID, ok := customerInfo["lead_id"]; ok && leadID != "" {
+		description += fmt.Sprintf("Lead ID: %s\n", leadID)
+	}
 	if name, ok := customerInfo["name"]; ok && name != "" {
 		description += fmt.Sprintf("Customer: %s\n", name)
 	}
@@ -3205,6 +3422,9 @@ func (s *Service) createEscalationTicketFallback(ctx context.Context, ticketNumb
 	}
 	if email, ok := customerInfo["email"]; ok && email != "" {
 		description += fmt.Sprintf("Email: %s\n", email)
+	}
+	if location, ok := customerInfo["location"]; ok && location != "" {
+		description += fmt.Sprintf("Location: %s\n", location)
 	}
 	if issue != "" {
 		description += fmt.Sprintf("\nIssue: %s\n", issue)
@@ -3216,12 +3436,13 @@ func (s *Service) createEscalationTicketFallback(ctx context.Context, ticketNumb
 	}
 
 	now := time.Now().Unix()
+	creatorID := s.systemTicketCreatorID(ctx)
 	ticket := &store.Ticket{
 		Title:       fmt.Sprintf("[%s] Agent Escalation - %s", ticketNumber, ticketType),
 		Description: description,
 		Status:      store.TicketStatusOpen,
 		Priority:    priority,
-		CreatorID:   1,
+		CreatorID:   creatorID,
 		CreatedTs:   now,
 		UpdatedTs:   now,
 		Type:        "agent_escalation",
@@ -3563,9 +3784,9 @@ func (s *Service) saveTranscript(ctx context.Context, session *store.AgentSessio
 	return err
 }
 
-func (s *Service) captureLeadFromSession(ctx context.Context, config *AudienceConfig, session *store.AgentSession) {
+func (s *Service) captureLeadFromSession(ctx context.Context, config *AudienceConfig, session *store.AgentSession) *store.AgentLead {
 	if session == nil || config == nil || session.AudienceType != "external" || len(session.Messages) == 0 {
-		return
+		return nil
 	}
 	var tenantPhone string
 	if config.Audience != nil {
@@ -3578,7 +3799,7 @@ func (s *Service) captureLeadFromSession(ctx context.Context, config *AudienceCo
 
 	// Check if customer declined
 	if draft != nil && draft.Declined {
-		return
+		return nil
 	}
 
 	// Fall back to session-level customer data (populated by transcript saving)
@@ -3588,12 +3809,16 @@ func (s *Service) captureLeadFromSession(ctx context.Context, config *AudienceCo
 	location := firstNonEmpty(draft.Location, session.CustomerLocation)
 
 	if name == "" || (email == "" && phone == "") {
-		return
+		return nil
+	}
+	transcriptID := ""
+	if existing, err := s.store.GetAgentTranscript(ctx, &store.FindAgentTranscript{SessionID: &session.ID, TenantID: &config.TenantID}); err == nil && existing != nil {
+		transcriptID = existing.ID
 	}
 	lead := &store.AgentLead{
 		TenantID:       config.TenantID,
 		SessionID:      session.ID,
-		TranscriptID:   session.ID,
+		TranscriptID:   transcriptID,
 		Name:           name,
 		Email:          email,
 		Phone:          phone,
@@ -3606,9 +3831,12 @@ func (s *Service) captureLeadFromSession(ctx context.Context, config *AudienceCo
 	if lead.LastMessageAt.IsZero() {
 		lead.LastMessageAt = time.Now()
 	}
-	if _, err := s.store.UpsertAgentLead(ctx, lead); err != nil {
+	created, err := s.store.UpsertAgentLead(ctx, lead)
+	if err != nil {
 		slog.Warn("failed to upsert agent lead", "tenant_id", config.TenantID, "session_id", session.ID, "error", err)
+		return nil
 	}
+	return created
 }
 
 func firstNonEmpty(values ...string) string {
