@@ -19,7 +19,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 MIGRATION_DIR="$ROOT_DIR/store/migration/sqlite"
 LATEST_SQL="$MIGRATION_DIR/LATEST.sql"
-VERSION_DIR="$MIGRATION_DIR/0.25"
 TEMP_DIR="/tmp/bchat-migration-test-$$"
 
 # Colors
@@ -35,7 +34,55 @@ trap cleanup EXIT
 
 mkdir -p "$TEMP_DIR"
 
+list_version_dirs() {
+    find "$MIGRATION_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' \
+        | grep -E '^[0-9]+(\.[0-9]+)+$' \
+        | sort -V
+}
+
+find_latest_version_dir() {
+    list_version_dirs | tail -n 1
+}
+
+LATEST_VERSION="$(find_latest_version_dir)"
+if [ -z "$LATEST_VERSION" ]; then
+    echo -e "${RED}ERROR: No versioned migration directories found in $MIGRATION_DIR${NC}"
+    exit 1
+fi
+VERSION_DIR="$MIGRATION_DIR/$LATEST_VERSION"
+
+find_bootstrap_migration_dirs() {
+    mapfile -t version_dirs < <(list_version_dirs)
+    local total=${#version_dirs[@]}
+
+    for ((start = total - 1; start >= 0; start--)); do
+        local candidate_db="$TEMP_DIR/bootstrap-${start}.db"
+        local ok=1
+        : > "$candidate_db"
+
+        for ((i = start; i < total; i++)); do
+            local version="${version_dirs[$i]}"
+            for file in $(ls "$MIGRATION_DIR/$version"/*.sql 2>/dev/null | sort); do
+                if ! sqlite3 "$candidate_db" < "$file" 2>"$TEMP_DIR/bootstrap-error.txt"; then
+                    ok=0
+                    break 2
+                fi
+            done
+        done
+
+        if [ "$ok" -eq 1 ]; then
+            for ((i = start; i < total; i++)); do
+                echo "$MIGRATION_DIR/${version_dirs[$i]}"
+            done
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 echo "=== Pre-Deployment Database Migration Check ==="
+echo "Latest migration directory: $VERSION_DIR"
 echo ""
 
 # Check 1: Run existing validation
@@ -85,13 +132,26 @@ echo ""
 echo "Step 4: Testing migrations apply in sequence..."
 MIGRATED_DB="$TEMP_DIR/migrated.db"
 touch "$MIGRATED_DB"
-for file in $(ls "$VERSION_DIR"/*.sql 2>/dev/null | sort); do
-    filename=$(basename "$file")
-    if ! sqlite3 "$MIGRATED_DB" < "$file" 2>"$TEMP_DIR/migration_error.txt"; then
-        echo -e "${RED}FAILED: Migration $filename has errors:${NC}"
-        cat "$TEMP_DIR/migration_error.txt"
-        exit 1
+if ! mapfile -t BOOTSTRAP_DIRS < <(find_bootstrap_migration_dirs); then
+    echo -e "${RED}FAILED: Could not find a versioned migration sequence that applies cleanly${NC}"
+    if [ -f "$TEMP_DIR/bootstrap-error.txt" ]; then
+        cat "$TEMP_DIR/bootstrap-error.txt"
     fi
+    exit 1
+fi
+echo "Applying migration directories:"
+for dir in "${BOOTSTRAP_DIRS[@]}"; do
+    echo "  - $dir"
+done
+for dir in "${BOOTSTRAP_DIRS[@]}"; do
+    for file in $(ls "$dir"/*.sql 2>/dev/null | sort); do
+        filename="$(basename "$dir")/$(basename "$file")"
+        if ! sqlite3 "$MIGRATED_DB" < "$file" 2>"$TEMP_DIR/migration_error.txt"; then
+            echo -e "${RED}FAILED: Migration $filename has errors:${NC}"
+            cat "$TEMP_DIR/migration_error.txt"
+            exit 1
+        fi
+    done
 done
 MIGRATED_TABLES=$(sqlite3 "$MIGRATED_DB" ".tables" | wc -w)
 echo -e "${GREEN}PASSED: All migrations applied, $MIGRATED_TABLES tables${NC}"

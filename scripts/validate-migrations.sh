@@ -24,10 +24,25 @@ NC='\033[0m'
 # Paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-LATEST_SQL="$PROJECT_ROOT/store/migration/sqlite/LATEST.sql"
-MIGRATIONS_DIR="$PROJECT_ROOT/store/migration/sqlite/0.25"
+MIGRATION_ROOT="$PROJECT_ROOT/store/migration/sqlite"
+LATEST_SQL="$MIGRATION_ROOT/LATEST.sql"
+
+find_latest_version_dir() {
+    find "$MIGRATION_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' \
+        | grep -E '^[0-9]+(\.[0-9]+)+$' \
+        | sort -V \
+        | tail -n 1
+}
+
+LATEST_VERSION="$(find_latest_version_dir)"
+if [ -z "$LATEST_VERSION" ]; then
+    echo -e "${RED}ERROR: No versioned migration directories found in $MIGRATION_ROOT${NC}"
+    exit 1
+fi
+MIGRATIONS_DIR="$MIGRATION_ROOT/$LATEST_VERSION"
 
 echo "Validating LATEST.sql against migrations..."
+echo "Using migration directory: $MIGRATIONS_DIR"
 echo ""
 
 # Check files exist
