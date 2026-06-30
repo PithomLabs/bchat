@@ -230,12 +230,13 @@ func (s *Service) RunObserver(ctx context.Context, tenantID int32, sessionID str
 			// Replace old observations with consolidated version
 			if config.HybridEnabled && config.HybridIndexObservations && s.vectorDB != nil {
 				indexer := NewObservationIndexerWithConfig(s.vectorDB, config.HybridCompression, config.HybridTTLDays)
+				indexCtx := s.withTenantEmbeddingAPIKey(ctx, session.TenantID)
 				consolidatedObsLog := &store.ObservationLog{
 					SessionID:      sessionID,
 					ObservationLog: updatedLog,
 					ResourceID:     obsLog.ResourceID,
 				}
-				if err := indexer.IndexReflectorObservations(ctx, consolidatedObsLog, session.TenantID, sessionID); err != nil {
+				if err := indexer.IndexReflectorObservations(indexCtx, consolidatedObsLog, session.TenantID, sessionID); err != nil {
 					slog.Error("Failed to index reflector observations to RAG",
 						"session_id", sessionID,
 						"error", err)
@@ -267,7 +268,8 @@ func (s *Service) RunObserver(ctx context.Context, tenantID int32, sessionID str
 	// 10. Index observations to RAG (Hybrid OM + RAG)
 	if config.HybridEnabled && config.HybridIndexObservations && s.vectorDB != nil {
 		indexer := NewObservationIndexerWithConfig(s.vectorDB, config.HybridCompression, config.HybridTTLDays)
-		if err := indexer.IndexObservation(ctx, obsLog, session.TenantID); err != nil {
+		indexCtx := s.withTenantEmbeddingAPIKey(ctx, session.TenantID)
+		if err := indexer.IndexObservation(indexCtx, obsLog, session.TenantID); err != nil {
 			// Log error but don't fail the observation
 			slog.Error("Failed to index observations to RAG",
 				"session_id", sessionID,

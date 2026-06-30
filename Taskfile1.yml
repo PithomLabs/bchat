@@ -1,0 +1,186 @@
+version: '3'
+
+vars:
+  # LanceDB native library configuration
+  LANCEDB_VERSION: v0.1.2
+  PLATFORM:
+    sh: go env GOOS
+  ARCH:
+    sh: go env GOARCH
+  LANCEDB_LIB_DIR: "{{.ROOT_DIR}}/lib/{{.PLATFORM}}_{{.ARCH}}"
+
+tasks:
+  setup:
+    desc: Install all dependencies
+    cmds:
+      - npm --prefix web install
+      - go mod download
+
+  setup:lancedb:
+    desc: Download LanceDB native libraries (required for RAG pipeline)
+    cmds:
+      - mkdir -p lib include
+      - |
+        echo "Downloading LanceDB native libraries for {{.PLATFORM}}_{{.ARCH}}..."
+        curl -sSL https://raw.githubusercontent.com/lancedb/lancedb-go/main/scripts/download-artifacts.sh | bash -s {{.LANCEDB_VERSION}}
+    status:
+      - test -f "{{.LANCEDB_LIB_DIR}}/liblancedb_go.a"
+
+  validate:migrations:
+    desc: Validate LATEST.sql is in sync with migration files
+    cmds:
+      - ./scripts/validate-migrations.sh
+
+  validate:schema:
+    desc: Validate database schema and test CRUD operations
+    cmds:
+      - echo "Running schema validation tests..."
+      - go test -v ./store/test/... -run "TestSchemaValidation|TestAgentSourceFile|TestAgentTenantScript|TestMigrationHistoryVersion"
+      - echo "Schema validation passed!"
+
+  build:frontend:
+    desc: Build frontend assets
+    cmds:
+      - npm --prefix web run release
+
+  build:backend:
+    desc: Build the Go binary
+    deps: [validate:migrations]
+    cmds:
+      - mkdir -p build
+      - go build -o build/memos ./bin/memos/main.go
+
+  build:backend:rag:
+    desc: Build the Go binary with LanceDB RAG support
+    deps: [setup:lancedb, validate:migrations]
+    env:
+      CGO_ENABLED: "1"
+      CGO_CFLAGS: "-I{{.ROOT_DIR}}/include"
+      CGO_LDFLAGS: "{{if eq .PLATFORM \"linux\"}}-L{{.LANCEDB_LIB_DIR}} -llancedb_go -Wl,-rpath,{{.LANCEDB_LIB_DIR}}{{else}}{{.LANCEDB_LIB_DIR}}/liblancedb_go.a{{end}} {{if eq .PLATFORM \"darwin\"}}-framework Security -framework CoreFoundation{{end}}"
+    cmds:
+      - mkdir -p build
+      - go build -tags rag -o build/memos ./bin/memos/main.go
+
+  build:widget:
+    desc: Build the embeddable chat widget
+    dir: widget
+    cmds:
+      - npm install
+      - npm run build
+      - cp dist/embed.min.js site/
+
+  build:
+    desc: Build everything (frontend + backend)
+    deps: [build:frontend, build:backend]
+
+  build:all:
+    desc: Build everything including widget (frontend + backend + widget)
+    deps: [build:frontend, build:backend:rag, build:widget]
+
+  build:rag:
+    desc: Build everything with RAG support (frontend + backend with LanceDB)
+    deps: [build:frontend, build:backend:rag]
+
+  build:rag:all:
+    desc: Build everything with RAG support including widget
+    deps: [build:frontend, build:backend:rag, build:widget]
+
+
+  run:
+    desc: Run development server (sources .env file if present)
+    deps: [build:backend]
+    cmds:
+      - |
+        if [ -f .env ]; then
+          echo "Loading environment from .env file..."
+          set -a && source .env && set +a
+        fi
+        ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
+
+  run:rag:
+    desc: Run with RAG enabled (sources .env file, local storage)
+    deps: [build:backend:rag]
+    cmds:
+      - |
+        if [ -f .env ]; then
+          echo "Loading environment from .env file..."
+          set -a && source .env && set +a
+        fi
+        FORCE_REINDEX_ON_STARTUP=false RAG_PIPELINE_ENABLED=true EMBEDDING_MODEL=openai/text-embedding-3-small EMBEDDING_BATCH_SIZE=1 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
+
+
+  run:testrag:
+    desc: Run with RAG enabled and FORCE full reindex on startup (useful for testing)
+    deps: [build:backend:rag]
+    cmds:
+      - |
+        if [ -f .env ]; then
+          echo "Loading environment from .env file..."
+          set -a && source .env && set +a
+        fi
+        FORCE_REINDEX_ON_STARTUP=true RAG_PIPELINE_ENABLED=true EMBEDDING_MODEL=qwen/qwen3-embedding-8b EMBEDDING_BATCH_SIZE=32 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
+
+  run:binary:
+    desc: Run pre-compiled binary with RAG enabled (no build, sources .env file)
+    cmds:
+      - |
+        if [ -f .env ]; then
+          echo "Loading environment from .env file..."
+          set -a && source .env && set +a
+        fi
+        LD_LIBRARY_PATH={{.LANCEDB_LIB_DIR}}:$LD_LIBRARY_PATH RAG_PIPELINE_ENABLED=true EMBEDDING_MODEL=qwen/qwen3-embedding-8b EMBEDDING_BATCH_SIZE=10 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
+
+  run:rag:l12:
+    desc: Run with RAG + L12 embeddings (sources .env file)
+    deps: [build:backend:rag]
+    cmds:
+      - |
+        if [ -f .env ]; then
+          echo "Loading environment from .env file..."
+          set -a && source .env && set +a
+        fi
+        RAG_PIPELINE_ENABLED=true \
+        EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L12-v2 \
+        LANCEDB_STORAGE_PROVIDER=local \
+        ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
+
+  generate:
+    desc: Run go generate
+    cmds:
+      - go generate ./...
+
+  fly:check:
+    desc: Validate environment chain (.env -> Dockerfile -> fly.toml -> fly secrets)
+    cmds:
+      - ./scripts/validate-env-chain.sh
+
+  fly:check:fix:
+    desc: Fix missing/mismatched env vars in Dockerfile and fly.toml from .env
+    cmds:
+      - ./scripts/fix-env-chain.sh
+
+  fly:db-check:
+    desc: Validate database migrations before fly.io deployment
+    cmds:
+      - ./scripts/validate-db-migrations.sh
+
+  fly:pre-deploy:
+    desc: Run all pre-deployment checks (env + database)
+    cmds:
+      - task: fly:check
+      - task: fly:db-check
+      - |
+        echo ""
+        echo "=== All pre-deployment checks passed ==="
+        echo "Safe to run: fly deploy"
+
+  fly:logs:rag:
+    desc: Stream RAG and database initialization logs on Fly.io (Ctrl+C to exit)
+    cmds:
+      - fly logs | grep -E "RAG|LanceDB|Embedding|vector database|Reindex"
+
+  fly:ssh:db:
+    desc: Open an interactive SQLite terminal inside the remote Fly.io persistent volume
+    cmds:
+      - fly ssh console -C "sqlite3 /var/opt/memos/memos_prod.db"
+

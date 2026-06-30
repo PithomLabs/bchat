@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -31,13 +32,15 @@ func getTableNameForDimension(dim int) string {
 
 // LanceVectorDB is a LanceDB-backed implementation of VectorDB.
 type LanceVectorDB struct {
-	conn           contracts.IConnection
-	table          contracts.ITable
-	embedSvc       EmbeddingService
-	config         *VectorDBConfig
-	mu             sync.RWMutex
-	hasVectorIndex bool   // Track if IVF-PQ index has been created (requires data)
-	tableName      string // Computed from embedding dimension (e.g., kb_documents_1536)
+	conn            contracts.IConnection
+	table           contracts.ITable
+	embedSvc        EmbeddingService
+	config          *VectorDBConfig
+	mu              sync.RWMutex
+	validatedMu     sync.Mutex
+	lastValidatedAt time.Time
+	hasVectorIndex  bool   // Track if IVF-PQ index has been created (requires data)
+	tableName       string // Computed from embedding dimension (e.g., kb_documents_1536)
 }
 
 // newLanceVectorDB creates a new LanceDB-backed vector database.
@@ -535,6 +538,9 @@ func (db *LanceVectorDB) processBatchWithRetry(ctx context.Context, batch []Docu
 		}
 
 		lastErr = err
+		if !isRetryableError(err) {
+			return fmt.Errorf("batch %d failed with permanent error: %w", batchNum, err)
+		}
 		if attempt < maxRetries-1 {
 			slog.Warn("Batch failed, retrying",
 				"batch", batchNum,
@@ -551,6 +557,41 @@ func (db *LanceVectorDB) processBatchWithRetry(ctx context.Context, batch []Docu
 	}
 
 	return fmt.Errorf("batch %d failed after %d retries: %w", batchNum, maxRetries, lastErr)
+}
+
+// Validate checks the embedding provider and LanceDB table before a reindex starts.
+func (db *LanceVectorDB) Validate(ctx context.Context) error {
+	db.validatedMu.Lock()
+	defer db.validatedMu.Unlock()
+
+	if !db.lastValidatedAt.IsZero() && time.Since(db.lastValidatedAt) < 30*time.Second {
+		return nil
+	}
+
+	if db.embedSvc == nil {
+		return fmt.Errorf("%w: embedding service not initialized", ErrEmbeddingProviderMisconfigured)
+	}
+	if _, err := db.embedSvc.Embed(ctx, []string{"preflight"}); err != nil {
+		if errors.Is(err, ErrEmbeddingProviderMisconfigured) || errors.Is(err, ErrEmbeddingProviderUnavailable) {
+			return err
+		}
+		return fmt.Errorf("%w: %v", ErrEmbeddingProviderUnavailable, err)
+	}
+
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	if db.conn == nil || db.table == nil {
+		return fmt.Errorf("%w: LanceDB connection or table is not initialized", ErrVectorStoreUnavailable)
+	}
+	if _, err := db.table.Count(ctx); err != nil {
+		return fmt.Errorf("%w: LanceDB table count failed: %v", ErrVectorStoreUnavailable, err)
+	}
+	if _, err := db.table.Version(ctx); err != nil {
+		return fmt.Errorf("%w: LanceDB table version failed: %v", ErrVectorStoreUnavailable, err)
+	}
+
+	db.lastValidatedAt = time.Now()
+	return nil
 }
 
 // processSingleBatch processes a single batch of chunks.
