@@ -4,15 +4,35 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 )
+
+var (
+	ErrEmbeddingProviderMisconfigured = errors.New("embedding provider misconfigured")
+	ErrEmbeddingProviderUnavailable   = errors.New("embedding provider unavailable")
+	ErrVectorStoreUnavailable         = errors.New("vector store unavailable")
+)
+
+type embeddingHTTPError struct {
+	statusCode int
+	message    string
+}
+
+func (e *embeddingHTTPError) Error() string {
+	if e.message == "" {
+		return fmt.Sprintf("OpenRouter embedding request failed (status %d)", e.statusCode)
+	}
+	return fmt.Sprintf("OpenRouter embedding request failed (status %d): %s", e.statusCode, e.message)
+}
 
 // EmbeddingService defines the interface for generating text embeddings.
 type EmbeddingService interface {
@@ -32,6 +52,21 @@ type EmbeddingConfig struct {
 	OpenRouterAPIKey string // For OpenRouter provider
 	LocalEndpoint    string // For local provider (default: http://localhost:8001/embed)
 	BatchSize        int    // Max texts per batch (default: 32)
+}
+
+type embeddingAPIKeyContextKey struct{}
+
+// WithEmbeddingOpenRouterAPIKey stores a tenant-scoped OpenRouter key for embedding calls.
+func WithEmbeddingOpenRouterAPIKey(ctx context.Context, apiKey string) context.Context {
+	if apiKey == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, embeddingAPIKeyContextKey{}, apiKey)
+}
+
+func embeddingOpenRouterAPIKeyFromContext(ctx context.Context) string {
+	apiKey, _ := ctx.Value(embeddingAPIKeyContextKey{}).(string)
+	return apiKey
 }
 
 // NewEmbeddingConfigFromEnv creates an EmbeddingConfig from environment variables.
@@ -225,10 +260,6 @@ type OpenRouterEmbedding struct {
 
 // NewOpenRouterEmbedding creates a new OpenRouter embedding service.
 func NewOpenRouterEmbedding(config *EmbeddingConfig) (*OpenRouterEmbedding, error) {
-	if config.OpenRouterAPIKey == "" {
-		return nil, fmt.Errorf("OPENROUTER_API_KEY required for OpenRouter embedding provider")
-	}
-
 	model := config.Model
 	if model == "" {
 		model = "openai/text-embedding-3-small"
@@ -306,32 +337,44 @@ func (e *OpenRouterEmbedding) Embed(ctx context.Context, texts []string) ([][]fl
 		}
 		slog.Warn("Embedding request failed, will retry", "attempt", attempt+1, "error", err.Error())
 	}
-	return nil, fmt.Errorf("failed after %d retries: %w", maxRetries, lastErr)
+	return nil, fmt.Errorf("%w: failed after %d retries: %v", ErrEmbeddingProviderUnavailable, maxRetries, lastErr)
 }
 
 // doEmbed performs the actual HTTP request to OpenRouter.
 func (e *OpenRouterEmbedding) doEmbed(ctx context.Context, texts []string) ([][]float32, error) {
+	apiKey := e.apiKey
+	if tenantAPIKey := embeddingOpenRouterAPIKeyFromContext(ctx); tenantAPIKey != "" {
+		apiKey = tenantAPIKey
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("%w: OPENROUTER_API_KEY is not configured and no tenant API key is available", ErrEmbeddingProviderMisconfigured)
+	}
+
+	// Prepare request body
 	reqBody := openRouterEmbedRequest{
 		Model: e.model,
 		Input: texts,
 	}
 
-	jsonBody, err := json.Marshal(reqBody)
+	jsonBytes, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", e.endpoint, bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", e.endpoint, bytes.NewBuffer(jsonBytes))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+e.apiKey)
+
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
+	// OpenRouter requires these headers for identification
 	req.Header.Set("HTTP-Referer", "https://github.com/usememos/memos")
+	req.Header.Set("X-Title", "Memos bchat")
 
 	resp, err := e.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("OpenRouter embedding request failed: %w", err)
+		return nil, fmt.Errorf("%w: HTTP request failed: %w", ErrEmbeddingProviderUnavailable, err)
 	}
 	defer resp.Body.Close()
 
@@ -341,10 +384,17 @@ func (e *OpenRouterEmbedding) doEmbed(ctx context.Context, texts []string) ([][]
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		if resp.StatusCode == http.StatusUnauthorized {
-			return nil, fmt.Errorf("OpenRouter embedding error: 401 Unauthorized. Please check your OPENROUTER_API_KEY and account status (ensure you have credits if using paid models).")
+		httpErr := &embeddingHTTPError{
+			statusCode: resp.StatusCode,
+			message:    sanitizedOpenRouterErrorMessage(body, resp.StatusCode),
 		}
-		return nil, fmt.Errorf("OpenRouter embedding error (status %d): %s", resp.StatusCode, string(body))
+		if resp.StatusCode == http.StatusUnauthorized {
+			return nil, fmt.Errorf("%w: %w", ErrEmbeddingProviderMisconfigured, httpErr)
+		}
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
+			return nil, fmt.Errorf("%w: %w", ErrEmbeddingProviderUnavailable, httpErr)
+		}
+		return nil, fmt.Errorf("%w: %w", ErrEmbeddingProviderMisconfigured, httpErr)
 	}
 
 	var result openRouterEmbedResponse
@@ -356,11 +406,8 @@ func (e *OpenRouterEmbedding) doEmbed(ctx context.Context, texts []string) ([][]
 		slog.Warn("OpenRouter API returned error",
 			"model", e.model,
 			"errorMessage", result.Error.Message,
-			"errorType", result.Error.Type,
-			"textsCount", len(texts),
-			"firstTextLen", len(texts[0]),
-			"firstTextPreview", truncateString(texts[0], 200))
-		return nil, fmt.Errorf("OpenRouter API error: %s (Type: %s)", result.Error.Message, result.Error.Type)
+			"errorType", result.Error.Type)
+		return nil, fmt.Errorf("%w: OpenRouter API error: %s (Type: %s)", ErrEmbeddingProviderUnavailable, result.Error.Message, result.Error.Type)
 	}
 
 	// Sort embeddings by index to maintain order
@@ -372,22 +419,49 @@ func (e *OpenRouterEmbedding) doEmbed(ctx context.Context, texts []string) ([][]
 	return embeddings, nil
 }
 
+func sanitizedOpenRouterErrorMessage(body []byte, statusCode int) string {
+	var result openRouterEmbedResponse
+	if err := json.Unmarshal(body, &result); err == nil && result.Error != nil && result.Error.Message != "" {
+		return result.Error.Message
+	}
+	if statusCode == http.StatusUnauthorized {
+		return "OpenRouter authentication failed (401)"
+	}
+	return fmt.Sprintf("OpenRouter embedding request failed (status %d)", statusCode)
+}
+
 // isRetryableError returns true if the error is likely transient and worth retrying.
 func isRetryableError(err error) bool {
 	if err == nil {
 		return false
 	}
-	errStr := err.Error()
-	return strings.Contains(errStr, "timeout") ||
-		strings.Contains(errStr, "deadline exceeded") ||
-		strings.Contains(errStr, "connection refused") ||
-		strings.Contains(errStr, "connection reset") ||
-		strings.Contains(errStr, "no such host") ||
-		strings.Contains(errStr, "No successful provider") ||
-		strings.Contains(errStr, "server error") ||
-		strings.Contains(errStr, "502") ||
-		strings.Contains(errStr, "503") ||
-		strings.Contains(errStr, "429")
+	if errors.Is(err, ErrEmbeddingProviderMisconfigured) || errors.Is(err, ErrVectorStoreUnavailable) {
+		return false
+	}
+
+	var httpErr *embeddingHTTPError
+	if errors.As(err, &httpErr) {
+		switch httpErr.statusCode {
+		case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			return true
+		default:
+			return false
+		}
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+
+	return false
 }
 
 // Dimension returns the embedding vector dimension.

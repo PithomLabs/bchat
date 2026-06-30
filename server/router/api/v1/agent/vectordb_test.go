@@ -2,7 +2,10 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"math"
+	"net/http"
 	"os"
 	"testing"
 )
@@ -197,9 +200,15 @@ func TestTokenize(t *testing.T) {
 // MockEmbeddingService for testing
 type mockEmbeddingService struct {
 	dimension int
+	err       error
+	calls     int
 }
 
 func (m *mockEmbeddingService) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	m.calls++
+	if m.err != nil {
+		return nil, m.err
+	}
 	result := make([][]float32, len(texts))
 	for i, text := range texts {
 		// Generate deterministic embedding based on text hash
@@ -223,6 +232,55 @@ func (m *mockEmbeddingService) Dimension() int {
 
 func (m *mockEmbeddingService) Provider() string {
 	return "mock"
+}
+
+func TestMemoryVectorDB_Validate(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		embedSvc := &mockEmbeddingService{dimension: 8}
+		db := NewMemoryVectorDB(embedSvc)
+
+		if err := db.Validate(context.Background()); err != nil {
+			t.Fatalf("Validate() error = %v", err)
+		}
+		if embedSvc.calls != 1 {
+			t.Fatalf("Embed calls = %d, want 1", embedSvc.calls)
+		}
+	})
+
+	t.Run("embedding error", func(t *testing.T) {
+		wantErr := fmt.Errorf("%w: missing key", ErrEmbeddingProviderMisconfigured)
+		embedSvc := &mockEmbeddingService{dimension: 8, err: wantErr}
+		db := NewMemoryVectorDB(embedSvc)
+
+		err := db.Validate(context.Background())
+		if !errors.Is(err, ErrEmbeddingProviderMisconfigured) {
+			t.Fatalf("Validate() error = %v, want ErrEmbeddingProviderMisconfigured", err)
+		}
+	})
+}
+
+func TestIsRetryableError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "timeout", err: errors.New("request timeout"), want: false},
+		{name: "deadline", err: context.DeadlineExceeded, want: true},
+		{name: "rate_limit", err: &embeddingHTTPError{statusCode: http.StatusTooManyRequests}, want: true},
+		{name: "bad_gateway", err: &embeddingHTTPError{statusCode: http.StatusBadGateway}, want: true},
+		{name: "misconfigured", err: fmt.Errorf("%w: bad key", ErrEmbeddingProviderMisconfigured), want: false},
+		{name: "unauthorized", err: errors.New("401 Unauthorized"), want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isRetryableError(tt.err); got != tt.want {
+				t.Fatalf("isRetryableError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestMemoryVectorDB_Insert(t *testing.T) {

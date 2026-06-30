@@ -244,8 +244,10 @@ func (s *Service) ReindexAllContent(ctx context.Context) error {
 
 	totalChunks := 0
 	for _, tenant := range tenants {
+		tenantCtx := s.withTenantEmbeddingAPIKey(ctx, tenant.ID)
+
 		// Get latest version of each source file for this tenant
-		files, err := s.store.ListAgentSourceFiles(ctx, &store.FindAgentSourceFile{
+		files, err := s.store.ListAgentSourceFiles(tenantCtx, &store.FindAgentSourceFile{
 			TenantID:   &tenant.ID,
 			LatestOnly: true, // Only get latest version of each file type
 		})
@@ -273,7 +275,7 @@ func (s *Service) ReindexAllContent(ctx context.Context) error {
 			}
 
 			// Delete existing chunks
-			if err := s.vectorDB.Delete(ctx, tenant.ID, audience); err != nil {
+			if err := s.vectorDB.Delete(tenantCtx, tenant.ID, audience); err != nil {
 				slog.Warn("Failed to delete existing chunks", "tenantID", tenant.ID, "audience", audience, "error", err)
 			}
 
@@ -300,7 +302,7 @@ func (s *Service) ReindexAllContent(ctx context.Context) error {
 			}
 
 			// Insert chunks
-			if err := s.vectorDB.Insert(ctx, allChunks); err != nil {
+			if err := s.vectorDB.Insert(tenantCtx, allChunks); err != nil {
 				slog.Warn("Failed to insert chunks", "tenantID", tenant.ID, "audience", audience, "error", err)
 				continue
 			}
@@ -342,6 +344,7 @@ func (s *Service) ReindexTenantContent(ctx context.Context, tenantID int32, audi
 	if err != nil {
 		return 0, fmt.Errorf("failed to get tenant: %w", err)
 	}
+	ctx = s.withTenantEmbeddingAPIKey(ctx, tenantID)
 
 	// Get chunk size based on embedding provider
 	embeddingProvider := ""
@@ -692,6 +695,13 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 	if err != nil {
 		return 0, fmt.Errorf("failed to get tenant: %w", err)
 	}
+	ctx = s.withTenantEmbeddingAPIKey(ctx, tenantID)
+
+	if shouldValidateReindex(resume, existingCheckpoint) {
+		if err := s.vectorDB.Validate(ctx); err != nil {
+			return 0, err
+		}
+	}
 
 	// Get chunk size based on embedding provider
 	embeddingProvider := ""
@@ -831,8 +841,17 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 		// When the main request context ctx is cancelled or timed out, we must detach
 		// from it and use a short, bounded context to write the failure checkpoint to DB.
 		checkpointCtx, checkpointCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		s.store.UpsertReindexCheckpoint(checkpointCtx, failedCheckpoint)
+		_, checkpointErr := s.store.UpsertReindexCheckpoint(checkpointCtx, failedCheckpoint)
 		checkpointCancel()
+		if checkpointErr != nil {
+			slog.Error("failed to persist failed checkpoint",
+				"tenantID", tenantID,
+				"audience", audienceType,
+				"batch", errBatch,
+				"error", checkpointErr,
+			)
+			return 0, errors.Join(err, checkpointErr)
+		}
 
 		return 0, err
 	}
@@ -850,8 +869,16 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 	}
 	// Detached but bounded context for durability
 	completedCtx, completedCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	s.store.UpsertReindexCheckpoint(completedCtx, completedCheckpoint)
+	_, completedCheckpointErr := s.store.UpsertReindexCheckpoint(completedCtx, completedCheckpoint)
 	completedCancel()
+	if completedCheckpointErr != nil {
+		slog.Error("failed to persist completed checkpoint",
+			"tenantID", tenantID,
+			"audience", audienceType,
+			"error", completedCheckpointErr,
+		)
+		return 0, fmt.Errorf("indexing succeeded but failed to persist completed checkpoint: %w", completedCheckpointErr)
+	}
 
 	slog.Info("RAG reindex completed with checkpoint",
 		"tenantID", tenantID,
@@ -871,6 +898,10 @@ func extractBatchFromError(err error) *int32 {
 		return &b
 	}
 	return nil
+}
+
+func shouldValidateReindex(resume bool, checkpoint *store.ReindexCheckpoint) bool {
+	return !resume || checkpoint == nil
 }
 
 // ============================================================================
@@ -1148,6 +1179,8 @@ func (s *Service) getLLMConfig(ctx context.Context, tenantID int32) (model strin
 			)
 			if err == nil && decrypted != "" {
 				apiKey = decrypted
+			} else if err != nil {
+				slog.Warn("Failed to decrypt tenant OpenRouter API key", "tenantID", tenantID, "error", err)
 			}
 		}
 	}
@@ -1164,6 +1197,11 @@ func (s *Service) getLLMConfig(ctx context.Context, tenantID int32) (model strin
 	}
 
 	return model, apiKey
+}
+
+func (s *Service) withTenantEmbeddingAPIKey(ctx context.Context, tenantID int32) context.Context {
+	_, apiKey := s.getLLMConfig(ctx, tenantID)
+	return WithEmbeddingOpenRouterAPIKey(ctx, apiKey)
 }
 
 // getSimulationHumanModel returns the LLM model for the human role in simulations.
@@ -2515,6 +2553,7 @@ func (s *Service) generateRAGResponse(
 	if apiKey == "" {
 		return "I apologize, but the chat service is not currently available. Please call us directly.", nil
 	}
+	ctx = WithEmbeddingOpenRouterAPIKey(ctx, apiKey)
 
 	// Retrieve relevant context from vector database with hybrid search if enabled
 	var hybridOpts *HybridSearchOptions
@@ -3776,6 +3815,7 @@ func (s *Service) SearchVectorDB(ctx context.Context, tenantID int32, audienceTy
 	if topK <= 0 {
 		topK = 5
 	}
+	ctx = s.withTenantEmbeddingAPIKey(ctx, tenantID)
 
 	return s.vectorDB.Search(ctx, SearchQuery{
 		TenantID:     tenantID,

@@ -1124,7 +1124,7 @@ func (h *Handler) HandleReindexTenant(c echo.Context) error {
 	chunks, reindexErr := h.service.ReindexTenantContentWithResume(ctx, tenant.ID, audienceType, resume)
 	if reindexErr != nil {
 		slog.Error("reindex failed", "tenantID", tenant.ID, "audience", audienceType, "resume", resume, "error", reindexErr)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Reindex failed: "+reindexErr.Error())
+		return reindexHTTPError(reindexErr)
 	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
@@ -1134,6 +1134,20 @@ func (h *Handler) HandleReindexTenant(c echo.Context) error {
 		"audience": audienceType,
 		"resumed":  resume,
 	})
+}
+
+func reindexHTTPError(err error) *echo.HTTPError {
+	message := "Reindex failed: " + err.Error()
+	switch {
+	case errors.Is(err, ErrEmbeddingProviderMisconfigured):
+		return echo.NewHTTPError(http.StatusBadRequest, message)
+	case errors.Is(err, ErrEmbeddingProviderUnavailable):
+		return echo.NewHTTPError(http.StatusServiceUnavailable, message)
+	case errors.Is(err, ErrVectorStoreUnavailable):
+		return echo.NewHTTPError(http.StatusInternalServerError, message)
+	default:
+		return echo.NewHTTPError(http.StatusInternalServerError, message)
+	}
 }
 
 // HandleReindexStatus returns the current reindex status for a tenant.
@@ -1448,6 +1462,7 @@ func (h *Handler) importFiles(ctx context.Context, tenantID int32, audienceType,
 // indexContentForRAG indexes raw KB and Policy content into the vector database.
 // Uses markdown-based unstructured chunking and lets embeddings handle relevance ranking.
 func (h *Handler) indexContentForRAG(ctx context.Context, tenantID int32, audienceType string, rawKBContent, rawPolicyContent string) error {
+	ctx = h.service.withTenantEmbeddingAPIKey(ctx, tenantID)
 	chunker := h.service.chunker
 	vectorDB := h.service.GetVectorDB()
 
@@ -1487,7 +1502,7 @@ func (h *Handler) indexContentForRAG(ctx context.Context, tenantID int32, audien
 
 	// Set initial status to in_progress
 	now := time.Now()
-	_, _ = h.store.UpsertReindexCheckpoint(ctx, &store.ReindexCheckpoint{
+	if _, err := h.store.UpsertReindexCheckpoint(ctx, &store.ReindexCheckpoint{
 		TenantID:    tenantID,
 		Audience:    audienceType,
 		Status:      "in_progress",
@@ -1495,7 +1510,10 @@ func (h *Handler) indexContentForRAG(ctx context.Context, tenantID int32, audien
 		StartedAt:   now,
 		UpdatedAt:   now,
 		LastMessage: fmt.Sprintf("$ Synchronous reindexing started for %s audience", audienceType),
-	})
+	}); err != nil {
+		slog.Warn("failed to persist in_progress checkpoint for upload indexing",
+			"tenantID", tenantID, "audience", audienceType, "error", err)
+	}
 
 	// Define checkpoint callback
 	checkpointFunc := func(currentBatch, processedChunks, totalBatches, totalChunks, chunksInBatch int) error {
@@ -1523,13 +1541,16 @@ func (h *Handler) indexContentForRAG(ctx context.Context, tenantID int32, audien
 		// When the main request context ctx is cancelled or timed out, we must detach
 		// from it and use a short, bounded context to write the failure checkpoint to DB.
 		checkpointCtx, checkpointCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_, _ = h.store.UpsertReindexCheckpoint(checkpointCtx, &store.ReindexCheckpoint{
+		if _, checkpointErr := h.store.UpsertReindexCheckpoint(checkpointCtx, &store.ReindexCheckpoint{
 			TenantID:     tenantID,
 			Audience:     audienceType,
 			Status:       "failed",
 			ErrorMessage: err.Error(),
 			UpdatedAt:    time.Now(),
-		})
+		}); checkpointErr != nil {
+			slog.Error("failed to persist failed checkpoint for upload indexing",
+				"tenantID", tenantID, "audience", audienceType, "error", checkpointErr)
+		}
 		checkpointCancel()
 
 		return fmt.Errorf("failed to insert chunks: %w", err)
@@ -1538,7 +1559,7 @@ func (h *Handler) indexContentForRAG(ctx context.Context, tenantID int32, audien
 	// Mark as completed
 	now = time.Now()
 	completedCtx, completedCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	_, _ = h.store.UpsertReindexCheckpoint(completedCtx, &store.ReindexCheckpoint{
+	if _, completedCheckpointErr := h.store.UpsertReindexCheckpoint(completedCtx, &store.ReindexCheckpoint{
 		TenantID:        tenantID,
 		Audience:        audienceType,
 		Status:          "completed",
@@ -1547,7 +1568,12 @@ func (h *Handler) indexContentForRAG(ctx context.Context, tenantID int32, audien
 		UpdatedAt:       now,
 		CompletedAt:     &now,
 		LastMessage:     fmt.Sprintf("✓ Upload reindexing completed: %d chunks", len(allChunks)),
-	})
+	}); completedCheckpointErr != nil {
+		slog.Error("failed to persist completed checkpoint for upload indexing",
+			"tenantID", tenantID, "audience", audienceType, "error", completedCheckpointErr)
+		completedCancel()
+		return fmt.Errorf("upload indexing succeeded but failed to persist completed checkpoint: %w", completedCheckpointErr)
+	}
 	completedCancel()
 
 	slog.Info("Indexed content for RAG (unstructured)",
@@ -4345,6 +4371,7 @@ func (h *Handler) HandleTestRAGSearch(c echo.Context) error {
 		ActiveOnly:      true,
 	}
 
+	ctx = h.service.withTenantEmbeddingAPIKey(ctx, req.TenantID)
 	result, err := h.service.vectorDB.Search(ctx, searchQuery)
 	if err != nil {
 		slog.Error("RAG search test failed", "error", err)
@@ -4457,6 +4484,7 @@ func (h *Handler) HandleTenantRAGSearch(c echo.Context) error {
 		ActiveOnly:   true,
 	}
 
+	ctx = h.service.withTenantEmbeddingAPIKey(ctx, tenant.ID)
 	result, err := h.service.vectorDB.Search(ctx, searchQuery)
 	if err != nil {
 		slog.Error("Tenant RAG search failed", "error", err, "tenantID", tenant.ID)

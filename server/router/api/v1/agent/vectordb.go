@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -55,6 +56,9 @@ type VectorDB interface {
 	// Dimension returns the embedding dimension this VectorDB handles.
 	// Returns 0 if not applicable (e.g., NoOpVectorDB).
 	Dimension() int
+
+	// Validate checks if the database and its dependencies (like embedding API) are functional.
+	Validate(ctx context.Context) error
 }
 
 // VectorDBConfig holds configuration for the vector database.
@@ -517,6 +521,21 @@ func (db *MemoryVectorDB) Dimension() int {
 	return db.embedSvc.Dimension()
 }
 
+// Validate checks if the database and its dependencies (like embedding API) are functional.
+func (db *MemoryVectorDB) Validate(ctx context.Context) error {
+	if db.embedSvc == nil {
+		return fmt.Errorf("%w: embedding service not initialized", ErrEmbeddingProviderMisconfigured)
+	}
+	_, err := db.embedSvc.Embed(ctx, []string{"preflight"})
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, ErrEmbeddingProviderMisconfigured) || errors.Is(err, ErrEmbeddingProviderUnavailable) {
+		return err
+	}
+	return fmt.Errorf("%w: %v", ErrEmbeddingProviderUnavailable, err)
+}
+
 // ============================================================================
 // NO-OP VECTOR DATABASE (When RAG is disabled)
 // ============================================================================
@@ -581,6 +600,11 @@ func (db *NoOpVectorDB) ListChunks(ctx context.Context, tenantID int32) ([]Docum
 // Dimension returns 0 (not applicable for no-op).
 func (db *NoOpVectorDB) Dimension() int {
 	return 0
+}
+
+// Validate is a no-op for disabled RAG.
+func (db *NoOpVectorDB) Validate(ctx context.Context) error {
+	return nil
 }
 
 // ============================================================================
