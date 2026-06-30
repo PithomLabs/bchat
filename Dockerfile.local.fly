@@ -100,9 +100,9 @@ ENV EMBEDDING_BATCH_SIZE="10"
 # Optional LLM verifier (disabled by default)
 ENV LLM_VERIFIER_ENABLED="false"
 
-ENV LLM_MODEL_REASONING="nvidia/nemotron-3-super-120b-a12b:free"
+ENV LLM_MODEL_REASONING="nvidia/nemotron-3-ultra-550b-a55b:free"
 ENV EMBEDDING_TIMEOUT="10m"
-ENV LLM_MODEL="openai/gpt-oss-120b:free"
+ENV LLM_MODEL="nvidia/nemotron-3-ultra-550b-a55b:free"
 EXPOSE 5230
 
 ENTRYPOINT ["./entrypoint.sh", "./memos"]

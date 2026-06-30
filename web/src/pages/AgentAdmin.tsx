@@ -1789,7 +1789,7 @@ const AgentAdmin = observer(() => {
 
                             {/* Keywords & Meta */}
                             <div className="flex flex-wrap gap-2 items-center text-xs">
-                              {result.matched_keywords.length > 0 && (
+                              {result.matched_keywords && result.matched_keywords.length > 0 && (
                                 <div className="flex gap-1 items-center">
                                   <span className="text-gray-500">
                                     Matched:

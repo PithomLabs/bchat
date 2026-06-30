@@ -1,5 +1,5 @@
 import { Tooltip } from "@mui/joy";
-import { BellIcon, BotIcon, DatabaseIcon, EarthIcon, FlaskConicalIcon, LibraryIcon, PaperclipIcon, SettingsIcon, TicketIcon, UserCircleIcon } from "lucide-react";
+import { BellIcon, BotIcon, DatabaseIcon, EarthIcon, FlaskConicalIcon, LibraryIcon, PaperclipIcon, PlaySquareIcon, SettingsIcon, TicketIcon, UserCircleIcon } from "lucide-react";
 import { observer } from "mobx-react-lite";
 import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
@@ -111,6 +111,12 @@ const Navigation = observer((props: Props) => {
     title: t("common.agent-admin"),
     icon: <SettingsIcon className="w-6 h-auto opacity-70 shrink-0" />,
   };
+  const playgroundNavLink: NavLinkItem = {
+    id: "header-playground",
+    path: Routes.PLAYGROUND,
+    title: "Playground",
+    icon: <PlaySquareIcon className="w-6 h-auto opacity-70 shrink-0" />,
+  };
   const ragStatsNavLink: NavLinkItem = {
     id: "header-rag-stats",
     path: Routes.RAG_STATS,
@@ -139,8 +145,8 @@ const Navigation = observer((props: Props) => {
   const adminNavLinks: NavLinkItem[] = isAdmin ? [agentAdminNavLink, ragStatsNavLink] : [];
 
   const navLinks: NavLinkItem[] = currentUser
-    ? [...baseNavLinks, ...adminNavLinks]
-    : [exploreNavLink, signInNavLink];
+    ? [playgroundNavLink, ...baseNavLinks, ...adminNavLinks]
+    : [playgroundNavLink, exploreNavLink, signInNavLink];
 
   return (
     <header
