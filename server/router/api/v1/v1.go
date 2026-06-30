@@ -185,8 +185,10 @@ func (s *APIV1Service) RegisterGateway(ctx context.Context, echoServer *echo.Ech
 func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	// Public routes (no auth required) - CORS handled globally
 	publicGroup := echoServer.Group("/api/v1/agent")
+	publicGroup.GET("/playground/catalog", s.agentHandler.HandlePlaygroundCatalog)
 	publicGroup.POST("/:slug/chat/ext", s.agentHandler.HandleChatExternal)
 	publicGroup.GET("/:slug/chat/ext/transcript", s.agentHandler.HandleGetExternalTranscript)
+	publicGroup.POST("/:slug/playground/run", s.agentHandler.HandlePlaygroundRun)
 	publicGroup.GET("/:slug/widget.js", s.agentHandler.HandleWidget) // Legacy - inline JS
 
 	// Bridge routes (HMAC authenticated)
@@ -261,6 +263,7 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	adminGroup.Use(s.AuthMiddleware)
 	adminGroup.GET("/tenants", s.agentHandler.HandleListTenants)
 	adminGroup.POST("/onboard", s.agentHandler.HandleOnboard)
+	adminGroup.POST("/playground/seed", s.agentHandler.HandleSeedPlaygroundDemos)
 	adminGroup.GET("/:slug/config", s.agentHandler.HandleGetTenantFullConfig)
 	adminGroup.PATCH("/:slug", s.agentHandler.HandleUpdateTenant)
 	adminGroup.DELETE("/:slug", s.agentHandler.HandleDeleteTenant)
@@ -299,9 +302,6 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	adminGroup.GET("/:slug/leads/export", s.agentHandler.HandleExportLeads)
 	adminGroup.GET("/:slug/leads/:id", s.agentHandler.HandleGetLead)
 	adminGroup.PATCH("/:slug/leads/:id/status", s.agentHandler.HandleUpdateLeadStatus)
-
-	// Tenant-scoped RAG search (admin only, for admin panel debug)
-	adminGroup.POST("/:slug/rag/search", s.agentHandler.HandleTenantRAGSearch)
 
 	// Tenant settings routes (admin only)
 	adminGroup.GET("/:slug/settings", s.agentHandler.HandleGetTenantSettings)
