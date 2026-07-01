@@ -796,6 +796,14 @@ type RetrievedContext struct {
 	Rules      []DocumentChunk
 	Safety     []DocumentChunk
 	KBSections []DocumentChunk
+	Scores     []float64
+}
+
+func (r *RetrievedContext) topScore() float64 {
+	if len(r.Scores) > 0 {
+		return r.Scores[0]
+	}
+	return 0
 }
 
 // HybridSearchOptions holds optional hybrid search configuration for retrieval.
@@ -853,5 +861,6 @@ func RetrieveContextForQuery(
 	// Return all results as KBSections (simplified, no type-based bucketing)
 	return &RetrievedContext{
 		KBSections: result.Chunks,
+		Scores:     result.Scores,
 	}, nil
 }

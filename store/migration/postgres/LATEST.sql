@@ -160,6 +160,7 @@ CREATE TABLE agent_audiences (
   emergency_urgency_threshold INTEGER NOT NULL DEFAULT 4,
   escalation_confidence_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.85,
   rate_limit_rpm INTEGER NOT NULL DEFAULT 60,
+  require_contact_on_fallback BOOLEAN NOT NULL DEFAULT TRUE,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(tenant_id, audience_type)
 );

@@ -80,7 +80,7 @@ func TestBuildContactInstruction(t *testing.T) {
 		IsComplete:      true,
 	}
 	class := &Classification{PrimaryIntent: "out_of_coverage"}
-	instructions := buildContactInstruction(state, class, "555-000-1111")
+	instructions := buildContactInstruction(state, class, "555-000-1111", true)
 
 	// Section 0 should be present
 	contains(t, instructions.Section0Addition, "=== CUSTOMER INFO ALREADY PROVIDED")
@@ -98,7 +98,7 @@ func TestBuildContactInstruction(t *testing.T) {
 
 	// Permutation 2: Complete state, In-scope intent (should not have fallback prompts)
 	classInScope := &Classification{PrimaryIntent: "pricing"}
-	instructionsInScope := buildContactInstruction(state, classInScope, "555-000-1111")
+	instructionsInScope := buildContactInstruction(state, classInScope, "555-000-1111", true)
 	contains(t, instructionsInScope.Rule1Text, "Since they have already provided their contact information, do NOT ask for it again")
 	notContains(t, instructionsInScope.Rule1Text, "simply state that our team will follow up") // Fallback-specific phrasing is absent
 
@@ -109,7 +109,7 @@ func TestBuildContactInstruction(t *testing.T) {
 		HasEmailOrPhone: false,
 		IsComplete:      false,
 	}
-	instructionsPartialName := buildContactInstruction(stateNameOnly, class, "555-000-1111")
+	instructionsPartialName := buildContactInstruction(stateNameOnly, class, "555-000-1111", true)
 	contains(t, instructionsPartialName.Rule1Text, "ask only for their email or phone for follow-up")
 	contains(t, instructionsPartialName.Rule8Text, "ask only for their email or phone. Do not ask for their name again")
 	contains(t, instructionsPartialName.RAGFallbackText, "ask only for their email or phone for follow-up. Do not ask for their name again")
@@ -121,16 +121,25 @@ func TestBuildContactInstruction(t *testing.T) {
 		HasEmailOrPhone: true,
 		IsComplete:      false,
 	}
-	instructionsPartialEmail := buildContactInstruction(stateEmailOnly, class, "555-000-1111")
+	instructionsPartialEmail := buildContactInstruction(stateEmailOnly, class, "555-000-1111", true)
 	contains(t, instructionsPartialEmail.Rule1Text, "ask only for their name for follow-up")
 	contains(t, instructionsPartialEmail.Rule8Text, "ask only for their name. Do not ask for their email or phone again")
 	contains(t, instructionsPartialEmail.RAGFallbackText, "ask only for their name for follow-up. Do not ask for their email or phone again")
 
 	// Permutation 5: No contact info, Fallback intent
 	stateEmpty := ContactState{}
-	instructionsEmpty := buildContactInstruction(stateEmpty, class, "555-000-1111")
+	instructionsEmpty := buildContactInstruction(stateEmpty, class, "555-000-1111", true)
 	require.Empty(t, instructionsEmpty.Section0Addition)
 	contains(t, instructionsEmpty.Rule1Text, "offer to collect their name plus email or phone for follow-up")
 	contains(t, instructionsEmpty.Rule8Text, "ask for their name and either email or phone")
 	contains(t, instructionsEmpty.RAGFallbackText, "offer to collect the customer's name plus email or phone for follow-up")
+
+	// Permutation 6: Contact collection disabled should suppress all follow-up capture prompts.
+	instructionsDisabled := buildContactInstruction(state, class, "555-000-1111", false)
+	require.Empty(t, instructionsDisabled.Section0Addition)
+	contains(t, instructionsDisabled.Rule1Text, "Do not ask for contact information for follow-up")
+	contains(t, instructionsDisabled.Rule8Text, "Do NOT ask to collect customer contact details")
+	contains(t, instructionsDisabled.RAGFallbackText, "without asking for customer contact information")
+	notContains(t, instructionsDisabled.Rule1Text, "offer to collect")
+	notContains(t, instructionsDisabled.RAGFallbackText, "team member can follow up")
 }

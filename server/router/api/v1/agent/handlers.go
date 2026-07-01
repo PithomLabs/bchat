@@ -1083,7 +1083,7 @@ func (h *Handler) HandleImportSingleFile(c echo.Context) error {
 // HandleReindexTenant triggers RAG reindexing for a specific tenant.
 // POST /api/v1/agent/:slug/reindex
 // Requires: ADMIN role OR api:config permission
-// Note: Only indexes internal audience content. External audience is never indexed.
+// Note: External audience is indexed when explicitly requested via audience parameter.
 // Note: Skipped entirely if tenant uses long_context mode (RAG not needed).
 func (h *Handler) HandleReindexTenant(c echo.Context) error {
 	ctx := c.Request().Context()
@@ -1401,8 +1401,7 @@ func (h *Handler) importFiles(ctx context.Context, tenantID int32, audienceType,
 		slog.Info("extracted emergency phone from KB", "phone", emergencyPhone)
 	}
 
-	// Create audience with defaults (no parsing needed)
-	h.store.CreateAgentAudience(ctx, &store.AgentAudience{
+	audience := &store.AgentAudience{
 		TenantID:                      tenantID,
 		AudienceType:                  audienceType,
 		Role:                          "assistant",
@@ -1413,7 +1412,43 @@ func (h *Handler) importFiles(ctx context.Context, tenantID int32, audienceType,
 		EmergencyUrgencyThreshold:     4,
 		EscalationConfidenceThreshold: 0.85,
 		RateLimitRPM:                  60,
-	})
+		RequireContactOnFallback:      true,
+	}
+
+	if policyContent != "" {
+		policy, err := NewParser().ParsePolicy(policyContent, tenantID, audienceType)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse policy file: %w", err)
+		}
+		if policy.Identity != nil {
+			if policy.Identity.Role != "" {
+				audience.Role = policy.Identity.Role
+			}
+			if policy.Identity.Tone != "" {
+				audience.Tone = policy.Identity.Tone
+			}
+			audience.BrandVoice = policy.Identity.BrandVoice
+			audience.Guidelines = policy.Identity.Guidelines
+		}
+		if policy.Audience != nil {
+			if policy.Audience.Role != "" {
+				audience.Role = policy.Audience.Role
+			}
+			if policy.Audience.Tone != "" {
+				audience.Tone = policy.Audience.Tone
+			}
+			audience.BrandVoice = policy.Audience.BrandVoice
+			audience.Guidelines = policy.Audience.Guidelines
+			audience.EmergencyUrgencyThreshold = policy.Audience.EmergencyUrgencyThreshold
+			audience.EscalationConfidenceThreshold = policy.Audience.EscalationConfidenceThreshold
+			audience.RateLimitRPM = policy.Audience.RateLimitRPM
+			audience.RequireContactOnFallback = policy.Audience.RequireContactOnFallback
+		}
+	}
+
+	if _, err := h.store.CreateAgentAudience(ctx, audience); err != nil {
+		return nil, fmt.Errorf("failed to create audience: %w", err)
+	}
 
 	// Store source files
 	if kbContent != "" {
@@ -1441,10 +1476,12 @@ func (h *Handler) importFiles(ctx context.Context, tenantID int32, audienceType,
 		}
 	}
 
-	// Index content for RAG pipeline (unstructured markdown chunking)
-	if err := h.indexContentForRAG(ctx, tenantID, audienceType, kbContent, policyContent); err != nil {
-		slog.Warn("Failed to index content for RAG", "error", err, "tenantID", tenantID, "audience", audienceType)
-		// Don't fail the import if indexing fails - RAG is an enhancement
+	// Reindex content for RAG pipeline using resume-capable path
+	if _, err := h.service.ReindexTenantContentWithResume(ctx, tenantID, audienceType, false); err != nil {
+		slog.Warn("Failed to reindex content for RAG",
+			"error", err,
+			"tenantID", tenantID,
+			"audience", audienceType)
 	}
 
 	// Return simplified AudienceInfo (no counts since we don't parse structured content)
@@ -1457,131 +1494,6 @@ func (h *Handler) importFiles(ctx context.Context, tenantID int32, audienceType,
 		PolicyIsStructured:   false,
 		HasStructuredContent: false,
 	}, nil
-}
-
-// indexContentForRAG indexes raw KB and Policy content into the vector database.
-// Uses markdown-based unstructured chunking and lets embeddings handle relevance ranking.
-func (h *Handler) indexContentForRAG(ctx context.Context, tenantID int32, audienceType string, rawKBContent, rawPolicyContent string) error {
-	ctx = h.service.withTenantEmbeddingAPIKey(ctx, tenantID)
-	chunker := h.service.chunker
-	vectorDB := h.service.GetVectorDB()
-
-	if chunker == nil || vectorDB == nil || !h.service.IsRAGEnabled() {
-		return nil // RAG not enabled
-	}
-
-	// Delete existing chunks for this tenant/audience
-	if err := vectorDB.Delete(ctx, tenantID, audienceType); err != nil {
-		return fmt.Errorf("failed to delete existing chunks: %w", err)
-	}
-
-	// Get embedding provider for chunk size calculation
-	embeddingProvider := ""
-	if h.service.vectorDBConfig != nil && h.service.vectorDBConfig.EmbeddingConfig != nil {
-		embeddingProvider = h.service.vectorDBConfig.EmbeddingConfig.Provider
-	}
-	maxChunkTokens := GetMaxChunkTokens(embeddingProvider)
-
-	var allChunks []DocumentChunk
-
-	// Use markdown-based unstructured chunking
-	// Let embeddings + hybrid search handle relevance ranking
-	if rawKBContent != "" {
-		kbChunks := chunker.ChunkMarkdownContent(rawKBContent, tenantID, audienceType, "kb", 1, maxChunkTokens)
-		allChunks = append(allChunks, kbChunks...)
-	}
-
-	if rawPolicyContent != "" {
-		policyChunks := chunker.ChunkMarkdownContent(rawPolicyContent, tenantID, audienceType, "policy", 1, maxChunkTokens)
-		allChunks = append(allChunks, policyChunks...)
-	}
-
-	if len(allChunks) == 0 {
-		return nil
-	}
-
-	// Set initial status to in_progress
-	now := time.Now()
-	if _, err := h.store.UpsertReindexCheckpoint(ctx, &store.ReindexCheckpoint{
-		TenantID:    tenantID,
-		Audience:    audienceType,
-		Status:      "in_progress",
-		TotalChunks: int32(len(allChunks)),
-		StartedAt:   now,
-		UpdatedAt:   now,
-		LastMessage: fmt.Sprintf("$ Synchronous reindexing started for %s audience", audienceType),
-	}); err != nil {
-		slog.Warn("failed to persist in_progress checkpoint for upload indexing",
-			"tenantID", tenantID, "audience", audienceType, "error", err)
-	}
-
-	// Define checkpoint callback
-	checkpointFunc := func(currentBatch, processedChunks, totalBatches, totalChunks, chunksInBatch int) error {
-		msg := fmt.Sprintf("$ Indexing batch %d/%d (%d/%d chunks)...", currentBatch+1, totalBatches, processedChunks, totalChunks)
-		_, err := h.store.UpsertReindexCheckpoint(ctx, &store.ReindexCheckpoint{
-			TenantID:        tenantID,
-			Audience:        audienceType,
-			Status:          "in_progress",
-			CurrentBatch:    int32(currentBatch),
-			TotalBatches:    int32(totalBatches),
-			ProcessedChunks: int32(processedChunks),
-			TotalChunks:     int32(totalChunks),
-			UpdatedAt:       time.Now(),
-			LastMessage:     msg,
-		})
-		return err
-	}
-
-	// Insert chunks with checkpoint
-	if err := vectorDB.InsertWithCheckpoint(ctx, allChunks, InsertOptions{
-		CheckpointFunc: checkpointFunc,
-	}); err != nil {
-		// [CODE-LOCAL INVARIANT BOUNDARY COMMENT]
-		// INV_RAG_CHECKPOINT_STATE_MUST_PERSIST_ON_CANCEL:
-		// When the main request context ctx is cancelled or timed out, we must detach
-		// from it and use a short, bounded context to write the failure checkpoint to DB.
-		checkpointCtx, checkpointCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if _, checkpointErr := h.store.UpsertReindexCheckpoint(checkpointCtx, &store.ReindexCheckpoint{
-			TenantID:     tenantID,
-			Audience:     audienceType,
-			Status:       "failed",
-			ErrorMessage: err.Error(),
-			UpdatedAt:    time.Now(),
-		}); checkpointErr != nil {
-			slog.Error("failed to persist failed checkpoint for upload indexing",
-				"tenantID", tenantID, "audience", audienceType, "error", checkpointErr)
-		}
-		checkpointCancel()
-
-		return fmt.Errorf("failed to insert chunks: %w", err)
-	}
-
-	// Mark as completed
-	now = time.Now()
-	completedCtx, completedCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	if _, completedCheckpointErr := h.store.UpsertReindexCheckpoint(completedCtx, &store.ReindexCheckpoint{
-		TenantID:        tenantID,
-		Audience:        audienceType,
-		Status:          "completed",
-		ProcessedChunks: int32(len(allChunks)),
-		TotalChunks:     int32(len(allChunks)),
-		UpdatedAt:       now,
-		CompletedAt:     &now,
-		LastMessage:     fmt.Sprintf("✓ Upload reindexing completed: %d chunks", len(allChunks)),
-	}); completedCheckpointErr != nil {
-		slog.Error("failed to persist completed checkpoint for upload indexing",
-			"tenantID", tenantID, "audience", audienceType, "error", completedCheckpointErr)
-		completedCancel()
-		return fmt.Errorf("upload indexing succeeded but failed to persist completed checkpoint: %w", completedCheckpointErr)
-	}
-	completedCancel()
-
-	slog.Info("Indexed content for RAG (unstructured)",
-		"tenantID", tenantID,
-		"audience", audienceType,
-		"chunks", len(allChunks))
-
-	return nil
 }
 
 // HandleExport exports the configuration to files.

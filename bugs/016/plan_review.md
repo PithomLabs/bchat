@@ -1,0 +1,6 @@
+Key Issues Found in Original Plan
+importFiles() never reads the parser — the @settings annotation would be silently ignored on every file upload. Fix: scan raw policy content for @settings inside importFiles() after creating the audience record.
+Post-LLM correctors bypass the flag — CorrectContactsInResponse() and CorrectEmailsInResponse() run unconditionally in processChat() even if the prompt is stripped. Fix: guard them with shouldCollectContact(config).
+buildRAGSection0 ignores the flag — in RAG mode, already-collected customer info is injected into the prompt regardless. Fix: only call buildRAGSection0 when contact collection is enabled.
+Wrong target function — the user's symptom comes from buildRAGFallback (RAG path), not buildRule1 (out-of-coverage path). The plan needed to address the RAG fallback specifically.
+ParsePolicy only initializes result.Audience inside the thresholds case — if @settings appears without @thresholds, it panics on nil pointer. Fix: nil-check and initialize before setting fields.
