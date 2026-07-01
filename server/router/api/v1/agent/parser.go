@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -61,6 +62,24 @@ type ParsedIdentity struct {
 	Tone       string
 	BrandVoice string
 	Guidelines []string
+}
+
+func ensurePolicyAudience(result *ParsedPolicy, tenantID int32, audienceType string) *store.AgentAudience {
+	if result.Audience == nil {
+		result.Audience = &store.AgentAudience{
+			TenantID:                      tenantID,
+			AudienceType:                  audienceType,
+			Role:                          result.Identity.Role,
+			Tone:                          result.Identity.Tone,
+			BrandVoice:                    result.Identity.BrandVoice,
+			Guidelines:                    result.Identity.Guidelines,
+			EmergencyUrgencyThreshold:     4,
+			EscalationConfidenceThreshold: 0.85,
+			RateLimitRPM:                  60,
+			RequireContactOnFallback:      true,
+		}
+	}
+	return result.Audience
 }
 
 // ContentHash generates a SHA256 hash of the content.
@@ -530,6 +549,13 @@ func (p *Parser) ParsePolicy(content string, tenantID int32, audienceType string
 				IsActive:     true,
 			})
 
+		case "settings":
+			audience := ensurePolicyAudience(result, tenantID, audienceType)
+			if val, ok := block.params["require_contact_on_fallback"]; ok {
+				val = strings.ToLower(strings.TrimSpace(val))
+				audience.RequireContactOnFallback = val == "true" || val == "1" || val == "yes"
+			}
+
 		case "thresholds":
 			thresholdsContent := block.title + "\n" + block.content
 
@@ -548,18 +574,21 @@ func (p *Parser) ParsePolicy(content string, tenantID int32, audienceType string
 				escalationThreshold = parseFloat(ecMatch[1])
 			}
 
-			result.Audience = &store.AgentAudience{
-				TenantID:                      tenantID,
-				AudienceType:                  audienceType,
-				Role:                          result.Identity.Role,
-				Tone:                          result.Identity.Tone,
-				BrandVoice:                    result.Identity.BrandVoice,
-				Guidelines:                    result.Identity.Guidelines,
-				EmergencyUrgencyThreshold:     emergencyThreshold,
-				EscalationConfidenceThreshold: escalationThreshold,
-				RateLimitRPM:                  60, // default
-			}
+			audience := ensurePolicyAudience(result, tenantID, audienceType)
+			audience.EmergencyUrgencyThreshold = emergencyThreshold
+			audience.EscalationConfidenceThreshold = escalationThreshold
 		}
+	}
+
+	if result.Audience != nil && result.Identity != nil {
+		if result.Identity.Role != "" {
+			result.Audience.Role = result.Identity.Role
+		}
+		if result.Identity.Tone != "" {
+			result.Audience.Tone = result.Identity.Tone
+		}
+		result.Audience.BrandVoice = result.Identity.BrandVoice
+		result.Audience.Guidelines = result.Identity.Guidelines
 	}
 
 	return result, nil
@@ -809,6 +838,13 @@ func (p *Parser) ExportPolicy(policy *ParsedPolicy) string {
 			sb.WriteString(r.Description + "\n\n")
 			sb.WriteString("---\n\n")
 		}
+	}
+
+	// Settings
+	if policy.Audience != nil {
+		sb.WriteString("## Settings\n")
+		sb.WriteString(fmt.Sprintf("<!-- @settings: require_contact_on_fallback: %t -->\n\n", policy.Audience.RequireContactOnFallback))
+		sb.WriteString("---\n\n")
 	}
 
 	// Thresholds

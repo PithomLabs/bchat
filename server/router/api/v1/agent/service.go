@@ -24,6 +24,11 @@ import (
 // Default timeout for LLM client requests
 const defaultLLMTimeout = 180 * time.Second
 
+const (
+	ragMinScore            = 0.25
+	ragFallbackTokenBudget = 6000 // ~24KB of text, safe for most LLM contexts
+)
+
 // newOpenRouterClient creates an OpenRouter client with a timeout.
 func newOpenRouterClient(apiKey string) *openrouter.Client {
 	config := openrouter.DefaultConfig(apiKey)
@@ -1867,16 +1872,18 @@ func (s *Service) processChat(ctx context.Context, config *AudienceConfig, sessi
 			"session_id", session.ID)
 	}
 
-	// Auto-correct placeholder phone numbers (Option C - hybrid approach)
-	// This catches hallucinated phones like (555) 000-0000 and replaces with the validated one
-	response = CorrectContactsInResponse(response, validatedPhone)
+	if shouldCollectContact(config) {
+		// Auto-correct placeholder phone numbers (Option C - hybrid approach)
+		// This catches hallucinated phones like (555) 000-0000 and replaces with the validated one
+		response = CorrectContactsInResponse(response, validatedPhone)
 
-	// Auto-correct placeholder emails (catches hallucinated emails like alex.martinez@email.com)
-	if config.Audience != nil && config.Audience.Email != "" {
-		response = CorrectEmailsInResponse(response, config.Audience.Email)
-	} else {
-		// No replacement email configured - just flag placeholders with [email address]
-		response = CorrectEmailsInResponse(response, "")
+		// Auto-correct placeholder emails (catches hallucinated emails like alex.martinez@email.com)
+		if config.Audience != nil && config.Audience.Email != "" {
+			response = CorrectEmailsInResponse(response, config.Audience.Email)
+		} else {
+			// No replacement email configured - just flag placeholders with [email address]
+			response = CorrectEmailsInResponse(response, "")
+		}
 	}
 
 	// LLM-based verification layer (semantic compliance checking)
@@ -1896,8 +1903,14 @@ func (s *Service) processChat(ctx context.Context, config *AudienceConfig, sessi
 			// The verifier's corrected response may re-introduce placeholders
 			// because the verifier LLM can also hallucinate phone numbers.
 			// Apply sanitization again to catch any new placeholder phones.
-			response = CorrectContactsInResponse(response, validatedPhone)
-			response = CorrectEmailsInResponse(response, config.Audience.Email)
+			if shouldCollectContact(config) {
+				response = CorrectContactsInResponse(response, validatedPhone)
+				replacementEmail := ""
+				if config.Audience != nil {
+					replacementEmail = config.Audience.Email
+				}
+				response = CorrectEmailsInResponse(response, replacementEmail)
+			}
 		}
 
 		// Log violations for monitoring
@@ -2254,7 +2267,8 @@ func (s *Service) buildSystemPrompt(ctx context.Context, config *AudienceConfig,
 
 	// Get contact state and instructions
 	contactState := getContactState(session, validatedPhone)
-	contactInstruction := buildContactInstruction(contactState, classification, validatedPhone)
+	collectContact := shouldCollectContact(config)
+	contactInstruction := buildContactInstruction(contactState, classification, validatedPhone, collectContact)
 
 	// =========================================================================
 	// SECTION 0: CUSTOMER INFO ALREADY PROVIDED (Context Retention)
@@ -2522,6 +2536,29 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
+func truncateToTokenBudget(text string, maxTokens int) string {
+	if maxTokens <= 0 {
+		return ""
+	}
+	tokens := EstimateTokens(text)
+	if tokens <= maxTokens {
+		return text
+	}
+	estimatedBytes := maxTokens * 4
+	end := estimatedBytes
+	for end > 0 && text[end-1]&0xC0 == 0x80 {
+		end--
+	}
+	if end == 0 {
+		end = estimatedBytes
+	}
+	candidate := text[:end]
+	if EstimateTokens(candidate) > maxTokens {
+		candidate = candidate[:max(0, end-100)]
+	}
+	return candidate + "..."
+}
+
 // ============================================================================
 // RAG PIPELINE (Phase 3)
 // ============================================================================
@@ -2580,12 +2617,35 @@ func (s *Service) generateRAGResponse(
 		slog.Warn("RAG retrieval failed, falling back to full context",
 			"error", err,
 			"session_id", session.ID)
-		// Fall back to regular generation
 		return s.generateResponse(ctx, config, session, classification, decision)
 	}
 
+	needsFallback := len(retrieved.KBSections) == 0 || retrieved.topScore() < ragMinScore
+
+	if needsFallback {
+		slog.Info("RAG fallback activated",
+			"tenant_slug", config.TenantSlug,
+			"session_id", session.ID,
+			"query", userMessage,
+			"chunks_found", len(retrieved.KBSections),
+			"top_score", retrieved.topScore())
+	}
+
+	incompleteIndex := s.checkIncompleteRAGIndex(ctx, config, session)
+	needsFallback = needsFallback || incompleteIndex
+
 	// Build RAG-optimized system prompt
-	systemPrompt := s.buildRAGSystemPrompt(config, session, classification, decision, retrieved)
+	systemPrompt := s.buildRAGSystemPrompt(config, session, classification, decision, retrieved, needsFallback)
+
+	if needsFallback {
+		fallbackKB := truncateToTokenBudget(config.RawKB, ragFallbackTokenBudget)
+		if fallbackKB != "" {
+			systemPrompt += "=== RAW KNOWLEDGE BASE FALLBACK (Retrieved chunks were insufficient) ===\n\n"
+			systemPrompt += "Because retrieved context was insufficient, the full raw KB is provided below.\n\n"
+			systemPrompt += fallbackKB
+			systemPrompt += "\n\n"
+		}
+	}
 
 	// Build conversation history
 	messages := []openrouter.ChatCompletionMessage{
@@ -2636,6 +2696,49 @@ func (s *Service) generateRAGResponse(
 	return resp.Choices[0].Message.Content.Text, nil
 }
 
+func (s *Service) checkIncompleteRAGIndex(ctx context.Context, config *AudienceConfig, session *store.AgentSession) bool {
+	if !s.IsRAGEnabled() {
+		return false
+	}
+
+	chunks, err := s.vectorDB.ListChunks(ctx, config.TenantID)
+	if err != nil {
+		slog.Warn("RAG index check failed",
+			"error", err,
+			"tenant_slug", config.TenantSlug,
+			"session_id", session.ID)
+		return false
+	}
+
+	hasAudienceChunks := false
+	for _, chunk := range chunks {
+		if chunk.AudienceType == config.AudienceType {
+			hasAudienceChunks = true
+			break
+		}
+	}
+
+	status, statusErr := s.GetReindexStatus(ctx, config.TenantID, config.AudienceType)
+	if statusErr != nil {
+		slog.Debug("RAG reindex status unavailable",
+			"error", statusErr,
+			"tenant_slug", config.TenantSlug,
+			"session_id", session.ID)
+		return false
+	}
+
+	incomplete := !hasAudienceChunks || status.Status == "stale_in_progress" || status.Status == "failed"
+	if incomplete {
+		slog.Warn("RAG index is incomplete",
+			"tenant_slug", config.TenantSlug,
+			"session_id", session.ID,
+			"audience", config.AudienceType,
+			"chunks_found", len(chunks),
+			"reindex_status", status.Status)
+	}
+	return incomplete
+}
+
 // buildRAGSystemPrompt constructs a system prompt using RAG-retrieved context.
 // This is more focused than buildSystemPrompt as it only includes relevant content.
 func (s *Service) buildRAGSystemPrompt(
@@ -2644,6 +2747,7 @@ func (s *Service) buildRAGSystemPrompt(
 	classification *Classification,
 	decision *PolicyDecision,
 	retrieved *RetrievedContext,
+	withFallback bool,
 ) string {
 	var sb strings.Builder
 
@@ -2683,20 +2787,27 @@ func (s *Service) buildRAGSystemPrompt(
 
 	// Get contact state and instructions
 	contactState := getContactState(session, validatedPhone)
-	contactInstruction := buildContactInstruction(contactState, classification, validatedPhone)
+	collectContact := shouldCollectContact(config)
+	contactInstruction := buildContactInstruction(contactState, classification, validatedPhone, collectContact)
 
 	// =========================================================================
 	// SECTION 0: CUSTOMER INFO (DO NOT ASK AGAIN)
 	// =========================================================================
-	if section0 := buildRAGSection0(contactState); section0 != "" {
-		sb.WriteString(section0)
+	if collectContact {
+		if section0 := buildRAGSection0(contactState); section0 != "" {
+			sb.WriteString(section0)
+		}
 	}
 
 	// =========================================================================
 	// SECTION 3: CONSTRAINTS & CONTACT (Combined for efficiency)
 	// =========================================================================
 	sb.WriteString("=== CONSTRAINTS ===\n")
-	sb.WriteString("- Only discuss information in RETRIEVED CONTEXT below\n")
+	if withFallback {
+		sb.WriteString("- If the RETRIEVED CONTEXT below does not contain an answer, use the RAW KNOWLEDGE BASE FALLBACK section.\n")
+	} else {
+		sb.WriteString("- Only discuss information in RETRIEVED CONTEXT below\n")
+	}
 	sb.WriteString("- Never invent information, facts, or details not in the context\n")
 	sb.WriteString("- If uncertain, acknowledge honestly\n")
 	if validatedPhone != "" {
@@ -2736,7 +2847,12 @@ func (s *Service) buildRAGSystemPrompt(
 		len(retrieved.Exclusions) > 0
 
 	if hasRetrievedContent {
-		sb.WriteString("=== RETRIEVED CONTEXT (Use ONLY this information) ===\n\n")
+		if withFallback {
+			sb.WriteString("=== RETRIEVED CONTEXT ===\n\n")
+			sb.WriteString("Note: If the RETRIEVED CONTEXT below does not contain an answer, use the RAW KNOWLEDGE BASE FALLBACK section.\n\n")
+		} else {
+			sb.WriteString("=== RETRIEVED CONTEXT (Use ONLY this information) ===\n\n")
+		}
 
 		// Services
 		if len(retrieved.Services) > 0 {
@@ -2918,6 +3034,13 @@ type ContactInstruction struct {
 	RAGFallbackText  string
 }
 
+func shouldCollectContact(config *AudienceConfig) bool {
+	if config == nil || config.Audience == nil {
+		return true
+	}
+	return config.Audience.RequireContactOnFallback
+}
+
 func isFallbackIntent(intent string) bool {
 	switch intent {
 	case "out_of_coverage", "out_of_scope", "not_found", "unsupported", "unknown":
@@ -2926,10 +3049,18 @@ func isFallbackIntent(intent string) bool {
 	return false
 }
 
-func buildContactInstruction(state ContactState, classification *Classification, validatedPhone string) ContactInstruction {
+func buildContactInstruction(state ContactState, classification *Classification, validatedPhone string, collectContact bool) ContactInstruction {
 	fallback := false
 	if classification != nil {
 		fallback = isFallbackIntent(classification.PrimaryIntent)
+	}
+
+	if !collectContact {
+		return ContactInstruction{
+			Rule1Text:       buildRule1WithoutContact(),
+			Rule8Text:       buildRule8WithoutFollowUp(validatedPhone),
+			RAGFallbackText: buildRAGFallbackWithoutContact(),
+		}
 	}
 
 	return ContactInstruction{
@@ -2993,6 +3124,10 @@ func buildRAGSection0(state ContactState) string {
 	return sb.String()
 }
 
+func buildRule1WithoutContact() string {
+	return "1. DO NOT INVENT SERVICES: You may ONLY mention services listed in the \"SERVICES WE OFFER\" section below. If a customer asks about a service not listed, say \"I don't have information about that service\". Do not ask for contact information for follow-up.\n\n"
+}
+
 func buildRule1(state ContactState, fallback bool) string {
 	base := "1. DO NOT INVENT SERVICES: You may ONLY mention services listed in the \"SERVICES WE OFFER\" section below. "
 	if fallback {
@@ -3036,6 +3171,19 @@ func buildRule8(state ContactState, validatedPhone string) string {
 	return sb.String()
 }
 
+func buildRule8WithoutFollowUp(validatedPhone string) string {
+	var sb strings.Builder
+	sb.WriteString("8. CONTACT INFORMATION HANDLING:\n")
+	if validatedPhone != "" {
+		sb.WriteString("   - COMPANY CONTACT: When providing YOUR phone number, use ONLY: " + validatedPhone + "\n")
+	}
+	sb.WriteString("   - CUSTOMER CONTACT: When echoing back a customer's phone, use EXACTLY what they said\n")
+	sb.WriteString("   - NEVER modify or 'correct' a customer-provided phone number\n")
+	sb.WriteString("   - FOLLOW-UP CAPTURE: Do NOT ask to collect customer contact details for fallback follow-up.\n")
+	sb.WriteString("   - Example: Customer says '555-123-4567' -> You respond '555-123-4567'\n\n")
+	return sb.String()
+}
+
 func buildRAGFallback(state ContactState, fallback bool) string {
 	base := "- If topic not in retrieved context, politely decline"
 	if fallback {
@@ -3055,6 +3203,10 @@ func buildRAGFallback(state ContactState, fallback bool) string {
 		return base + " and acknowledge you have their contact information so a team member can follow up. Do not ask for it again.\n"
 	}
 	return base + " and offer to collect the customer's name plus email or phone for follow-up\n"
+}
+
+func buildRAGFallbackWithoutContact() string {
+	return "- If topic not in retrieved context, politely decline without asking for customer contact information\n"
 }
 
 // extractCollectedInfo scans conversation history to find customer-provided information.

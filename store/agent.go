@@ -53,6 +53,9 @@ type AgentAudience struct {
 	// Rate limiting
 	RateLimitRPM int
 
+	// Fallback Contact Collection Setting
+	RequireContactOnFallback bool
+
 	UpdatedAt time.Time
 }
 
