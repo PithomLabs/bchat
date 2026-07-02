@@ -307,6 +307,14 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	adminGroup.GET("/:slug/settings", s.agentHandler.HandleGetTenantSettings)
 	adminGroup.PUT("/:slug/settings", s.agentHandler.HandleUpdateTenantSettings)
 
+	// Role template routes (tenant:admin required)
+	adminGroup.GET("/:slug/role-templates", s.agentHandler.HandleListRoleTemplates)
+	adminGroup.POST("/:slug/role-templates", s.agentHandler.HandleCreateRoleTemplate)
+	adminGroup.PATCH("/role-templates/:id", s.agentHandler.HandleUpdateRoleTemplate)
+	adminGroup.DELETE("/role-templates/:id", s.agentHandler.HandleDeleteRoleTemplate)
+	adminGroup.POST("/:slug/role-templates/:id/assign", s.agentHandler.HandleAssignRoleTemplate)
+	adminGroup.GET("/:slug/users/:userId/roles", s.agentHandler.HandleListUserRoles)
+
 	// RAG Stats routes (admin only)
 	ragGroup := echoServer.Group("/api/v1/admin/rag")
 	ragGroup.Use(s.AuthMiddleware)

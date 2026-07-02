@@ -7,19 +7,21 @@ import (
 
 // UserTenantPermission represents a user's permissions for a specific tenant.
 type UserTenantPermission struct {
-	ID          int32
-	UserID      int32
-	TenantID    int32
-	Permissions []string // Parsed from comma-separated string
-	GrantedBy   *int32
-	GrantedAt   time.Time
+	ID              int32
+	UserID          int32
+	TenantID        int32
+	Permissions     []string // Parsed from comma-separated string
+	GrantedBy       *int32
+	GrantedAt       time.Time
+	SourceTemplateID *int32
 }
 
 // FindUserTenantPermission contains filters for finding permissions.
 type FindUserTenantPermission struct {
-	ID       *int32
-	UserID   *int32
-	TenantID *int32
+	ID               *int32
+	UserID           *int32
+	TenantID         *int32
+	SourceTemplateID *int32
 }
 
 // TenantConfig holds tenant-specific LLM configuration.
@@ -35,6 +37,7 @@ type TenantConfig struct {
 	RetrievalMode             string // "long_context" or "rag" - determines KB retrieval strategy
 	ContentTokens             int32  // Estimated token count of KB + Policy content
 	RecordTranscripts         bool   // Whether to record chat conversation transcripts (default: true)
+	AdminMutationRateLimitRPM int    // Rate limit for admin mutation endpoints
 	UpdatedAt                 time.Time
 	UpdatedBy                 *int32
 }
@@ -61,7 +64,9 @@ type RBACStore interface {
 	GetUserTenantPermission(ctx context.Context, find *FindUserTenantPermission) (*UserTenantPermission, error)
 	ListUserTenantPermissions(ctx context.Context, find *FindUserTenantPermission) ([]*UserTenantPermission, error)
 	UpdateUserTenantPermission(ctx context.Context, perm *UserTenantPermission) (*UserTenantPermission, error)
-	DeleteUserTenantPermission(ctx context.Context, userID, tenantID int32) error
+	DeleteUserTenantPermission(ctx context.Context, userID, tenantID, id int32) error
+	DeleteAllUserTenantPermissions(ctx context.Context, userID, tenantID int32) error
+	DeleteExplicitUserTenantPermissions(ctx context.Context, userID, tenantID int32) error
 
 	// Tenant config operations
 	GetTenantConfig(ctx context.Context, find *FindTenantConfig) (*TenantConfig, error)
@@ -71,6 +76,13 @@ type RBACStore interface {
 	// System secret operations
 	GetSystemSecret(ctx context.Context) (*SystemSecret, error)
 	UpsertSystemSecret(ctx context.Context, secret *SystemSecret) (*SystemSecret, error)
+
+	// Role template operations
+	CreateTenantRoleTemplate(ctx context.Context, template *TenantRoleTemplate) (*TenantRoleTemplate, error)
+	GetTenantRoleTemplate(ctx context.Context, find *FindTenantRoleTemplate) (*TenantRoleTemplate, error)
+	ListTenantRoleTemplates(ctx context.Context, find *FindTenantRoleTemplate) ([]*TenantRoleTemplate, error)
+	UpdateTenantRoleTemplate(ctx context.Context, template *TenantRoleTemplate) (*TenantRoleTemplate, error)
+	DeleteTenantRoleTemplate(ctx context.Context, id int32) error
 }
 
 // Store methods that delegate to the driver
@@ -91,8 +103,16 @@ func (s *Store) UpdateUserTenantPermission(ctx context.Context, perm *UserTenant
 	return s.driver.UpdateUserTenantPermission(ctx, perm)
 }
 
-func (s *Store) DeleteUserTenantPermission(ctx context.Context, userID, tenantID int32) error {
-	return s.driver.DeleteUserTenantPermission(ctx, userID, tenantID)
+func (s *Store) DeleteUserTenantPermission(ctx context.Context, userID, tenantID, id int32) error {
+	return s.driver.DeleteUserTenantPermission(ctx, userID, tenantID, id)
+}
+
+func (s *Store) DeleteAllUserTenantPermissions(ctx context.Context, userID, tenantID int32) error {
+	return s.driver.DeleteAllUserTenantPermissions(ctx, userID, tenantID)
+}
+
+func (s *Store) DeleteExplicitUserTenantPermissions(ctx context.Context, userID, tenantID int32) error {
+	return s.driver.DeleteExplicitUserTenantPermissions(ctx, userID, tenantID)
 }
 
 func (s *Store) GetTenantConfig(ctx context.Context, find *FindTenantConfig) (*TenantConfig, error) {
@@ -113,4 +133,24 @@ func (s *Store) GetSystemSecret(ctx context.Context) (*SystemSecret, error) {
 
 func (s *Store) UpsertSystemSecret(ctx context.Context, secret *SystemSecret) (*SystemSecret, error) {
 	return s.driver.UpsertSystemSecret(ctx, secret)
+}
+
+func (s *Store) CreateTenantRoleTemplate(ctx context.Context, template *TenantRoleTemplate) (*TenantRoleTemplate, error) {
+	return s.driver.CreateTenantRoleTemplate(ctx, template)
+}
+
+func (s *Store) GetTenantRoleTemplate(ctx context.Context, find *FindTenantRoleTemplate) (*TenantRoleTemplate, error) {
+	return s.driver.GetTenantRoleTemplate(ctx, find)
+}
+
+func (s *Store) ListTenantRoleTemplates(ctx context.Context, find *FindTenantRoleTemplate) ([]*TenantRoleTemplate, error) {
+	return s.driver.ListTenantRoleTemplates(ctx, find)
+}
+
+func (s *Store) UpdateTenantRoleTemplate(ctx context.Context, template *TenantRoleTemplate) (*TenantRoleTemplate, error) {
+	return s.driver.UpdateTenantRoleTemplate(ctx, template)
+}
+
+func (s *Store) DeleteTenantRoleTemplate(ctx context.Context, id int32) error {
+	return s.driver.DeleteTenantRoleTemplate(ctx, id)
 }

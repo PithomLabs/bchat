@@ -2153,7 +2153,7 @@ func (h *Handler) getUserID(c echo.Context) int32 {
 }
 
 // hasPermission checks if the current user has a specific permission for a tenant.
-// Includes audit logging for security monitoring.
+// Uses ResolveEffectivePermissions as the single source of truth; caches result per-request.
 func (h *Handler) hasPermission(c echo.Context, tenantID int32, permission string) bool {
 	userID, ok := c.Get("user-id").(int32)
 	if !ok {
@@ -2166,99 +2166,78 @@ func (h *Handler) hasPermission(c echo.Context, tenantID int32, permission strin
 		return false
 	}
 
-	user, err := h.store.GetUser(c.Request().Context(), &store.FindUser{ID: &userID})
-	if err != nil || user == nil {
-		slog.Warn("permission check failed: user not found",
+	if cached, ok := c.Get("resolved_perms").([]ResolvedPermission); ok {
+		granted := containsResolvedPermission(cached, permission)
+		if granted {
+			slog.Debug("permission check (cached)",
+				"user_id", userID,
+				"tenant_id", tenantID,
+				"permission", permission,
+				"result", "granted",
+			)
+		} else {
+			slog.Info("permission check (cached)",
+				"user_id", userID,
+				"tenant_id", tenantID,
+				"permission", permission,
+				"result", "denied",
+				"reason", "not_in_resolved_permissions",
+			)
+		}
+		return granted
+	}
+
+	perms, err := ResolveEffectivePermissions(c.Request().Context(), h.store, tenantID, userID)
+	if err != nil {
+		slog.Warn("permission resolution failed",
 			"user_id", userID,
 			"tenant_id", tenantID,
-			"permission", permission,
+			"error", err,
 			"result", "denied",
-			"reason", "user_not_found",
 		)
 		return false
 	}
 
-	// HOST has all permissions
-	if user.Role == store.RoleHost {
-		slog.Debug("permission check",
-			"user_id", userID,
-			"username", user.Username,
-			"tenant_id", tenantID,
-			"permission", permission,
-			"result", "granted",
-			"reason", "host_role",
-		)
-		return true
-	}
-
-	// ADMIN has implicit tenant:read for all tenants
-	if user.Role == store.RoleAdmin {
-		if permission == PermTenantRead {
-			slog.Debug("permission check",
-				"user_id", userID,
-				"username", user.Username,
-				"tenant_id", tenantID,
-				"permission", permission,
-				"result", "granted",
-				"reason", "admin_implicit_read",
-			)
-			return true
-		}
-		// ADMIN also has implicit api:config permission
-		if permission == PermAPIConfig {
-			slog.Debug("permission check",
-				"user_id", userID,
-				"username", user.Username,
-				"tenant_id", tenantID,
-				"permission", permission,
-				"result", "granted",
-				"reason", "admin_implicit_api_config",
-			)
-			return true
-		}
-	}
-
-	// Check explicit user-tenant permissions
-	perms, err := h.store.GetUserTenantPermission(c.Request().Context(), &store.FindUserTenantPermission{
-		UserID:   &userID,
-		TenantID: &tenantID,
-	})
-	if err != nil || perms == nil {
-		slog.Info("permission check",
-			"user_id", userID,
-			"username", user.Username,
-			"tenant_id", tenantID,
-			"permission", permission,
-			"result", "denied",
-			"reason", "no_explicit_permission",
-		)
-		return false
-	}
-
-	granted := ContainsPermission(perms.Permissions, permission)
+	c.Set("resolved_perms", perms)
+	granted := containsResolvedPermission(perms, permission)
 	if granted {
-		slog.Debug("permission check",
+		slog.Debug("permission check (resolved)",
 			"user_id", userID,
-			"username", user.Username,
 			"tenant_id", tenantID,
 			"permission", permission,
 			"result", "granted",
-			"reason", "explicit_permission",
-			"user_permissions", perms.Permissions,
+			"resolved_permissions", perms,
 		)
 	} else {
-		slog.Info("permission check",
+		slog.Info("permission check (resolved)",
 			"user_id", userID,
-			"username", user.Username,
 			"tenant_id", tenantID,
 			"permission", permission,
 			"result", "denied",
-			"reason", "permission_not_in_list",
-			"user_permissions", perms.Permissions,
+			"reason", "not_in_resolved_permissions",
+			"resolved_permissions", perms,
 		)
 	}
-
 	return granted
+}
+
+// checkAdminMutationRateLimit enforces the admin mutation RPM from tenant config.
+func (h *Handler) checkAdminMutationRateLimit(c echo.Context, tenantID int32) error {
+	ctx := c.Request().Context()
+	clientIP := c.RealIP()
+	if clientIP == "" {
+		clientIP = c.Request().RemoteAddr
+	}
+	rpm := h.service.GetAdminMutationRateLimit(ctx, tenantID)
+	allowed, err := h.service.CheckRateLimit(ctx, tenantID, "admin_mutation", clientIP, rpm)
+	if err != nil {
+		slog.Error("admin mutation rate limit check failed", "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Rate limit check failed")
+	}
+	if !allowed {
+		return echo.NewHTTPError(http.StatusTooManyRequests, "Admin mutation rate limit exceeded")
+	}
+	return nil
 }
 
 // ============================================================================
@@ -2403,11 +2382,12 @@ func (h *Handler) HandleSetLLMConfig(c echo.Context) error {
 
 // UserPermissionResponse represents a user's permissions for a tenant.
 type UserPermissionResponse struct {
-	UserID      int32    `json:"user_id"`
-	Username    string   `json:"username"`
-	Permissions []string `json:"permissions"`
-	GrantedBy   string   `json:"granted_by,omitempty"`
-	GrantedAt   string   `json:"granted_at"`
+	UserID               int32              `json:"user_id"`
+	Username             string             `json:"username"`
+	Permissions          []string           `json:"permissions"`
+	PermissionsWithSource []ResolvedPermission `json:"permissions_with_source,omitempty"`
+	GrantedBy            string             `json:"granted_by,omitempty"`
+	GrantedAt            string             `json:"granted_at"`
 }
 
 // GrantPermissionRequest represents the request to grant permissions.
@@ -2437,29 +2417,37 @@ func (h *Handler) HandleListPermissions(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list permissions")
 	}
 
-	// Build response with usernames
-	result := make([]UserPermissionResponse, 0, len(perms))
+	userIDs := map[int32]bool{}
 	for _, p := range perms {
-		user, _ := h.store.GetUser(ctx, &store.FindUser{ID: &p.UserID})
-		username := ""
+		userIDs[p.UserID] = true
+	}
+
+	usernames := map[int32]string{}
+	for uid := range userIDs {
+		user, _ := h.store.GetUser(ctx, &store.FindUser{ID: &uid})
 		if user != nil {
-			username = user.Username
+			usernames[uid] = user.Username
+		}
+	}
+
+	result := make([]UserPermissionResponse, 0, len(userIDs))
+	for uid := range userIDs {
+		resolved, err := ResolveEffectivePermissions(ctx, h.store, tenant.ID, uid)
+		if err != nil {
+			slog.Warn("failed to resolve permissions for user", "user_id", uid, "error", err)
+			continue
 		}
 
-		grantedBy := ""
-		if p.GrantedBy != nil {
-			grantor, _ := h.store.GetUser(ctx, &store.FindUser{ID: p.GrantedBy})
-			if grantor != nil {
-				grantedBy = grantor.Username
-			}
+		rawPerms := make([]string, len(resolved))
+		for i, rp := range resolved {
+			rawPerms[i] = rp.Permission
 		}
 
 		result = append(result, UserPermissionResponse{
-			UserID:      p.UserID,
-			Username:    username,
-			Permissions: p.Permissions,
-			GrantedBy:   grantedBy,
-			GrantedAt:   p.GrantedAt.Format(time.RFC3339),
+			UserID:               uid,
+			Username:             usernames[uid],
+			Permissions:          rawPerms,
+			PermissionsWithSource: resolved,
 		})
 	}
 
@@ -2507,15 +2495,22 @@ func (h *Handler) HandleGrantPermission(c echo.Context) error {
 		GrantedBy:   &grantorID,
 	}
 
-	// Check if exists - update, else create
-	existing, _ := h.store.GetUserTenantPermission(ctx, &store.FindUserTenantPermission{
-		UserID:   &req.UserID,
-		TenantID: &tenant.ID,
+	// Check if an explicit-grant row exists; if so, update it.
+	// Never update a template-linked row (source_template_id IS NOT NULL).
+	existing, _ := h.store.ListUserTenantPermissions(ctx, &store.FindUserTenantPermission{
+		UserID:           &req.UserID,
+		TenantID:         &tenant.ID,
+		SourceTemplateID: intPtr(ExplicitGrantSourceTemplate),
 	})
 
-	if existing != nil {
-		perm.ID = existing.ID
+	if len(existing) > 0 {
+		perm.ID = existing[0].ID
 		_, err = h.store.UpdateUserTenantPermission(ctx, perm)
+		if len(existing) > 1 {
+			for _, extra := range existing[1:] {
+				_ = h.store.DeleteUserTenantPermission(ctx, req.UserID, tenant.ID, extra.ID)
+			}
+		}
 	} else {
 		_, err = h.store.CreateUserTenantPermission(ctx, perm)
 	}
@@ -2549,14 +2544,370 @@ func (h *Handler) HandleRevokePermission(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid user ID")
 	}
 
-	if err := h.store.DeleteUserTenantPermission(ctx, int32(userID), tenant.ID); err != nil {
+	if err := h.store.DeleteExplicitUserTenantPermissions(ctx, int32(userID), tenant.ID); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to revoke permission")
 	}
 
 	return c.JSON(http.StatusOK, map[string]bool{"success": true})
 }
 
-// HandleGetUserTenants returns tenants the current user can access.
+// ============================================================================
+// ROLE TEMPLATE ENDPOINTS
+// ============================================================================
+
+// HandleListRoleTemplates lists role templates for a tenant.
+// GET /api/v1/agent/:slug/role-templates
+func (h *Handler) HandleListRoleTemplates(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	if !h.hasPermission(c, tenant.ID, PermTenantRead) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires tenant:read permission")
+	}
+
+	canViewTemplateContents := h.isAdmin(c) || h.hasPermission(c, tenant.ID, PermTenantAdmin)
+
+	// Fetch system templates
+	systemTemplates, err := h.store.ListTenantRoleTemplates(ctx, &store.FindTenantRoleTemplate{TenantID: intPtr(-1)})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list role templates")
+	}
+
+	type ResponseTemplate struct {
+		ID          int32    `json:"id"`
+		TenantID    *int32   `json:"tenant_id"`
+		Name        string   `json:"name"`
+		Code        string   `json:"code"`
+		Permissions []string `json:"permissions,omitempty"`
+		IsSystem    bool     `json:"is_system"`
+	}
+
+	var response []ResponseTemplate
+	for _, t := range systemTemplates {
+		resp := ResponseTemplate{
+			ID:       t.ID,
+			Name:     t.Name,
+			Code:     t.Code,
+			IsSystem: true,
+		}
+		if canViewTemplateContents {
+			resp.Permissions = t.Permissions
+		}
+		response = append(response, resp)
+	}
+
+	// Fetch custom templates if admin
+	if canViewTemplateContents {
+		customTemplates, err := h.store.ListTenantRoleTemplates(ctx, &store.FindTenantRoleTemplate{TenantID: &tenant.ID})
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list custom role templates")
+		}
+		for _, t := range customTemplates {
+			response = append(response, ResponseTemplate{
+				ID:          t.ID,
+				TenantID:    t.TenantID,
+				Name:        t.Name,
+				Code:        t.Code,
+				Permissions: t.Permissions,
+				IsSystem:    false,
+			})
+		}
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{"templates": response})
+}
+
+// HandleCreateRoleTemplate creates a custom role template for a tenant.
+// POST /api/v1/agent/:slug/role-templates
+func (h *Handler) HandleCreateRoleTemplate(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermTenantAdmin) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires tenant:admin permission")
+	}
+
+	if err := h.checkAdminMutationRateLimit(c, tenant.ID); err != nil {
+		return err
+	}
+
+	var req store.CreateTenantRoleTemplateRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
+	}
+
+	if req.Name == "" || req.Code == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Name and code are required")
+	}
+
+	if !ValidatePermissions(req.Permissions) {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid permissions")
+	}
+
+	userID, _ := c.Get("user-id").(int32)
+	template := &store.TenantRoleTemplate{
+		TenantID:    &tenant.ID,
+		Name:        req.Name,
+		Code:        req.Code,
+		Permissions: req.Permissions,
+		CreatedBy:   &userID,
+	}
+
+	created, err := h.store.CreateTenantRoleTemplate(ctx, template)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create role template")
+	}
+
+	h.service.InvalidateConfigCache(slug)
+
+	return c.JSON(http.StatusCreated, created)
+}
+
+// HandleUpdateRoleTemplate updates a custom role template.
+// PATCH /api/v1/agent/role-templates/:id
+func (h *Handler) HandleUpdateRoleTemplate(c echo.Context) error {
+	ctx := c.Request().Context()
+	id, err := strconv.ParseInt(c.Param("id"), 10, 32)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid template ID")
+	}
+
+	existing, err := h.store.GetTenantRoleTemplate(ctx, &store.FindTenantRoleTemplate{ID: intPtr(int32(id))})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get role template")
+	}
+	if existing == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Role template not found")
+	}
+
+	// System templates are protected
+	if existing.TenantID == nil {
+		return echo.NewHTTPError(http.StatusForbidden, "System templates cannot be modified")
+	}
+
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{ID: existing.TenantID})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermTenantAdmin) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires tenant:admin permission")
+	}
+
+	if err := h.checkAdminMutationRateLimit(c, tenant.ID); err != nil {
+		return err
+	}
+
+	var req store.UpdateTenantRoleTemplateRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
+	}
+
+	if req.Permissions != nil && !ValidatePermissions(*req.Permissions) {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid permissions")
+	}
+
+	update := &store.TenantRoleTemplate{
+		ID:          int32(id),
+		Name:        existing.Name,
+		Code:        existing.Code,
+		Permissions: existing.Permissions,
+	}
+	if req.Name != nil {
+		update.Name = *req.Name
+	}
+	if req.Code != nil {
+		update.Code = *req.Code
+	}
+	if req.Permissions != nil {
+		update.Permissions = *req.Permissions
+	}
+
+	updated, err := h.store.UpdateTenantRoleTemplate(ctx, update)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update role template")
+	}
+
+	h.service.InvalidateConfigCache(tenant.Slug)
+
+	return c.JSON(http.StatusOK, updated)
+}
+
+// HandleDeleteRoleTemplate deletes a custom role template.
+// DELETE /api/v1/agent/role-templates/:id
+func (h *Handler) HandleDeleteRoleTemplate(c echo.Context) error {
+	ctx := c.Request().Context()
+	id, err := strconv.ParseInt(c.Param("id"), 10, 32)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid template ID")
+	}
+
+	existing, err := h.store.GetTenantRoleTemplate(ctx, &store.FindTenantRoleTemplate{ID: intPtr(int32(id))})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get role template")
+	}
+	if existing == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Role template not found")
+	}
+
+	// System templates are protected
+	if existing.TenantID == nil {
+		return echo.NewHTTPError(http.StatusForbidden, "System templates cannot be deleted")
+	}
+
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{ID: existing.TenantID})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermTenantAdmin) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires tenant:admin permission")
+	}
+
+	if err := h.checkAdminMutationRateLimit(c, tenant.ID); err != nil {
+		return err
+	}
+
+	// Block deletion if any user has an active assignment
+	assignments, err := h.store.ListUserTenantPermissions(ctx, &store.FindUserTenantPermission{SourceTemplateID: intPtr(int32(id))})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check template assignments")
+	}
+	if len(assignments) > 0 {
+		return echo.NewHTTPError(http.StatusConflict, "Cannot delete template: active assignments exist")
+	}
+
+	if err := h.store.DeleteTenantRoleTemplate(ctx, int32(id)); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete role template")
+	}
+
+	h.service.InvalidateConfigCache(tenant.Slug)
+
+	return c.JSON(http.StatusOK, map[string]bool{"success": true})
+}
+
+// HandleAssignRoleTemplate assigns a role template to a user.
+// POST /api/v1/agent/:slug/role-templates/:id/assign
+func (h *Handler) HandleAssignRoleTemplate(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+	templateID, err := strconv.ParseInt(c.Param("id"), 10, 32)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid template ID")
+	}
+
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermTenantAdmin) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires tenant:admin permission")
+	}
+
+	if err := h.checkAdminMutationRateLimit(c, tenant.ID); err != nil {
+		return err
+	}
+
+	var req struct {
+		UserID int32 `json:"user_id"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
+	}
+
+	user, err := h.store.GetUser(ctx, &store.FindUser{ID: &req.UserID})
+	if err != nil || user == nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "User not found")
+	}
+
+	template, err := h.store.GetTenantRoleTemplate(ctx, &store.FindTenantRoleTemplate{ID: intPtr(int32(templateID))})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get role template")
+	}
+	if template == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Role template not found")
+	}
+
+	// Idempotency: check if this assignment already exists
+	existingAssignments, err := h.store.ListUserTenantPermissions(ctx, &store.FindUserTenantPermission{
+		UserID:           &req.UserID,
+		TenantID:         &tenant.ID,
+		SourceTemplateID: intPtr(int32(templateID)),
+	})
+	alreadyAssigned := len(existingAssignments) > 0
+	if alreadyAssigned {
+		return c.JSON(http.StatusOK, map[string]interface{}{"success": true, "created": false})
+	}
+
+	created, err := h.store.CreateUserTenantPermission(ctx, &store.UserTenantPermission{
+		UserID:          req.UserID,
+		TenantID:        tenant.ID,
+		Permissions:     template.Permissions,
+		SourceTemplateID: intPtr(int32(templateID)),
+	})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to assign role template")
+	}
+
+	_ = created
+
+	h.service.InvalidateConfigCache(tenant.Slug)
+
+	return c.JSON(http.StatusCreated, map[string]interface{}{"success": true, "created": true})
+}
+
+// HandleListUserRoles lists a user's effective permissions for a tenant.
+// GET /api/v1/agent/:slug/users/:userId/roles
+func (h *Handler) HandleListUserRoles(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+	userIDStr := c.Param("userId")
+
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermTenantAdmin) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires tenant:admin permission")
+	}
+
+	userID, err := strconv.ParseInt(userIDStr, 10, 32)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid user ID")
+	}
+
+	targetUser, err := h.store.GetUser(ctx, &store.FindUser{ID: intPtr(int32(userID))})
+	if err != nil || targetUser == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "User not found")
+	}
+
+	resolved, err := ResolveEffectivePermissions(ctx, h.store, tenant.ID, int32(userID))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to resolve permissions")
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"user_id":      userID,
+		"username":     targetUser.Username,
+		"permissions":  resolved,
+	})
+}
+
+func intPtr(v int32) *int32 {
+	return &v
+}
 // GET /api/v1/user/tenants
 func (h *Handler) HandleGetUserTenants(c echo.Context) error {
 	ctx := c.Request().Context()

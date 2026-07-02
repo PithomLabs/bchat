@@ -57,10 +57,13 @@ import type {
   CreateTenantRequest,
   LLMConfig,
   SetLLMConfigRequest,
+  TenantRoleTemplate,
+  UserInfo,
   UserPermission,
   GrantPermissionRequest,
   ProcessingOptions,
   FormatForRAGResponse,
+  AssignRoleTemplateRequest,
 } from "@/store/v2/agentAdmin";
 import {
   LLM_MODEL_OPTIONS,
@@ -142,6 +145,8 @@ const AgentAdmin = observer(() => {
     llmConfig,
     tenantPermissions,
     myPermissions,
+    roleTemplates,
+    allUsers,
     script,
     isLoadingScript,
     qaPairs,
@@ -155,7 +160,7 @@ const AgentAdmin = observer(() => {
   leads,
   isLoadingLeads,
   tenantSettings,
-} = agentAdminStore.state;
+  } = agentAdminStore.state;
 
   // Get current user and determine if they're an admin
   const currentUserName = userStore.state.currentUser;
@@ -645,6 +650,17 @@ const AgentAdmin = observer(() => {
                 tenantSlug={selectedTenant.tenant.slug}
                 permissions={tenantPermissions}
                 isSaving={isSaving}
+              />
+            )}
+
+            {/* Role Templates - only visible to admins and tenant:admin */}
+            {canManagePermissions && (
+              <RoleTemplatesSection
+                tenantSlug={selectedTenant.tenant.slug}
+                templates={roleTemplates}
+                isSaving={isSaving}
+                users={allUsers}
+                onRefresh={() => agentAdminStore.fetchRoleTemplates(selectedTenant.tenant.slug)}
               />
             )}
 
@@ -3688,4 +3704,224 @@ const UserPermissionsSection = observer(
   },
 );
 
-export default AgentAdmin;
+// ============================================================================
+// ROLE TEMPLATES SECTION
+// ============================================================================
+
+interface RoleTemplatesSectionProps {
+  tenantSlug: string;
+  templates: TenantRoleTemplate[];
+  isSaving: boolean;
+  users: UserInfo[];
+  onRefresh: () => void;
+}
+
+const RoleTemplatesSection = observer(
+  ({ tenantSlug, templates, isSaving, users, onRefresh }: RoleTemplatesSectionProps) => {
+    const [showCreateModal, setShowCreateModal] = useState(false);
+    const [newName, setNewName] = useState("");
+    const [newCode, setNewCode] = useState("");
+    const [newPermissions, setNewPermissions] = useState<string[]>([]);
+    const [assigningTemplateId, setAssigningTemplateId] = useState<number | null>(null);
+    const [selectedUserId, setSelectedUserId] = useState<string>("");
+
+    const handleCreate = async () => {
+      if (!newName || !newCode || newPermissions.length === 0) {
+        toast.error("All fields are required");
+        return;
+      }
+      const ok = await agentAdminStore.createRoleTemplate(tenantSlug, {
+        name: newName,
+        code: newCode,
+        permissions: newPermissions,
+      });
+      if (ok) {
+        setShowCreateModal(false);
+        setNewName("");
+        setNewCode("");
+        setNewPermissions([]);
+        onRefresh();
+      }
+    };
+
+    const handleDelete = async (id: number) => {
+      const ok = await agentAdminStore.deleteRoleTemplate(tenantSlug, id);
+      if (ok) {
+        onRefresh();
+      }
+    };
+
+    const handleAssign = async () => {
+      if (!assigningTemplateId || !selectedUserId) {
+        toast.error("Please select a user");
+        return;
+      }
+      const ok = await agentAdminStore.assignRoleTemplate(
+        tenantSlug,
+        assigningTemplateId,
+        parseInt(selectedUserId)
+      );
+      if (ok) {
+        setAssigningTemplateId(null);
+        setSelectedUserId("");
+        onRefresh();
+      }
+    };
+
+    return (
+      <div className="mt-3 p-4 border border-gray-200 rounded-lg dark:border-zinc-700">
+        <div className="flex justify-between items-center mb-3">
+          <div>
+            <h3 className="font-semibold text-sm">Role Templates</h3>
+            <p className="text-xs text-gray-500">Manage templates for assigning permissions to users</p>
+          </div>
+          <Button
+            size="sm"
+            variant="outlined"
+            onClick={() => setShowCreateModal(true)}
+            disabled={isSaving}
+          >
+            Create Template
+          </Button>
+        </div>
+        <div className="space-y-2">
+          {templates.map((template) => (
+            <div
+              key={template.id}
+              className="flex justify-between items-center p-3 bg-gray-50 dark:bg-zinc-700 rounded-lg"
+            >
+              <div>
+                <div className="font-medium text-sm">{template.name}</div>
+                <div className="text-xs text-gray-500">
+                  <code>{template.code}</code> - {template.permissions.join(", ")}
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  onClick={() => setAssigningTemplateId(template.id)}
+                  disabled={isSaving}
+                >
+                  Assign
+                </Button>
+                {!template.isSystem && (
+                  <Button
+                    size="sm"
+                    variant="plain"
+                    color="danger"
+                    onClick={() => handleDelete(template.id)}
+                    disabled={isSaving}
+                  >
+                    Delete
+                  </Button>
+                )}
+              </div>
+            </div>
+          ))}
+          {templates.length === 0 && (
+            <div className="text-center text-gray-500 py-4 text-sm">
+              No role templates found
+            </div>
+          )}
+        </div>
+
+        {/* Assign Modal */}
+        <Modal open={assigningTemplateId !== null} onClose={() => setAssigningTemplateId(null)}>
+          <ModalDialog sx={{ maxWidth: 400, width: "100%" }}>
+            <DialogTitle>Assign Role Template</DialogTitle>
+            <Divider />
+            <DialogContent>
+              <div className="space-y-4">
+                <FormControl>
+                  <FormLabel>User</FormLabel>
+                  <Select
+                    placeholder="Select a user"
+                    value={selectedUserId || null}
+                    onChange={(_, val) => setSelectedUserId((val as string) || "")}
+                    slotProps={{ listbox: { dense: true } }}
+                  >
+                    {users.map((user) => (
+                      <Option key={user.id} value={String(user.id)}>
+                        {user.name || user.username}
+                      </Option>
+                    ))}
+                  </Select>
+                </FormControl>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button
+                variant="plain"
+                color="neutral"
+                onClick={() => setAssigningTemplateId(null)}
+              >
+                Cancel
+              </Button>
+              <Button color="primary" onClick={handleAssign} loading={isSaving}>
+                Assign
+              </Button>
+            </DialogActions>
+          </ModalDialog>
+        </Modal>
+
+        {/* Create Template Modal */}
+        <Modal open={showCreateModal} onClose={() => setShowCreateModal(false)}>
+          <ModalDialog sx={{ maxWidth: 400, width: "100%" }}>
+            <DialogTitle>Create Role Template</DialogTitle>
+            <Divider />
+            <DialogContent>
+              <div className="space-y-4">
+                <FormControl>
+                  <FormLabel>Name</FormLabel>
+                  <Input
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    placeholder="e.g. Support Agent"
+                  />
+                </FormControl>
+                <FormControl>
+                  <FormLabel>Code</FormLabel>
+                  <Input
+                    value={newCode}
+                    onChange={(e) => setNewCode(e.target.value.toLowerCase().replace(/\s+/g, "_"))}
+                    placeholder="e.g. support_agent"
+                  />
+                </FormControl>
+                <FormControl>
+                  <FormLabel>Permissions (comma-separated)</FormLabel>
+                  <Input
+                    value={newPermissions.join(", ")}
+                    onChange={(e) =>
+                      setNewPermissions(
+                        e.target.value
+                          .split(",")
+                          .map((p) => p.trim())
+                          .filter(Boolean)
+                      )
+                    }
+                    placeholder="e.g. tenant:read, chat:logs"
+                  />
+                </FormControl>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button
+                variant="plain"
+                color="neutral"
+                onClick={() => setShowCreateModal(false)}
+              >
+                Cancel
+              </Button>
+              <Button color="primary" onClick={handleCreate} loading={isSaving}>
+                Create
+              </Button>
+            </DialogActions>
+          </ModalDialog>
+        </Modal>
+      </div>
+    );
+  },
+);
+
+

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -194,6 +195,30 @@ func (s *Service) GetEmbeddingDimension() int {
 		return 0
 	}
 	return s.vectorDB.Dimension()
+}
+
+// ResolveUserPermissionsForTenant resolves effective permissions for a user on a tenant.
+// Delegates to ResolveEffectivePermissions.
+func (s *Service) ResolveUserPermissionsForTenant(ctx context.Context, tenantID, userID int32) ([]ResolvedPermission, error) {
+	return ResolveEffectivePermissions(ctx, s.store, tenantID, userID)
+}
+
+// GetAdminMutationRateLimit returns the RPM limit for admin mutation endpoints.
+// Reads from TenantConfig with env fallback.
+func (s *Service) GetAdminMutationRateLimit(ctx context.Context, tenantID int32) int {
+	config, err := s.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &tenantID})
+	if err != nil || config == nil {
+		return 30
+	}
+	if config.AdminMutationRateLimitRPM > 0 {
+		return config.AdminMutationRateLimitRPM
+	}
+	if rpm := os.Getenv("ADMIN_MUTATION_RATE_LIMIT_RPM"); rpm != "" {
+		if val, err := strconv.Atoi(rpm); err == nil && val > 0 {
+			return val
+		}
+	}
+	return 30
 }
 
 // RefreshVectorDB recreates the VectorDB with current embedding configuration.

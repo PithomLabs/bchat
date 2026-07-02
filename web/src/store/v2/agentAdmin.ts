@@ -81,10 +81,16 @@ export interface SetLLMConfigRequest {
   openrouterApiKey?: string;
 }
 
+export interface ResolvedPermission {
+  permission: string;
+  source: string;
+}
+
 export interface UserPermission {
   userId: number;
   username: string;
   permissions: string[];
+  permissionsWithSource?: ResolvedPermission[];
   grantedBy?: string;
   grantedAt: string;
 }
@@ -99,6 +105,25 @@ export interface UserInfo {
   id: number;
   username: string;
   role: string;
+}
+
+export interface TenantRoleTemplate {
+  id: number;
+  tenantId?: number;
+  name: string;
+  code: string;
+  permissions: string[];
+  isSystem: boolean;
+}
+
+export interface CreateRoleTemplateRequest {
+  name: string;
+  code: string;
+  permissions: string[];
+}
+
+export interface AssignRoleTemplateRequest {
+  userId: number;
 }
 
 // SCRIPT.MD (tenant-level conversation flow guide)
@@ -442,6 +467,8 @@ class LocalState {
   myTenantAccess: UserTenantAccess[] = [];
   // Current user's permissions for the selected tenant
   myPermissions: string[] = [];
+  // Role templates (system + custom)
+  roleTemplates: TenantRoleTemplate[] = [];
   // SCRIPT.MD (tenant-level)
   script: AgentScript | null = null;
   isLoadingScript: boolean = false;
@@ -1298,6 +1325,89 @@ const agentAdminStore = (() => {
     }
   };
 
+  const fetchRoleTemplates = async (slug: string) => {
+    try {
+      const response = await axios.get<{ templates: TenantRoleTemplate[] }>(`/api/v1/agent/${slug}/role-templates`);
+      runInAction(() => {
+        state.roleTemplates = response.data.templates || [];
+      });
+    } catch (error: any) {
+      console.error("Failed to fetch role templates:", error);
+    }
+  };
+
+  const createRoleTemplate = async (slug: string, request: CreateRoleTemplateRequest): Promise<boolean> => {
+    state.setPartial({ isSaving: true, error: null });
+    try {
+      await axios.post(`/api/v1/agent/${slug}/role-templates`, request);
+      runInAction(() => {
+        state.isSaving = false;
+      });
+      await fetchRoleTemplates(slug);
+      return true;
+    } catch (error: any) {
+      runInAction(() => {
+        state.isSaving = false;
+        state.error = error.response?.data?.message || "Failed to create role template";
+      });
+      return false;
+    }
+  };
+
+  const updateRoleTemplate = async (slug: string, id: number, request: CreateRoleTemplateRequest): Promise<boolean> => {
+    state.setPartial({ isSaving: true, error: null });
+    try {
+      await axios.patch(`/api/v1/agent/role-templates/${id}`, request);
+      runInAction(() => {
+        state.isSaving = false;
+      });
+      await fetchRoleTemplates(slug);
+      return true;
+    } catch (error: any) {
+      runInAction(() => {
+        state.isSaving = false;
+        state.error = error.response?.data?.message || "Failed to update role template";
+      });
+      return false;
+    }
+  };
+
+  const deleteRoleTemplate = async (slug: string, id: number): Promise<boolean> => {
+    state.setPartial({ isSaving: true, error: null });
+    try {
+      await axios.delete(`/api/v1/agent/role-templates/${id}`);
+      runInAction(() => {
+        state.isSaving = false;
+      });
+      await fetchRoleTemplates(slug);
+      return true;
+    } catch (error: any) {
+      runInAction(() => {
+        state.isSaving = false;
+        state.error = error.response?.data?.message || "Failed to delete role template";
+      });
+      return false;
+    }
+  };
+
+  const assignRoleTemplate = async (slug: string, templateId: number, userId: number): Promise<boolean> => {
+    state.setPartial({ isSaving: true, error: null });
+    try {
+      await axios.post(`/api/v1/agent/${slug}/role-templates/${templateId}/assign`, { user_id: userId });
+      runInAction(() => {
+        state.isSaving = false;
+      });
+      await fetchTenantPermissions(slug);
+      return true;
+    } catch (error: any) {
+      runInAction(() => {
+        state.isSaving = false;
+        state.error = error.response?.data?.message || "Failed to assign role template";
+      });
+      return false;
+    }
+  };
+
   const grantPermission = async (slug: string, request: GrantPermissionRequest): Promise<boolean> => {
     state.setPartial({ isSaving: true, error: null });
     try {
@@ -1439,6 +1549,11 @@ const agentAdminStore = (() => {
     fetchTenantPermissions,
     grantPermission,
     revokePermission,
+    fetchRoleTemplates,
+    createRoleTemplate,
+    updateRoleTemplate,
+    deleteRoleTemplate,
+    assignRoleTemplate,
     fetchUsers,
     fetchUserTenants,
     setMyPermissions,
