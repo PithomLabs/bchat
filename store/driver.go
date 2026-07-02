@@ -186,7 +186,9 @@ type Driver interface {
 	GetUserTenantPermission(ctx context.Context, find *FindUserTenantPermission) (*UserTenantPermission, error)
 	ListUserTenantPermissions(ctx context.Context, find *FindUserTenantPermission) ([]*UserTenantPermission, error)
 	UpdateUserTenantPermission(ctx context.Context, perm *UserTenantPermission) (*UserTenantPermission, error)
-	DeleteUserTenantPermission(ctx context.Context, userID, tenantID int32) error
+	DeleteUserTenantPermission(ctx context.Context, userID, tenantID, id int32) error
+	DeleteAllUserTenantPermissions(ctx context.Context, userID, tenantID int32) error
+	DeleteExplicitUserTenantPermissions(ctx context.Context, userID, tenantID int32) error
 
 	GetTenantConfig(ctx context.Context, find *FindTenantConfig) (*TenantConfig, error)
 	UpsertTenantConfig(ctx context.Context, config *TenantConfig) (*TenantConfig, error)
@@ -194,6 +196,12 @@ type Driver interface {
 
 	GetSystemSecret(ctx context.Context) (*SystemSecret, error)
 	UpsertSystemSecret(ctx context.Context, secret *SystemSecret) (*SystemSecret, error)
+
+	CreateTenantRoleTemplate(ctx context.Context, template *TenantRoleTemplate) (*TenantRoleTemplate, error)
+	GetTenantRoleTemplate(ctx context.Context, find *FindTenantRoleTemplate) (*TenantRoleTemplate, error)
+	ListTenantRoleTemplates(ctx context.Context, find *FindTenantRoleTemplate) ([]*TenantRoleTemplate, error)
+	UpdateTenantRoleTemplate(ctx context.Context, template *TenantRoleTemplate) (*TenantRoleTemplate, error)
+	DeleteTenantRoleTemplate(ctx context.Context, id int32) error
 
 	// SCRIPT.MD model related methods.
 	UpsertAgentTenantScript(ctx context.Context, script *AgentTenantScript) (*AgentTenantScript, error)

@@ -394,6 +394,30 @@ CREATE INDEX idx_agent_rate_limits_lookup ON agent_rate_limits(tenant_id, audien
 -- RBAC TABLES (migration 07)
 -- ============================================================================
 
+-- tenant_role_templates
+CREATE TABLE IF NOT EXISTS tenant_role_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER CHECK (tenant_id IS NULL OR tenant_id >= 1) REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    code TEXT NOT NULL,
+    permissions TEXT NOT NULL DEFAULT '[]',
+    created_by INTEGER REFERENCES user(id) ON DELETE SET NULL,
+    created_at BIGINT NOT NULL DEFAULT (strftime('%s', 'now')),
+    updated_at BIGINT NOT NULL DEFAULT (strftime('%s', 'now')),
+    UNIQUE(tenant_id, code)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tenant_role_templates_tenant ON tenant_role_templates(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_tenant_role_templates_code ON tenant_role_templates(code);
+
+INSERT OR IGNORE INTO tenant_role_templates (tenant_id, name, code, permissions)
+VALUES
+    (NULL, 'Viewer', 'viewer', '["tenant:read"]'),
+    (NULL, 'Tester', 'tester', '["tenant:read","chat:test"]'),
+    (NULL, 'Analyst', 'analyst', '["tenant:read","chat:logs"]'),
+    (NULL, 'Editor', 'editor', '["tenant:read","tenant:write","files:upload"]'),
+    (NULL, 'Tenant Admin', 'tenant_admin', '["tenant:admin"]');
+
 -- user_tenant_permission
 CREATE TABLE user_tenant_permission (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -402,11 +426,12 @@ CREATE TABLE user_tenant_permission (
     permissions TEXT NOT NULL DEFAULT '',
     granted_by INTEGER REFERENCES user(id) ON DELETE SET NULL,
     granted_at BIGINT NOT NULL DEFAULT (strftime('%s', 'now')),
-    UNIQUE(user_id, tenant_id)
+    source_template_id INTEGER REFERENCES tenant_role_templates(id) ON DELETE SET NULL
 );
 
-CREATE INDEX idx_user_tenant_permission_user ON user_tenant_permission(user_id);
-CREATE INDEX idx_user_tenant_permission_tenant ON user_tenant_permission(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_user_tenant_permission_user ON user_tenant_permission(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_tenant_permission_tenant ON user_tenant_permission(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_user_tenant_permission_template ON user_tenant_permission(source_template_id);
 
 -- tenant_config
 CREATE TABLE tenant_config (
@@ -421,6 +446,7 @@ CREATE TABLE tenant_config (
     content_tokens INTEGER DEFAULT 0,
     record_transcripts INTEGER DEFAULT 1,
     reasoning_model TEXT DEFAULT '',
+    admin_mutation_rate_limit_rpm INTEGER NOT NULL DEFAULT 30,
     updated_at BIGINT NOT NULL DEFAULT (strftime('%s', 'now')),
     updated_by INTEGER REFERENCES user(id) ON DELETE SET NULL
 );

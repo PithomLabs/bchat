@@ -25,7 +25,17 @@ func (d *DB) UpdateUserTenantPermission(ctx context.Context, perm *store.UserTen
 	return nil, nil
 }
 
-func (d *DB) DeleteUserTenantPermission(ctx context.Context, userID, tenantID int32) error {
+func (d *DB) DeleteUserTenantPermission(ctx context.Context, userID, tenantID, id int32) error {
+	return nil
+}
+
+// DeleteAllUserTenantPermissions removes every permission row for the given user/tenant,
+// including template-linked assignments. Prefer the more specific methods below.
+func (d *DB) DeleteAllUserTenantPermissions(ctx context.Context, userID, tenantID int32) error {
+	return nil
+}
+
+func (d *DB) DeleteExplicitUserTenantPermissions(ctx context.Context, userID, tenantID int32) error {
 	return nil
 }
 
@@ -47,4 +57,24 @@ func (d *DB) GetSystemSecret(ctx context.Context) (*store.SystemSecret, error) {
 
 func (d *DB) UpsertSystemSecret(ctx context.Context, secret *store.SystemSecret) (*store.SystemSecret, error) {
 	return nil, nil
+}
+
+func (d *DB) CreateTenantRoleTemplate(ctx context.Context, template *store.TenantRoleTemplate) (*store.TenantRoleTemplate, error) {
+	return nil, nil
+}
+
+func (d *DB) GetTenantRoleTemplate(ctx context.Context, find *store.FindTenantRoleTemplate) (*store.TenantRoleTemplate, error) {
+	return nil, nil
+}
+
+func (d *DB) ListTenantRoleTemplates(ctx context.Context, find *store.FindTenantRoleTemplate) ([]*store.TenantRoleTemplate, error) {
+	return nil, nil
+}
+
+func (d *DB) UpdateTenantRoleTemplate(ctx context.Context, template *store.TenantRoleTemplate) (*store.TenantRoleTemplate, error) {
+	return nil, nil
+}
+
+func (d *DB) DeleteTenantRoleTemplate(ctx context.Context, id int32) error {
+	return nil
 }
