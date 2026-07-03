@@ -731,6 +731,11 @@ func (h *Handler) HandleUpdateTenant(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or tenant:write permission")
 	}
 
+	// Rate limit
+	if err := h.checkAdminMutationRateLimit(c, tenant.ID); err != nil {
+		return err
+	}
+
 	// Bind update request
 	var req struct {
 		IsActive       *bool     `json:"is_active"`
@@ -868,6 +873,11 @@ func (h *Handler) HandleRestoreFileVersion(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or files:restore permission")
 	}
 
+	// Rate limit
+	if err := h.checkAdminMutationRateLimit(c, tenant.ID); err != nil {
+		return err
+	}
+
 	// Bind request
 	var req struct {
 		VersionID int32 `json:"version_id"`
@@ -984,6 +994,11 @@ func (h *Handler) HandleImportSingleFile(c echo.Context) error {
 	// Check admin role OR files:upload permission
 	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermFilesUpload) {
 		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or files:upload permission")
+	}
+
+	// Rate limit
+	if err := h.checkAdminMutationRateLimit(c, tenant.ID); err != nil {
+		return err
 	}
 
 	audienceType := c.FormValue("audience_type")
@@ -1230,6 +1245,11 @@ func (h *Handler) HandleOnboard(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role")
 	}
 
+	// Global rate limit for onboarding (300/min) — no tenant yet so use 0 for global bucket.
+	if err := h.checkAdminMutationRateLimit(c, 0); err != nil {
+		return err
+	}
+
 	// Get form values
 	tenantSlug := c.FormValue("tenant_slug")
 	companyName := c.FormValue("company_name")
@@ -1337,6 +1357,11 @@ func (h *Handler) HandleImport(c echo.Context) error {
 	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	// Rate limit
+	if err := h.checkAdminMutationRateLimit(c, tenant.ID); err != nil {
+		return err
 	}
 
 	audienceType := c.FormValue("audience_type")
@@ -1587,6 +1612,11 @@ func (h *Handler) HandleDeleteTenant(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
 
+	// Rate limit
+	if err := h.checkAdminMutationRateLimit(c, tenant.ID); err != nil {
+		return err
+	}
+
 	// Delete tenant (cascades to all related data)
 	if err := h.store.DeleteAgentTenant(ctx, tenant.ID); err != nil {
 		slog.Error("delete tenant failed", "error", err)
@@ -1658,15 +1688,21 @@ func generateWidgetLoaderScript(baseURL, tenantSlug, companyName string) string 
 
 // generateWidgetScript generates the embeddable widget JavaScript.
 // It is retained only as an emergency fallback when widget/dist is unavailable.
+// Uses json.Marshal for JS-string escaping to prevent XSS via </script> breakout.
 func generateWidgetScript(baseURL, tenantSlug, companyName string) string {
+	// json.Marshal produces JS-safe strings: encodes < as \u003c, > as \u003e,
+	// preventing </script> HTML parser breakout regardless of JS string context.
+	safeBaseURL, _ := json.Marshal(baseURL)
+	safeSlug, _ := json.Marshal(tenantSlug)
+	_, _ = json.Marshal(companyName) // kept for future use (displaying company name in widget UI)
+
 	return `(function() {
   'use strict';
 
-  // Configuration
+  // Configuration -- all values are json.Marshal-safe (no XSS via </script>)
   var config = {
-    baseURL: '` + baseURL + `',
-    tenantSlug: '` + tenantSlug + `',
-    companyName: '` + companyName + `',
+    baseURL: ` + string(safeBaseURL) + `,
+    tenantSlug: ` + string(safeSlug) + `,
     primaryColor: '#0d9488'
   };
 
@@ -1885,10 +1921,12 @@ func (h *Handler) isDomainAllowed(allowedDomainsJSON, origin, referer string) bo
 
 	var domains []string
 	if err := json.Unmarshal([]byte(allowedDomainsJSON), &domains); err != nil {
-		return true // Invalid JSON, allow by default
+		slog.Error("domain allowlist contains invalid JSON, denying access",
+			"allowed_domains", allowedDomainsJSON, "error", err)
+		return false // Invalid JSON, deny (fail-closed)
 	}
 	if len(domains) == 0 {
-		return true // Empty list, allow all
+		return true // Empty list, allow all (backward compatible)
 	}
 
 	// Extract hostname from origin/referer
@@ -2321,6 +2359,11 @@ func (h *Handler) HandleSetLLMConfig(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or api:config permission")
 	}
 
+	// Rate limit
+	if err := h.checkAdminMutationRateLimit(c, tenant.ID); err != nil {
+		return err
+	}
+
 	// Bind request
 	var req SetLLMConfigRequest
 	if err := c.Bind(&req); err != nil {
@@ -2382,12 +2425,12 @@ func (h *Handler) HandleSetLLMConfig(c echo.Context) error {
 
 // UserPermissionResponse represents a user's permissions for a tenant.
 type UserPermissionResponse struct {
-	UserID               int32              `json:"user_id"`
-	Username             string             `json:"username"`
-	Permissions          []string           `json:"permissions"`
+	UserID                int32                `json:"user_id"`
+	Username              string               `json:"username"`
+	Permissions           []string             `json:"permissions"`
 	PermissionsWithSource []ResolvedPermission `json:"permissions_with_source,omitempty"`
-	GrantedBy            string             `json:"granted_by,omitempty"`
-	GrantedAt            string             `json:"granted_at"`
+	GrantedBy             string               `json:"granted_by,omitempty"`
+	GrantedAt             string               `json:"granted_at"`
 }
 
 // GrantPermissionRequest represents the request to grant permissions.
@@ -2444,9 +2487,9 @@ func (h *Handler) HandleListPermissions(c echo.Context) error {
 		}
 
 		result = append(result, UserPermissionResponse{
-			UserID:               uid,
-			Username:             usernames[uid],
-			Permissions:          rawPerms,
+			UserID:                uid,
+			Username:              usernames[uid],
+			Permissions:           rawPerms,
 			PermissionsWithSource: resolved,
 		})
 	}
@@ -2468,6 +2511,11 @@ func (h *Handler) HandleGrantPermission(c echo.Context) error {
 	// Must be admin or have tenant:admin
 	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermTenantAdmin) {
 		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or tenant:admin permission")
+	}
+
+	// Rate limit
+	if err := h.checkAdminMutationRateLimit(c, tenant.ID); err != nil {
+		return err
 	}
 
 	var req GrantPermissionRequest
@@ -2537,6 +2585,11 @@ func (h *Handler) HandleRevokePermission(c echo.Context) error {
 	// Must be admin or have tenant:admin
 	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermTenantAdmin) {
 		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or tenant:admin permission")
+	}
+
+	// Rate limit
+	if err := h.checkAdminMutationRateLimit(c, tenant.ID); err != nil {
+		return err
 	}
 
 	userID, err := strconv.ParseInt(userIDStr, 10, 32)
@@ -2851,9 +2904,9 @@ func (h *Handler) HandleAssignRoleTemplate(c echo.Context) error {
 	}
 
 	created, err := h.store.CreateUserTenantPermission(ctx, &store.UserTenantPermission{
-		UserID:          req.UserID,
-		TenantID:        tenant.ID,
-		Permissions:     template.Permissions,
+		UserID:           req.UserID,
+		TenantID:         tenant.ID,
+		Permissions:      template.Permissions,
 		SourceTemplateID: intPtr(int32(templateID)),
 	})
 	if err != nil {
@@ -2899,15 +2952,16 @@ func (h *Handler) HandleListUserRoles(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"user_id":      userID,
-		"username":     targetUser.Username,
-		"permissions":  resolved,
+		"user_id":     userID,
+		"username":    targetUser.Username,
+		"permissions": resolved,
 	})
 }
 
 func intPtr(v int32) *int32 {
 	return &v
 }
+
 // GET /api/v1/user/tenants
 func (h *Handler) HandleGetUserTenants(c echo.Context) error {
 	ctx := c.Request().Context()
