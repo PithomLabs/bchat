@@ -236,6 +236,9 @@ message UserAccessToken {
   string description = 2;
   google.protobuf.Timestamp issued_at = 3;
   google.protobuf.Timestamp expires_at = 4;
+  // Stable identifier for deletion without exposing raw token.
+  // Format: SHA256 prefix of the access token (first 16 hex chars).
+  string id = 5;
 }
 
 message ListUserAccessTokensRequest {
@@ -261,4 +264,7 @@ message DeleteUserAccessTokenRequest {
   string name = 1;
   // access_token is the access token to delete.
   string access_token = 2;
+  // id is the stable identifier returned by ListUserAccessTokens.
+  // When provided, access_token is ignored.
+  string id = 3;
 }

@@ -211,7 +211,7 @@
   "setting": {
     "access-token-section": {
       "access-token-copied-to-clipboard": "Žeton za dostop je kopiran v odložišče",
-      "access-token-deletion": "Ali ste prepričani, da želite izbrisati dostopni žeton {{accessToken}}? TO DEJANJE JE NEPOVRATNO.",
+      "access-token-deletion": "Ali ste prepričani, da želite izbrisati dostopni žeton? TO DEJANJE JE NEPOVRATNO.",
       "create-dialog": {
         "create-access-token": "Ustvari žeton za dostop",
         "created-at": "Ustvrajen",

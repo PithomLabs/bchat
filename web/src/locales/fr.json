@@ -210,7 +210,7 @@
   "setting": {
     "access-token-section": {
       "access-token-copied-to-clipboard": "Jeton d'accès copié dans le presse-papier",
-      "access-token-deletion": "Êtes-vous sûr de vouloir supprimer le jeton d'accès {{accessToken}}? CETTE ACTION EST IRRÉVERSIBLE.",
+      "access-token-deletion": "Êtes-vous sûr de vouloir supprimer le jeton d'accès? CETTE ACTION EST IRRÉVERSIBLE.",
       "create-dialog": {
         "create-access-token": "Créer un jeton d'accès",
         "created-at": "Créé le",

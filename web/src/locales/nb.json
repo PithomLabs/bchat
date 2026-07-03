@@ -231,7 +231,7 @@
   "setting": {
     "access-token-section": {
       "access-token-copied-to-clipboard": "Access token kopiert til utklippstavlen",
-      "access-token-deletion": "Er du sikker på at du vil slette access token {{accessToken}}? DENNE HANDLINGEN KAN IKKE ANGRES.",
+      "access-token-deletion": "Er du sikker på at du vil slette access token? DENNE HANDLINGEN KAN IKKE ANGRES.",
       "create-dialog": {
         "create-access-token": "Opprett access token",
         "created-at": "Opprettet",

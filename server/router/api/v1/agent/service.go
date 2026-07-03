@@ -1229,6 +1229,24 @@ func (s *Service) getLLMConfig(ctx context.Context, tenantID int32) (model strin
 	return model, apiKey
 }
 
+// requireLLMConfig returns the LLM model and API key for a tenant.
+// Unlike getLLMConfig, it does not silently absorb decryption errors.
+// It returns an error when a tenant key exists but decryption fails,
+// ensuring tenant billing isolation for chat-critical paths.
+func (s *Service) requireLLMConfig(ctx context.Context, tenantID int32) (model string, apiKey string, err error) {
+	config, _ := s.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &tenantID})
+	if config != nil && len(config.OpenRouterAPIKeyEncrypted) > 0 && s.encryptionService != nil {
+		if _, decryptErr := s.encryptionService.Decrypt(config.OpenRouterAPIKeyEncrypted, config.OpenRouterAPIKeyNonce); decryptErr != nil {
+			return "", "", fmt.Errorf("tenant %d API key decryption failed: %w", tenantID, decryptErr)
+		}
+	}
+	model, apiKey = s.getLLMConfig(ctx, tenantID)
+	if apiKey == "" {
+		return "", "", fmt.Errorf("no OpenRouter API key configured for tenant %d", tenantID)
+	}
+	return model, apiKey, nil
+}
+
 func (s *Service) withTenantEmbeddingAPIKey(ctx context.Context, tenantID int32) context.Context {
 	_, apiKey := s.getLLMConfig(ctx, tenantID)
 	return WithEmbeddingOpenRouterAPIKey(ctx, apiKey)
@@ -2148,8 +2166,8 @@ func (s *Service) evaluatePolicy(config *AudienceConfig, session *store.AgentSes
 // generateResponse uses LLM to generate a contextual response.
 func (s *Service) generateResponse(ctx context.Context, config *AudienceConfig, session *store.AgentSession, classification *Classification, decision *PolicyDecision) (string, error) {
 	// Get LLM config with tenant-specific fallback
-	model, apiKey := s.getLLMConfig(ctx, config.TenantID)
-	if apiKey == "" {
+	model, apiKey, err := s.requireLLMConfig(ctx, config.TenantID)
+	if err != nil {
 		return "I apologize, but the chat service is not currently available. Please call us directly.", nil
 	}
 
@@ -2611,8 +2629,8 @@ func (s *Service) generateRAGResponse(
 	userMessage string,
 ) (string, error) {
 	// Get LLM config
-	model, apiKey := s.getLLMConfig(ctx, config.TenantID)
-	if apiKey == "" {
+	model, apiKey, err := s.requireLLMConfig(ctx, config.TenantID)
+	if err != nil {
 		return "I apologize, but the chat service is not currently available. Please call us directly.", nil
 	}
 	ctx = WithEmbeddingOpenRouterAPIKey(ctx, apiKey)

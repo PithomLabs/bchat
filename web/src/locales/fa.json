@@ -211,7 +211,7 @@
   "setting": {
     "access-token-section": {
       "access-token-copied-to-clipboard": "توکن دسترسی کپی شد",
-      "access-token-deletion": "آیا شما از حذف توکن {{accessToken}} اطمینان دارید؟ این عمل غیر قابل بازگشت است.",
+      "access-token-deletion": "آیا شما از حذف توکن اطمینان دارید؟ این عمل غیر قابل بازگشت است.",
       "create-dialog": {
         "create-access-token": "ایجاد توکن دسترسی",
         "created-at": "ساخته شده در",

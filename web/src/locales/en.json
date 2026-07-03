@@ -545,7 +545,7 @@
   "setting": {
     "access-token-section": {
       "access-token-copied-to-clipboard": "Access token copied to clipboard",
-      "access-token-deletion": "Are you sure to delete access token {{accessToken}}? THIS ACTION IS IRREVERSIBLE.",
+      "access-token-deletion": "Are you sure you want to delete this access token? THIS ACTION IS IRREVERSIBLE.",
       "create-dialog": {
         "create-access-token": "Create Access Token",
         "created-at": "Created At",

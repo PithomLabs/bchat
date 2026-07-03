@@ -2,7 +2,9 @@ package v1
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -414,11 +416,10 @@ func (s *APIV1Service) ListUserAccessTokens(ctx context.Context, request *v1pb.L
 		}
 
 		userAccessToken := &v1pb.UserAccessToken{
-			// Return the raw JWT — the frontend needs it for display, copy, and delete.
-			// Phase 2 will add ID-based revocation so the raw JWT is not needed on the client.
-			AccessToken: userAccessToken.AccessToken,
+			AccessToken: "",
 			Description: userAccessToken.Description,
 			IssuedAt:    timestamppb.New(claims.IssuedAt.Time),
+			Id:          sha256Prefix(userAccessToken.AccessToken),
 		}
 		if claims.ExpiresAt != nil {
 			userAccessToken.ExpiresAt = timestamppb.New(claims.ExpiresAt.Time)
@@ -494,6 +495,12 @@ func (s *APIV1Service) CreateUserAccessToken(ctx context.Context, request *v1pb.
 	return userAccessToken, nil
 }
 
+// sha256Prefix returns the first 16 hex chars of the SHA256 hash.
+func sha256Prefix(s string) string {
+	hash := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(hash[:])[:16]
+}
+
 func (s *APIV1Service) DeleteUserAccessToken(ctx context.Context, request *v1pb.DeleteUserAccessTokenRequest) (*emptypb.Empty, error) {
 	userID, err := ExtractUserIDFromName(request.Name)
 	if err != nil {
@@ -516,7 +523,13 @@ func (s *APIV1Service) DeleteUserAccessToken(ctx context.Context, request *v1pb.
 	}
 	updatedUserAccessTokens := []*storepb.AccessTokensUserSetting_AccessToken{}
 	for _, userAccessToken := range userAccessTokens {
-		if userAccessToken.AccessToken == request.AccessToken {
+		matched := false
+		if request.Id != "" {
+			matched = (sha256Prefix(userAccessToken.AccessToken) == request.Id)
+		} else {
+			matched = (userAccessToken.AccessToken == request.AccessToken)
+		}
+		if matched {
 			continue
 		}
 		updatedUserAccessTokens = append(updatedUserAccessTokens, userAccessToken)

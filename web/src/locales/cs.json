@@ -232,7 +232,7 @@
   "setting": {
     "access-token-section": {
       "access-token-copied-to-clipboard": "Přístupový token zkopírován do schránky",
-      "access-token-deletion": "Jste si jistí, že chcete odstranit přístupový token {{accessToken}}? TATO AKCE JE NEVRATNÁ.",
+      "access-token-deletion": "Jste si jistí, že chcete odstranit přístupový token? TATO AKCE JE NEVRATNÁ.",
       "create-dialog": {
         "create-access-token": "Vytvořit přístupový token",
         "created-at": "Vytvořeno",

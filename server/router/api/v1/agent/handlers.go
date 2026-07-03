@@ -1689,12 +1689,11 @@ func generateWidgetLoaderScript(baseURL, tenantSlug, companyName string) string 
 // generateWidgetScript generates the embeddable widget JavaScript.
 // It is retained only as an emergency fallback when widget/dist is unavailable.
 // Uses json.Marshal for JS-string escaping to prevent XSS via </script> breakout.
-func generateWidgetScript(baseURL, tenantSlug, companyName string) string {
+func generateWidgetScript(baseURL, tenantSlug string) string {
 	// json.Marshal produces JS-safe strings: encodes < as \u003c, > as \u003e,
 	// preventing </script> HTML parser breakout regardless of JS string context.
 	safeBaseURL, _ := json.Marshal(baseURL)
 	safeSlug, _ := json.Marshal(tenantSlug)
-	_, _ = json.Marshal(companyName) // kept for future use (displaying company name in widget UI)
 
 	return `(function() {
   'use strict';
@@ -1992,7 +1991,7 @@ func (h *Handler) HandleWidgetEmbed(c echo.Context) error {
 	if err != nil {
 		// Fallback to inline-generated script if built file not found
 		slog.Warn("widget embed.min.js not found, using inline fallback", "path", widgetPath, "error", err)
-		script := generateWidgetScript(baseURL, tenant.Slug, tenant.CompanyName)
+		script := generateWidgetScript(baseURL, tenant.Slug)
 		c.Response().Header().Set("Content-Type", "application/javascript")
 		c.Response().Header().Set("Cache-Control", "public, max-age=3600")
 		return c.String(http.StatusOK, script)
