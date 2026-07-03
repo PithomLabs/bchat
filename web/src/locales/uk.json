@@ -212,7 +212,7 @@
   "setting": {
     "access-token-section": {
       "access-token-copied-to-clipboard": "Токен доступу скопійовано в буфер обміну",
-      "access-token-deletion": "Ви впевнені, що хочете видалити токен доступу {{accessToken}}? ЦЮ ДІЮ НЕМОЖЛИВО СКАСУВАТИ.",
+      "access-token-deletion": "Ви впевнені, що хочете видалити токен доступу? ЦЮ ДІЮ НЕМОЖЛИВО СКАСУВАТИ.",
       "create-dialog": {
         "create-access-token": "Створити токен доступу",
         "created-at": "Створено",

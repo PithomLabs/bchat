@@ -1,6 +1,5 @@
 import { Button } from "@usememos/mui";
-import copy from "copy-to-clipboard";
-import { ClipboardIcon, TrashIcon } from "lucide-react";
+import { TrashIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "react-hot-toast";
 import { userServiceClient } from "@/grpcweb";
@@ -31,22 +30,12 @@ const AccessTokenSection = () => {
     setUserAccessTokens(accessTokens);
   };
 
-  const copyAccessToken = (accessToken: string) => {
-    copy(accessToken);
-    toast.success(t("setting.access-token-section.access-token-copied-to-clipboard"));
-  };
-
-  const handleDeleteAccessToken = async (accessToken: string) => {
-    const formatedAccessToken = getFormatedAccessToken(accessToken);
-    const confirmed = window.confirm(t("setting.access-token-section.access-token-deletion", { accessToken: formatedAccessToken }));
+  const handleDeleteAccessToken = async (id: string) => {
+    const confirmed = window.confirm(t("setting.access-token-section.access-token-deletion"));
     if (confirmed) {
-      await userServiceClient.deleteUserAccessToken({ name: currentUser.name, accessToken: accessToken });
-      setUserAccessTokens(userAccessTokens.filter((token) => token.accessToken !== accessToken));
+      await userServiceClient.deleteUserAccessToken({ name: currentUser.name, id });
+      setUserAccessTokens(userAccessTokens.filter((token) => token.id !== id));
     }
-  };
-
-  const getFormatedAccessToken = (accessToken: string) => {
-    return `${accessToken.slice(0, 4)}****${accessToken.slice(-4)}`;
   };
 
   return (
@@ -78,12 +67,9 @@ const AccessTokenSection = () => {
                 <thead>
                   <tr>
                     <th scope="col" className="px-3 py-2 text-left text-sm font-semibold text-gray-900 dark:text-gray-400">
-                      {t("setting.access-token-section.token")}
-                    </th>
-                    <th scope="col" className="py-2 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 dark:text-gray-400">
                       {t("common.description")}
                     </th>
-                    <th scope="col" className="px-3 py-2 text-left text-sm font-semibold text-gray-900 dark:text-gray-400">
+                    <th scope="col" className="py-2 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 dark:text-gray-400">
                       {t("setting.access-token-section.create-dialog.created-at")}
                     </th>
                     <th scope="col" className="px-3 py-2 text-left text-sm font-semibold text-gray-900 dark:text-gray-400">
@@ -96,13 +82,7 @@ const AccessTokenSection = () => {
                 </thead>
                 <tbody className="divide-y divide-gray-200 dark:divide-zinc-700">
                   {userAccessTokens.map((userAccessToken) => (
-                    <tr key={userAccessToken.accessToken}>
-                      <td className="whitespace-nowrap px-3 py-2 text-sm text-gray-900 dark:text-gray-400 flex flex-row justify-start items-center gap-x-1">
-                        <span className="font-mono">{getFormatedAccessToken(userAccessToken.accessToken)}</span>
-                        <Button variant="plain" onClick={() => copyAccessToken(userAccessToken.accessToken)}>
-                          <ClipboardIcon className="w-4 h-auto text-gray-400" />
-                        </Button>
-                      </td>
+                    <tr key={userAccessToken.id}>
                       <td className="whitespace-nowrap py-2 pl-4 pr-3 text-sm text-gray-900 dark:text-gray-400">
                         {userAccessToken.description}
                       </td>
@@ -116,7 +96,7 @@ const AccessTokenSection = () => {
                         <Button
                           variant="plain"
                           onClick={() => {
-                            handleDeleteAccessToken(userAccessToken.accessToken);
+                            handleDeleteAccessToken(userAccessToken.id);
                           }}
                         >
                           <TrashIcon className="text-red-600 w-4 h-auto" />

@@ -213,7 +213,7 @@
   "setting": {
     "access-token-section": {
       "access-token-copied-to-clipboard": "存取令牌已複製到剪貼簿",
-      "access-token-deletion": "您確定要刪除存取令牌 {{accessToken}} 嗎？此操作無法恢復。",
+      "access-token-deletion": "您確定要刪除存取令牌嗎？此操作無法恢復。",
       "create-dialog": {
         "create-access-token": "建立存取令牌",
         "created-at": "建立時間",

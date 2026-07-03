@@ -955,11 +955,14 @@ func (x *UpdateUserSettingRequest) GetUpdateMask() *fieldmaskpb.FieldMask {
 }
 
 type UserAccessToken struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	AccessToken   string                 `protobuf:"bytes,1,opt,name=access_token,json=accessToken,proto3" json:"access_token,omitempty"`
-	Description   string                 `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
-	IssuedAt      *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=issued_at,json=issuedAt,proto3" json:"issued_at,omitempty"`
-	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	AccessToken string                 `protobuf:"bytes,1,opt,name=access_token,json=accessToken,proto3" json:"access_token,omitempty"`
+	Description string                 `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
+	IssuedAt    *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=issued_at,json=issuedAt,proto3" json:"issued_at,omitempty"`
+	ExpiresAt   *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	// Stable identifier for deletion without exposing raw token.
+	// Format: SHA256 prefix of the access token (first 16 hex chars).
+	Id            string `protobuf:"bytes,5,opt,name=id,proto3" json:"id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1020,6 +1023,13 @@ func (x *UserAccessToken) GetExpiresAt() *timestamppb.Timestamp {
 		return x.ExpiresAt
 	}
 	return nil
+}
+
+func (x *UserAccessToken) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
 }
 
 type ListUserAccessTokensRequest struct {
@@ -1177,7 +1187,10 @@ type DeleteUserAccessTokenRequest struct {
 	// The name of the user.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// access_token is the access token to delete.
-	AccessToken   string `protobuf:"bytes,2,opt,name=access_token,json=accessToken,proto3" json:"access_token,omitempty"`
+	AccessToken string `protobuf:"bytes,2,opt,name=access_token,json=accessToken,proto3" json:"access_token,omitempty"`
+	// id is the stable identifier returned by ListUserAccessTokens.
+	// When provided, access_token is ignored.
+	Id            string `protobuf:"bytes,3,opt,name=id,proto3" json:"id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1222,6 +1235,13 @@ func (x *DeleteUserAccessTokenRequest) GetName() string {
 func (x *DeleteUserAccessTokenRequest) GetAccessToken() string {
 	if x != nil {
 		return x.AccessToken
+	}
+	return ""
+}
+
+func (x *DeleteUserAccessTokenRequest) GetId() string {
+	if x != nil {
+		return x.Id
 	}
 	return ""
 }
@@ -1375,13 +1395,14 @@ const file_api_v1_user_service_proto_rawDesc = "" +
 	"\x18UpdateUserSettingRequest\x128\n" +
 	"\asetting\x18\x01 \x01(\v2\x19.memos.api.v1.UserSettingB\x03\xe0A\x02R\asetting\x12;\n" +
 	"\vupdate_mask\x18\x02 \x01(\v2\x1a.google.protobuf.FieldMaskR\n" +
-	"updateMask\"\xca\x01\n" +
+	"updateMask\"\xda\x01\n" +
 	"\x0fUserAccessToken\x12!\n" +
 	"\faccess_token\x18\x01 \x01(\tR\vaccessToken\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x127\n" +
 	"\tissued_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bissuedAt\x129\n" +
 	"\n" +
-	"expires_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"1\n" +
+	"expires_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\x0e\n" +
+	"\x02id\x18\x05 \x01(\tR\x02id\"1\n" +
 	"\x1bListUserAccessTokensRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"b\n" +
 	"\x1cListUserAccessTokensResponse\x12B\n" +
@@ -1391,10 +1412,11 @@ const file_api_v1_user_service_proto_rawDesc = "" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12>\n" +
 	"\n" +
 	"expires_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampH\x00R\texpiresAt\x88\x01\x01B\r\n" +
-	"\v_expires_at\"U\n" +
+	"\v_expires_at\"e\n" +
 	"\x1cDeleteUserAccessTokenRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
-	"\faccess_token\x18\x02 \x01(\tR\vaccessToken2\xc2\x0e\n" +
+	"\faccess_token\x18\x02 \x01(\tR\vaccessToken\x12\x0e\n" +
+	"\x02id\x18\x03 \x01(\tR\x02id2\xc2\x0e\n" +
 	"\vUserService\x12c\n" +
 	"\tListUsers\x12\x1e.memos.api.v1.ListUsersRequest\x1a\x1f.memos.api.v1.ListUsersResponse\"\x15\x82\xd3\xe4\x93\x02\x0f\x12\r/api/v1/users\x12b\n" +
 	"\aGetUser\x12\x1c.memos.api.v1.GetUserRequest\x1a\x12.memos.api.v1.User\"%\xdaA\x04name\x82\xd3\xe4\x93\x02\x18\x12\x16/api/v1/{name=users/*}\x12z\n" +

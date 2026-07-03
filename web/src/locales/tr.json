@@ -212,7 +212,7 @@
   "setting": {
     "access-token-section": {
       "access-token-copied-to-clipboard": "Erişim tokeni panoya kopyalandı",
-      "access-token-deletion": "{{accessToken}} erişim tokenini silmek istediğinizden emin misiniz? BU İŞLEM GERİ ALINAMAZ.",
+      "access-token-deletion": "Erişim tokenini silmek istediğinizden emin misiniz? BU İŞLEM GERİ ALINAMAZ.",
       "create-dialog": {
         "create-access-token": "Erişim Tokeni Oluştur",
         "created-at": "Oluşturulma Tarihi",

@@ -228,7 +228,7 @@
   "setting": {
     "access-token-section": {
       "access-token-copied-to-clipboard": "Token de acesso copiado para a área de transferência",
-      "access-token-deletion": "Tem certeza de que deseja excluir o token de acesso {{accessToken}}? ESSA AÇÃO É IRREVERSÍVEL.",
+      "access-token-deletion": "Tem certeza de que deseja excluir o token de acesso? ESSA AÇÃO É IRREVERSÍVEL.",
       "create-dialog": {
         "create-access-token": "Criar token de acesso",
         "created-at": "Criado em",
