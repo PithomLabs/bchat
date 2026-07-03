@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"slices"
@@ -226,6 +227,36 @@ func (s *APIV1Service) UpdateUser(ctx context.Context, request *v1pb.UpdateUserR
 		return nil, status.Errorf(codes.Internal, "failed to update user: %v", err)
 	}
 
+	// NEW: Invalidate ALL existing access tokens for the TARGET user
+	// (user.ID, not currentUser.ID — an admin can change another's password)
+	// The password IS already committed to the DB at this point. If cleanup
+	// fails, the user has a new password AND old tokens remain valid — admin
+	// must manually purge tokens via SQL.
+	// We retry once for transient DB errors, then defer one more attempt.
+	if err := s.deleteAllUserAccessTokens(ctx, user.ID); err != nil {
+		slog.Warn("First attempt to invalidate tokens failed, retrying...",
+			"target_user_id", user.ID, "error", err)
+		if retryErr := s.deleteAllUserAccessTokens(ctx, user.ID); retryErr != nil {
+			slog.Error("CRITICAL: Password changed but failed to invalidate access tokens after retry",
+				"target_user_id", user.ID,
+				"actor_user_id", currentUser.ID,
+				"error", retryErr)
+			// Defer one more attempt before returning 500 (transient recovery)
+			go func(uid int32) {
+				bgCtx := context.Background()
+				if deferredErr := s.deleteAllUserAccessTokens(bgCtx, uid); deferredErr != nil {
+					slog.Error("Deferred token cleanup also failed; manual intervention required",
+						"target_user_id", uid, "error", deferredErr)
+				}
+			}(user.ID)
+			return nil, status.Errorf(codes.Internal,
+				"password changed but failed to invalidate existing sessions. "+
+					"Admin must manually purge tokens via SQL. Error: %v", retryErr)
+		}
+	}
+	slog.Info("Invalidated access tokens after password change",
+		"target_user_id", user.ID, "actor_user_id", currentUser.ID)
+
 	return convertUserFromStore(updatedUser), nil
 }
 
@@ -383,6 +414,8 @@ func (s *APIV1Service) ListUserAccessTokens(ctx context.Context, request *v1pb.L
 		}
 
 		userAccessToken := &v1pb.UserAccessToken{
+			// Return the raw JWT — the frontend needs it for display, copy, and delete.
+			// Phase 2 will add ID-based revocation so the raw JWT is not needed on the client.
 			AccessToken: userAccessToken.AccessToken,
 			Description: userAccessToken.Description,
 			IssuedAt:    timestamppb.New(claims.IssuedAt.Time),
@@ -508,11 +541,35 @@ func (s *APIV1Service) UpsertAccessTokenToStore(ctx context.Context, user *store
 	if err != nil {
 		return errors.Wrap(err, "failed to get user access tokens")
 	}
+
 	userAccessToken := storepb.AccessTokensUserSetting_AccessToken{
 		AccessToken: accessToken,
 		Description: description,
 	}
 	userAccessTokens = append(userAccessTokens, &userAccessToken)
+
+	// Sort by JWT issued-at (iat) ascending so we can evict oldest first.
+	slices.SortFunc(userAccessTokens, func(a, b *storepb.AccessTokensUserSetting_AccessToken) int {
+		aClaims := &ClaimsMessage{}
+		bClaims := &ClaimsMessage{}
+		if _, _, err := jwt.NewParser().ParseUnverified(a.AccessToken, aClaims); err != nil {
+			slog.Warn("failed to parse access token during dedup sort", "error", err)
+		}
+		if _, _, err := jwt.NewParser().ParseUnverified(b.AccessToken, bClaims); err != nil {
+			slog.Warn("failed to parse access token during dedup sort", "error", err)
+		}
+		if aClaims.IssuedAt.Unix() < bClaims.IssuedAt.Unix() {
+			return -1
+		}
+		return 1
+	})
+
+	// Enforce max 10 tokens — evict oldest (first after iat-sort).
+	const maxTokens = 10
+	if len(userAccessTokens) > maxTokens {
+		userAccessTokens = userAccessTokens[len(userAccessTokens)-maxTokens:]
+	}
+
 	if _, err := s.Store.UpsertUserSetting(ctx, &storepb.UserSetting{
 		UserId: user.ID,
 		Key:    storepb.UserSettingKey_ACCESS_TOKENS,
@@ -588,4 +645,20 @@ func extractImageInfo(dataURI string) (string, string, error) {
 	imageType := matches[1]
 	base64Data := matches[2]
 	return imageType, base64Data, nil
+}
+
+// deleteAllUserAccessTokens removes ALL access tokens for a user.
+func (s *APIV1Service) deleteAllUserAccessTokens(ctx context.Context, userID int32) error {
+	if _, err := s.Store.UpsertUserSetting(ctx, &storepb.UserSetting{
+		UserId: userID,
+		Key:    storepb.UserSettingKey_ACCESS_TOKENS,
+		Value: &storepb.UserSetting_AccessTokens{
+			AccessTokens: &storepb.AccessTokensUserSetting{
+				AccessTokens: nil,
+			},
+		},
+	}); err != nil {
+		return errors.Wrap(err, "failed to clear access tokens")
+	}
+	return nil
 }

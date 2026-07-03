@@ -63,9 +63,13 @@ func NewServer(ctx context.Context, profile *profile.Profile, store *store.Store
 		return nil, errors.Wrap(err, "failed to get workspace basic setting")
 	}
 
-	secret := "usememos"
-	if profile.Mode == "prod" {
-		secret = workspaceBasicSetting.SecretKey
+	// getOrUpsertWorkspaceBasicSetting already auto-generates a UUID SecretKey on first boot
+	// (server.go:218). This check is defense-in-depth: if the DB write failed silently,
+	// SecretKey would be empty and we must not start with a well-known default.
+	secret := workspaceBasicSetting.SecretKey
+	if secret == "" {
+		return nil, errors.New("CRITICAL: workspace SecretKey is empty after getOrUpsertWorkspaceBasicSetting. " +
+			"The app cannot start without a non-empty JWT signing key.")
 	}
 	s.Secret = secret
 

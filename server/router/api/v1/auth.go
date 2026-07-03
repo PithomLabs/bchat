@@ -17,6 +17,10 @@ const (
 	AccessTokenAudienceName = "user.access-token"
 	AccessTokenDuration     = 7 * 24 * time.Hour
 
+	// MaxNeverExpireDuration is the maximum lifetime for a "never expire" access token.
+	// Previously this was 100 years; now capped at 30 days for production safety.
+	MaxNeverExpireDuration = 30 * 24 * time.Hour
+
 	// CookieExpDuration expires slightly earlier than the jwt expiration. Client would be logged out if the user
 	// cookie expires, thus the client would always logout first before attempting to make a request with the expired jwt.
 	CookieExpDuration = AccessTokenDuration - 1*time.Minute

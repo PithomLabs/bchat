@@ -3,6 +3,7 @@ package v1
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -69,6 +70,10 @@ func (s *APIV1Service) SetWorkspaceSetting(ctx context.Context, request *v1pb.Se
 		return nil, status.Errorf(codes.PermissionDenied, "permission denied")
 	}
 
+	// Validate setting name before converting.
+	if _, err := ExtractWorkspaceSettingKeyFromName(request.Setting.Name); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid setting name: %v", err)
+	}
 	updateSetting := convertWorkspaceSettingToStore(request.Setting)
 	workspaceSetting, err := s.Store.UpsertWorkspaceSetting(ctx, updateSetting)
 	if err != nil {
@@ -100,7 +105,11 @@ func convertWorkspaceSettingFromStore(setting *storepb.WorkspaceSetting) *v1pb.W
 }
 
 func convertWorkspaceSettingToStore(setting *v1pb.WorkspaceSetting) *storepb.WorkspaceSetting {
-	settingKeyString, _ := ExtractWorkspaceSettingKeyFromName(setting.Name)
+	settingKeyString, err := ExtractWorkspaceSettingKeyFromName(setting.Name)
+	if err != nil {
+		slog.Error("failed to extract workspace setting key from name, defaulting to GeneralSetting",
+			"name", setting.Name, "error", err)
+	}
 	workspaceSetting := &storepb.WorkspaceSetting{
 		Key: storepb.WorkspaceSettingKey(storepb.WorkspaceSettingKey_value[settingKeyString]),
 		Value: &storepb.WorkspaceSetting_GeneralSetting{
