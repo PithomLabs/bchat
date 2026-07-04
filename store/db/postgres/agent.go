@@ -215,113 +215,540 @@ func (d *DB) DeleteAgentAudience(ctx context.Context, tenantID int32, audienceTy
 // Agent Service methods
 
 func (d *DB) CreateAgentService(ctx context.Context, service *store.AgentService) (*store.AgentService, error) {
-	return nil, errNotImplemented
+	stmt := `
+		INSERT INTO agent_services (tenant_id, audience_type, code, name, description, is_emergency, response_time, is_active)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING id
+	`
+	if err := d.db.QueryRowContext(ctx, stmt,
+		service.TenantID, service.AudienceType, service.Code, service.Name,
+		service.Description, service.IsEmergency, service.ResponseTime, service.IsActive,
+	).Scan(&service.ID); err != nil {
+		return nil, err
+	}
+	return service, nil
 }
 
 func (d *DB) ListAgentServices(ctx context.Context, find *store.FindAgentService) ([]*store.AgentService, error) {
-	return nil, errNotImplemented
+	where := []string{"TRUE"}
+	args := []any{}
+	add := func(clause string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(clause, len(args)))
+	}
+	if find.TenantID != nil {
+		add("tenant_id = $%d", *find.TenantID)
+	}
+	if find.AudienceType != nil {
+		add("audience_type = $%d", *find.AudienceType)
+	}
+	if find.Code != nil {
+		add("code = $%d", *find.Code)
+	}
+	if find.IsActive != nil {
+		add("is_active = $%d", *find.IsActive)
+	}
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT id, tenant_id, audience_type, code, name, description, is_emergency, response_time, is_active
+		FROM agent_services WHERE `+strings.Join(where, " AND ")+`
+		ORDER BY name
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var services []*store.AgentService
+	for rows.Next() {
+		var s store.AgentService
+		var description, responseTime sql.NullString
+		if err := rows.Scan(&s.ID, &s.TenantID, &s.AudienceType, &s.Code, &s.Name,
+			&description, &s.IsEmergency, &responseTime, &s.IsActive); err != nil {
+			return nil, err
+		}
+		if description.Valid {
+			s.Description = description.String
+		}
+		if responseTime.Valid {
+			s.ResponseTime = responseTime.String
+		}
+		services = append(services, &s)
+	}
+	return services, rows.Err()
 }
 
 func (d *DB) DeleteAgentServices(ctx context.Context, tenantID int32, audienceType string) error {
-	return errNotImplemented
+	_, err := d.db.ExecContext(ctx, "DELETE FROM agent_services WHERE tenant_id = $1 AND audience_type = $2", tenantID, audienceType)
+	return err
 }
 
 // Agent Exclusion methods
 
 func (d *DB) CreateAgentExclusion(ctx context.Context, exclusion *store.AgentExclusion) (*store.AgentExclusion, error) {
-	return nil, errNotImplemented
+	stmt := `
+		INSERT INTO agent_exclusions (tenant_id, audience_type, code, name, description, exception_rule, referral, is_active)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING id
+	`
+	if err := d.db.QueryRowContext(ctx, stmt,
+		exclusion.TenantID, exclusion.AudienceType, exclusion.Code, exclusion.Name,
+		exclusion.Description, exclusion.ExceptionRule, exclusion.Referral, exclusion.IsActive,
+	).Scan(&exclusion.ID); err != nil {
+		return nil, err
+	}
+	return exclusion, nil
 }
 
 func (d *DB) ListAgentExclusions(ctx context.Context, find *store.FindAgentExclusion) ([]*store.AgentExclusion, error) {
-	return nil, errNotImplemented
+	where := []string{"TRUE"}
+	args := []any{}
+	add := func(clause string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(clause, len(args)))
+	}
+	if find.TenantID != nil {
+		add("tenant_id = $%d", *find.TenantID)
+	}
+	if find.AudienceType != nil {
+		add("audience_type = $%d", *find.AudienceType)
+	}
+	if find.IsActive != nil {
+		add("is_active = $%d", *find.IsActive)
+	}
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT id, tenant_id, audience_type, code, name, description, exception_rule, referral, is_active
+		FROM agent_exclusions WHERE `+strings.Join(where, " AND "),
+		args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var exclusions []*store.AgentExclusion
+	for rows.Next() {
+		var e store.AgentExclusion
+		var description, exceptionRule, referral sql.NullString
+		if err := rows.Scan(&e.ID, &e.TenantID, &e.AudienceType, &e.Code, &e.Name,
+			&description, &exceptionRule, &referral, &e.IsActive); err != nil {
+			return nil, err
+		}
+		if description.Valid {
+			e.Description = description.String
+		}
+		if exceptionRule.Valid {
+			e.ExceptionRule = exceptionRule.String
+		}
+		if referral.Valid {
+			e.Referral = referral.String
+		}
+		exclusions = append(exclusions, &e)
+	}
+	return exclusions, rows.Err()
 }
 
 func (d *DB) DeleteAgentExclusions(ctx context.Context, tenantID int32, audienceType string) error {
-	return errNotImplemented
+	_, err := d.db.ExecContext(ctx, "DELETE FROM agent_exclusions WHERE tenant_id = $1 AND audience_type = $2", tenantID, audienceType)
+	return err
 }
 
 // Agent Coverage methods
 
 func (d *DB) CreateAgentCoverage(ctx context.Context, coverage *store.AgentCoverage) (*store.AgentCoverage, error) {
-	return nil, errNotImplemented
+	stmt := `
+		INSERT INTO agent_coverage (tenant_id, area_type, area_name, state_code, is_included)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id
+	`
+	if err := d.db.QueryRowContext(ctx, stmt,
+		coverage.TenantID, coverage.AreaType, coverage.AreaName, coverage.StateCode, coverage.IsIncluded,
+	).Scan(&coverage.ID); err != nil {
+		return nil, err
+	}
+	return coverage, nil
 }
 
 func (d *DB) ListAgentCoverage(ctx context.Context, find *store.FindAgentCoverage) ([]*store.AgentCoverage, error) {
-	return nil, errNotImplemented
+	where := []string{"TRUE"}
+	args := []any{}
+	add := func(clause string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(clause, len(args)))
+	}
+	if find.TenantID != nil {
+		add("tenant_id = $%d", *find.TenantID)
+	}
+	if find.IsIncluded != nil {
+		add("is_included = $%d", *find.IsIncluded)
+	}
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT id, tenant_id, area_type, area_name, state_code, is_included
+		FROM agent_coverage WHERE `+strings.Join(where, " AND "),
+		args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var coverage []*store.AgentCoverage
+	for rows.Next() {
+		var c store.AgentCoverage
+		var stateCode sql.NullString
+		if err := rows.Scan(&c.ID, &c.TenantID, &c.AreaType, &c.AreaName, &stateCode, &c.IsIncluded); err != nil {
+			return nil, err
+		}
+		if stateCode.Valid {
+			c.StateCode = stateCode.String
+		}
+		coverage = append(coverage, &c)
+	}
+	return coverage, rows.Err()
 }
 
 func (d *DB) DeleteAgentCoverage(ctx context.Context, tenantID int32) error {
-	return errNotImplemented
+	_, err := d.db.ExecContext(ctx, "DELETE FROM agent_coverage WHERE tenant_id = $1", tenantID)
+	return err
 }
 
 // Agent FAQ methods
 
 func (d *DB) CreateAgentFAQ(ctx context.Context, faq *store.AgentFAQ) (*store.AgentFAQ, error) {
-	return nil, errNotImplemented
+	stmt := `
+		INSERT INTO agent_faqs (tenant_id, audience_type, code, question, answer, is_active)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id
+	`
+	if err := d.db.QueryRowContext(ctx, stmt,
+		faq.TenantID, faq.AudienceType, faq.Code, faq.Question, faq.Answer, faq.IsActive,
+	).Scan(&faq.ID); err != nil {
+		return nil, err
+	}
+	return faq, nil
 }
 
 func (d *DB) ListAgentFAQs(ctx context.Context, find *store.FindAgentFAQ) ([]*store.AgentFAQ, error) {
-	return nil, errNotImplemented
+	where := []string{"TRUE"}
+	args := []any{}
+	add := func(clause string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(clause, len(args)))
+	}
+	if find.TenantID != nil {
+		add("tenant_id = $%d", *find.TenantID)
+	}
+	if find.AudienceType != nil {
+		add("audience_type = $%d", *find.AudienceType)
+	}
+	if find.IsActive != nil {
+		add("is_active = $%d", *find.IsActive)
+	}
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT id, tenant_id, audience_type, code, question, answer, is_active
+		FROM agent_faqs WHERE `+strings.Join(where, " AND "),
+		args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var faqs []*store.AgentFAQ
+	for rows.Next() {
+		var f store.AgentFAQ
+		if err := rows.Scan(&f.ID, &f.TenantID, &f.AudienceType, &f.Code, &f.Question, &f.Answer, &f.IsActive); err != nil {
+			return nil, err
+		}
+		faqs = append(faqs, &f)
+	}
+	return faqs, rows.Err()
 }
 
 func (d *DB) DeleteAgentFAQs(ctx context.Context, tenantID int32, audienceType string) error {
-	return errNotImplemented
+	_, err := d.db.ExecContext(ctx, "DELETE FROM agent_faqs WHERE tenant_id = $1 AND audience_type = $2", tenantID, audienceType)
+	return err
 }
 
 // Agent Safety Protocol methods
 
 func (d *DB) CreateAgentSafetyProtocol(ctx context.Context, protocol *store.AgentSafetyProtocol) (*store.AgentSafetyProtocol, error) {
-	return nil, errNotImplemented
+	triggerIntentsJSON, _ := json.Marshal(protocol.TriggerIntents)
+	instructionsJSON, _ := json.Marshal(protocol.Instructions)
+
+	stmt := `
+		INSERT INTO agent_safety_protocols (tenant_id, audience_type, code, name, trigger_intents, instructions, is_active)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id
+	`
+	if err := d.db.QueryRowContext(ctx, stmt,
+		protocol.TenantID, protocol.AudienceType, protocol.Code, protocol.Name,
+		string(triggerIntentsJSON), string(instructionsJSON), protocol.IsActive,
+	).Scan(&protocol.ID); err != nil {
+		return nil, err
+	}
+	return protocol, nil
 }
 
 func (d *DB) ListAgentSafetyProtocols(ctx context.Context, find *store.FindAgentSafetyProtocol) ([]*store.AgentSafetyProtocol, error) {
-	return nil, errNotImplemented
+	where := []string{"TRUE"}
+	args := []any{}
+	add := func(clause string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(clause, len(args)))
+	}
+	if find.TenantID != nil {
+		add("tenant_id = $%d", *find.TenantID)
+	}
+	if find.AudienceType != nil {
+		add("audience_type = $%d", *find.AudienceType)
+	}
+	if find.IsActive != nil {
+		add("is_active = $%d", *find.IsActive)
+	}
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT id, tenant_id, audience_type, code, name, trigger_intents, instructions, is_active
+		FROM agent_safety_protocols WHERE `+strings.Join(where, " AND "),
+		args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var protocols []*store.AgentSafetyProtocol
+	for rows.Next() {
+		var p store.AgentSafetyProtocol
+		var triggerIntentsJSON, instructionsJSON string
+		if err := rows.Scan(&p.ID, &p.TenantID, &p.AudienceType, &p.Code, &p.Name,
+			&triggerIntentsJSON, &instructionsJSON, &p.IsActive); err != nil {
+			return nil, err
+		}
+		json.Unmarshal([]byte(triggerIntentsJSON), &p.TriggerIntents)
+		json.Unmarshal([]byte(instructionsJSON), &p.Instructions)
+		protocols = append(protocols, &p)
+	}
+	return protocols, rows.Err()
 }
 
 func (d *DB) DeleteAgentSafetyProtocols(ctx context.Context, tenantID int32, audienceType string) error {
-	return errNotImplemented
+	_, err := d.db.ExecContext(ctx, "DELETE FROM agent_safety_protocols WHERE tenant_id = $1 AND audience_type = $2", tenantID, audienceType)
+	return err
 }
 
 // Agent KB Section methods
 
 func (d *DB) CreateAgentKBSection(ctx context.Context, section *store.AgentKBSection) (*store.AgentKBSection, error) {
-	return nil, errNotImplemented
+	stmt := `
+		INSERT INTO agent_kb_sections (tenant_id, audience_type, code, title, content, section_type, is_active)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id
+	`
+	if err := d.db.QueryRowContext(ctx, stmt,
+		section.TenantID, section.AudienceType, section.Code, section.Title,
+		section.Content, section.SectionType, section.IsActive,
+	).Scan(&section.ID); err != nil {
+		return nil, err
+	}
+	return section, nil
 }
 
 func (d *DB) ListAgentKBSections(ctx context.Context, find *store.FindAgentKBSection) ([]*store.AgentKBSection, error) {
-	return nil, errNotImplemented
+	where := []string{"TRUE"}
+	args := []any{}
+	add := func(clause string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(clause, len(args)))
+	}
+	if find.TenantID != nil {
+		add("tenant_id = $%d", *find.TenantID)
+	}
+	if find.AudienceType != nil {
+		add("audience_type = $%d", *find.AudienceType)
+	}
+	if find.SectionType != nil {
+		add("section_type = $%d", *find.SectionType)
+	}
+	if find.IsActive != nil {
+		add("is_active = $%d", *find.IsActive)
+	}
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT id, tenant_id, audience_type, code, title, content, section_type, is_active
+		FROM agent_kb_sections WHERE `+strings.Join(where, " AND "),
+		args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var sections []*store.AgentKBSection
+	for rows.Next() {
+		var s store.AgentKBSection
+		var sectionType sql.NullString
+		if err := rows.Scan(&s.ID, &s.TenantID, &s.AudienceType, &s.Code, &s.Title,
+			&s.Content, &sectionType, &s.IsActive); err != nil {
+			return nil, err
+		}
+		if sectionType.Valid {
+			s.SectionType = sectionType.String
+		}
+		sections = append(sections, &s)
+	}
+	return sections, rows.Err()
 }
 
 func (d *DB) DeleteAgentKBSections(ctx context.Context, tenantID int32, audienceType string) error {
-	return errNotImplemented
+	_, err := d.db.ExecContext(ctx, "DELETE FROM agent_kb_sections WHERE tenant_id = $1 AND audience_type = $2", tenantID, audienceType)
+	return err
 }
 
 // Agent Intent methods
 
 func (d *DB) CreateAgentIntent(ctx context.Context, intent *store.AgentIntent) (*store.AgentIntent, error) {
-	return nil, errNotImplemented
+	examplesJSON, _ := json.Marshal(intent.Examples)
+	counterExamplesJSON, _ := json.Marshal(intent.CounterExamples)
+
+	stmt := `
+		INSERT INTO agent_intents (
+			tenant_id, audience_type, code, name, category, description,
+			examples, counter_examples, urgency, action, confidence_threshold, is_active
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		RETURNING id
+	`
+	if err := d.db.QueryRowContext(ctx, stmt,
+		intent.TenantID, intent.AudienceType, intent.Code, intent.Name, intent.Category,
+		intent.Description, string(examplesJSON), string(counterExamplesJSON),
+		intent.Urgency, intent.Action, intent.ConfidenceThreshold, intent.IsActive,
+	).Scan(&intent.ID); err != nil {
+		return nil, err
+	}
+	return intent, nil
 }
 
 func (d *DB) ListAgentIntents(ctx context.Context, find *store.FindAgentIntent) ([]*store.AgentIntent, error) {
-	return nil, errNotImplemented
+	where := []string{"TRUE"}
+	args := []any{}
+	add := func(clause string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(clause, len(args)))
+	}
+	if find.TenantID != nil {
+		add("(tenant_id = $%d OR tenant_id IS NULL)", *find.TenantID)
+	}
+	if find.AudienceType != nil {
+		add("(audience_type = $%d OR audience_type IS NULL)", *find.AudienceType)
+	}
+	if find.Category != nil {
+		add("category = $%d", *find.Category)
+	}
+	if find.IsActive != nil {
+		add("is_active = $%d", *find.IsActive)
+	}
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT id, tenant_id, audience_type, code, name, category, description,
+			examples, counter_examples, urgency, action, confidence_threshold, is_active
+		FROM agent_intents WHERE `+strings.Join(where, " AND ")+`
+		ORDER BY urgency DESC, name
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var intents []*store.AgentIntent
+	for rows.Next() {
+		var i store.AgentIntent
+		var tenantID, urgency sql.NullInt32
+		var audienceType, examplesJSON, counterExamplesJSON sql.NullString
+		var confidenceThreshold sql.NullFloat64
+		if err := rows.Scan(&i.ID, &tenantID, &audienceType, &i.Code, &i.Name, &i.Category,
+			&i.Description, &examplesJSON, &counterExamplesJSON, &urgency, &i.Action,
+			&confidenceThreshold, &i.IsActive); err != nil {
+			return nil, err
+		}
+		if tenantID.Valid {
+			tid := tenantID.Int32
+			i.TenantID = &tid
+		}
+		if audienceType.Valid {
+			at := audienceType.String
+			i.AudienceType = &at
+		}
+		if examplesJSON.Valid {
+			json.Unmarshal([]byte(examplesJSON.String), &i.Examples)
+		}
+		if counterExamplesJSON.Valid {
+			json.Unmarshal([]byte(counterExamplesJSON.String), &i.CounterExamples)
+		}
+		if urgency.Valid {
+			i.Urgency = int(urgency.Int32)
+		}
+		if confidenceThreshold.Valid {
+			i.ConfidenceThreshold = confidenceThreshold.Float64
+		}
+		intents = append(intents, &i)
+	}
+	return intents, rows.Err()
 }
 
 func (d *DB) DeleteAgentIntents(ctx context.Context, tenantID int32, audienceType *string) error {
-	return errNotImplemented
+	if audienceType != nil {
+		_, err := d.db.ExecContext(ctx, "DELETE FROM agent_intents WHERE tenant_id = $1 AND audience_type = $2", tenantID, *audienceType)
+		return err
+	}
+	_, err := d.db.ExecContext(ctx, "DELETE FROM agent_intents WHERE tenant_id = $1", tenantID)
+	return err
 }
 
 // Agent Rule methods
 
 func (d *DB) CreateAgentRule(ctx context.Context, rule *store.AgentRule) (*store.AgentRule, error) {
-	return nil, errNotImplemented
+	stmt := `
+		INSERT INTO agent_rules (tenant_id, audience_type, code, name, description, priority, applies_to, is_active)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING id
+	`
+	if err := d.db.QueryRowContext(ctx, stmt,
+		rule.TenantID, rule.AudienceType, rule.Code, rule.Name,
+		rule.Description, rule.Priority, rule.AppliesTo, rule.IsActive,
+	).Scan(&rule.ID); err != nil {
+		return nil, err
+	}
+	return rule, nil
 }
 
 func (d *DB) ListAgentRules(ctx context.Context, find *store.FindAgentRule) ([]*store.AgentRule, error) {
-	return nil, errNotImplemented
+	where := []string{"TRUE"}
+	args := []any{}
+	add := func(clause string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(clause, len(args)))
+	}
+	if find.TenantID != nil {
+		add("tenant_id = $%d", *find.TenantID)
+	}
+	if find.AudienceType != nil {
+		add("audience_type = $%d", *find.AudienceType)
+	}
+	if find.IsActive != nil {
+		add("is_active = $%d", *find.IsActive)
+	}
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT id, tenant_id, audience_type, code, name, description, priority, applies_to, is_active
+		FROM agent_rules WHERE `+strings.Join(where, " AND ")+`
+		ORDER BY priority
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var rules []*store.AgentRule
+	for rows.Next() {
+		var r store.AgentRule
+		var appliesTo sql.NullString
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.AudienceType, &r.Code, &r.Name,
+			&r.Description, &r.Priority, &appliesTo, &r.IsActive); err != nil {
+			return nil, err
+		}
+		if appliesTo.Valid {
+			r.AppliesTo = appliesTo.String
+		}
+		rules = append(rules, &r)
+	}
+	return rules, rows.Err()
 }
 
 func (d *DB) DeleteAgentRules(ctx context.Context, tenantID int32, audienceType string) error {
-	return errNotImplemented
+	_, err := d.db.ExecContext(ctx, "DELETE FROM agent_rules WHERE tenant_id = $1 AND audience_type = $2", tenantID, audienceType)
+	return err
 }
 
 // Agent Message operations
@@ -390,183 +817,1311 @@ func (d *DB) GetUserMessageBySourceID(ctx context.Context, sessionID, sourceID s
 // Agent Session methods
 
 func (d *DB) CreateAgentSession(ctx context.Context, session *store.AgentSession) (*store.AgentSession, error) {
-	return nil, errNotImplemented
+	messagesJSON, _ := json.Marshal(session.Messages)
+
+	stmt := `
+		INSERT INTO agent_sessions (
+			id, tenant_id, user_id, audience_type, phase, current_intent,
+			urgency_level, coverage_status, customer_name, customer_phone,
+			customer_location, detected_service, message_count, messages,
+			created_at, updated_at, is_completed
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+	`
+	now := time.Now()
+	_, err := d.db.ExecContext(ctx, stmt,
+		session.ID, session.TenantID, session.UserID, session.AudienceType,
+		session.Phase, session.CurrentIntent, session.UrgencyLevel, session.CoverageStatus,
+		session.CustomerName, session.CustomerPhone, session.CustomerLocation,
+		session.DetectedService, session.MessageCount, string(messagesJSON),
+		now, now, session.IsCompleted,
+	)
+	if err != nil {
+		return nil, err
+	}
+	session.CreatedAt = now
+	session.UpdatedAt = now
+	return session, nil
 }
 
 func (d *DB) GetAgentSession(ctx context.Context, find *store.FindAgentSession) (*store.AgentSession, error) {
-	return nil, errNotImplemented
+	sessions, err := d.ListAgentSessions(ctx, find)
+	if err != nil {
+		return nil, err
+	}
+	if len(sessions) == 0 {
+		return nil, nil
+	}
+	return sessions[0], nil
 }
 
 func (d *DB) ListAgentSessions(ctx context.Context, find *store.FindAgentSession) ([]*store.AgentSession, error) {
-	return nil, errNotImplemented
+	where := []string{"TRUE"}
+	args := []any{}
+	add := func(clause string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(clause, len(args)))
+	}
+	if find.ID != nil {
+		add("id = $%d", *find.ID)
+	}
+	if find.TenantID != nil {
+		add("tenant_id = $%d", *find.TenantID)
+	}
+	if find.UserID != nil {
+		add("user_id = $%d", *find.UserID)
+	}
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT id, tenant_id, user_id, audience_type, phase, current_intent,
+			urgency_level, coverage_status, customer_name, customer_phone,
+			customer_location, detected_service, message_count, messages,
+			created_at, updated_at, completed_at, is_completed, completion_reason
+		FROM agent_sessions WHERE `+strings.Join(where, " AND ")+`
+		ORDER BY updated_at DESC
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var sessions []*store.AgentSession
+	for rows.Next() {
+		var s store.AgentSession
+		var userID sql.NullInt32
+		var currentIntent, coverageStatus, customerName, customerPhone, customerLocation, detectedService, completionReason sql.NullString
+		var completedAt sql.NullTime
+		var messagesJSON string
+		if err := rows.Scan(
+			&s.ID, &s.TenantID, &userID, &s.AudienceType, &s.Phase, &currentIntent,
+			&s.UrgencyLevel, &coverageStatus, &customerName, &customerPhone,
+			&customerLocation, &detectedService, &s.MessageCount, &messagesJSON,
+			&s.CreatedAt, &s.UpdatedAt, &completedAt, &s.IsCompleted, &completionReason,
+		); err != nil {
+			return nil, err
+		}
+		if userID.Valid {
+			uid := userID.Int32
+			s.UserID = &uid
+		}
+		if currentIntent.Valid {
+			s.CurrentIntent = currentIntent.String
+		}
+		if coverageStatus.Valid {
+			s.CoverageStatus = coverageStatus.String
+		}
+		if customerName.Valid {
+			s.CustomerName = customerName.String
+		}
+		if customerPhone.Valid {
+			s.CustomerPhone = customerPhone.String
+		}
+		if customerLocation.Valid {
+			s.CustomerLocation = customerLocation.String
+		}
+		if detectedService.Valid {
+			s.DetectedService = detectedService.String
+		}
+		if completedAt.Valid {
+			s.CompletedAt = &completedAt.Time
+		}
+		if completionReason.Valid {
+			s.CompletionReason = completionReason.String
+		}
+		json.Unmarshal([]byte(messagesJSON), &s.Messages)
+		sessions = append(sessions, &s)
+	}
+	return sessions, rows.Err()
 }
 
 func (d *DB) UpdateAgentSession(ctx context.Context, update *store.UpdateAgentSession) (*store.AgentSession, error) {
-	return nil, errNotImplemented
+	set, args := []string{}, []any{}
+	if update.Phase != nil {
+		set = append(set, fmt.Sprintf("phase = $%d", len(args)+1))
+		args = append(args, *update.Phase)
+	}
+	if update.CurrentIntent != nil {
+		set = append(set, fmt.Sprintf("current_intent = $%d", len(args)+1))
+		args = append(args, *update.CurrentIntent)
+	}
+	if update.UrgencyLevel != nil {
+		set = append(set, fmt.Sprintf("urgency_level = $%d", len(args)+1))
+		args = append(args, *update.UrgencyLevel)
+	}
+	if update.CoverageStatus != nil {
+		set = append(set, fmt.Sprintf("coverage_status = $%d", len(args)+1))
+		args = append(args, *update.CoverageStatus)
+	}
+	if update.CustomerName != nil {
+		set = append(set, fmt.Sprintf("customer_name = $%d", len(args)+1))
+		args = append(args, *update.CustomerName)
+	}
+	if update.CustomerPhone != nil {
+		set = append(set, fmt.Sprintf("customer_phone = $%d", len(args)+1))
+		args = append(args, *update.CustomerPhone)
+	}
+	if update.CustomerLocation != nil {
+		set = append(set, fmt.Sprintf("customer_location = $%d", len(args)+1))
+		args = append(args, *update.CustomerLocation)
+	}
+	if update.DetectedService != nil {
+		set = append(set, fmt.Sprintf("detected_service = $%d", len(args)+1))
+		args = append(args, *update.DetectedService)
+	}
+	if update.MessageCount != nil {
+		set = append(set, fmt.Sprintf("message_count = $%d", len(args)+1))
+		args = append(args, *update.MessageCount)
+	}
+	if update.Messages != nil {
+		messagesJSON, _ := json.Marshal(update.Messages)
+		set = append(set, fmt.Sprintf("messages = $%d", len(args)+1))
+		args = append(args, string(messagesJSON))
+	}
+	if update.CompletedAt != nil {
+		set = append(set, fmt.Sprintf("completed_at = $%d", len(args)+1))
+		args = append(args, *update.CompletedAt)
+	}
+	if update.IsCompleted != nil {
+		set = append(set, fmt.Sprintf("is_completed = $%d", len(args)+1))
+		args = append(args, *update.IsCompleted)
+	}
+	if update.CompletionReason != nil {
+		set = append(set, fmt.Sprintf("completion_reason = $%d", len(args)+1))
+		args = append(args, *update.CompletionReason)
+	}
+
+	now := time.Now()
+	set = append(set, fmt.Sprintf("updated_at = $%d", len(args)+1))
+	args = append(args, now)
+	args = append(args, update.ID)
+
+	stmt := fmt.Sprintf("UPDATE agent_sessions SET %s WHERE id = $%d", strings.Join(set, ", "), len(args))
+	_, err := d.db.ExecContext(ctx, stmt, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	return d.GetAgentSession(ctx, &store.FindAgentSession{ID: &update.ID})
 }
 
 func (d *DB) DeleteAgentSession(ctx context.Context, id string) error {
-	return errNotImplemented
+	_, err := d.db.ExecContext(ctx, "DELETE FROM agent_sessions WHERE id = $1", id)
+	return err
 }
 
 // Agent Source File methods
 
 func (d *DB) UpsertAgentSourceFile(ctx context.Context, file *store.AgentSourceFile) (*store.AgentSourceFile, error) {
-	return nil, errNotImplemented
+	var nextVersion int32 = 1
+	err := d.db.QueryRowContext(ctx, `
+		SELECT COALESCE(MAX(version), 0) + 1
+		FROM agent_source_files
+		WHERE tenant_id = $1 AND audience_type = $2 AND file_type = $3
+	`, file.TenantID, file.AudienceType, file.FileType).Scan(&nextVersion)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("failed to get next version: %w", err)
+	}
+
+	stmt := `
+		INSERT INTO agent_source_files (tenant_id, audience_type, file_type, content, content_hash, version, imported_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id
+	`
+	now := time.Now()
+	if err := d.db.QueryRowContext(ctx, stmt,
+		file.TenantID, file.AudienceType, file.FileType, file.Content, file.ContentHash, nextVersion, now,
+	).Scan(&file.ID); err != nil {
+		return nil, err
+	}
+	file.Version = nextVersion
+	file.ImportedAt = now
+	return file, nil
 }
 
 func (d *DB) GetAgentSourceFile(ctx context.Context, find *store.FindAgentSourceFile) (*store.AgentSourceFile, error) {
-	return nil, errNotImplemented
+	files, err := d.ListAgentSourceFiles(ctx, find)
+	if err != nil {
+		return nil, err
+	}
+	if len(files) == 0 {
+		return nil, nil
+	}
+	return files[0], nil
 }
 
 func (d *DB) ListAgentSourceFiles(ctx context.Context, find *store.FindAgentSourceFile) ([]*store.AgentSourceFile, error) {
-	return nil, errNotImplemented
+	where := []string{"TRUE"}
+	args := []any{}
+	add := func(clause string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(clause, len(args)))
+	}
+	if find.ID != nil {
+		add("id = $%d", *find.ID)
+	}
+	if find.TenantID != nil {
+		add("tenant_id = $%d", *find.TenantID)
+	}
+	if find.AudienceType != nil {
+		add("audience_type = $%d", *find.AudienceType)
+	}
+	if find.FileType != nil {
+		add("file_type = $%d", *find.FileType)
+	}
+	if find.Version != nil {
+		add("version = $%d", *find.Version)
+	}
+
+	whereClause := strings.Join(where, " AND ")
+	if find.LatestOnly {
+		query := fmt.Sprintf(`
+			SELECT id, tenant_id, audience_type, file_type, content, content_hash, COALESCE(version, 1), imported_at
+			FROM agent_source_files
+			WHERE %s
+			AND (tenant_id, audience_type, file_type, version) IN (
+				SELECT tenant_id, audience_type, file_type, MAX(version)
+				FROM agent_source_files
+				GROUP BY tenant_id, audience_type, file_type
+			)
+			ORDER BY imported_at DESC
+		`, whereClause)
+		rows, err := d.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		return scanAgentSourceFiles(rows)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, tenant_id, audience_type, file_type, content, content_hash, COALESCE(version, 1), imported_at
+		FROM agent_source_files
+		WHERE %s
+		ORDER BY version DESC, imported_at DESC
+	`, whereClause)
+	rows, err := d.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanAgentSourceFiles(rows)
+}
+
+func scanAgentSourceFiles(rows *sql.Rows) ([]*store.AgentSourceFile, error) {
+	var files []*store.AgentSourceFile
+	for rows.Next() {
+		var f store.AgentSourceFile
+		if err := rows.Scan(&f.ID, &f.TenantID, &f.AudienceType, &f.FileType,
+			&f.Content, &f.ContentHash, &f.Version, &f.ImportedAt); err != nil {
+			return nil, err
+		}
+		files = append(files, &f)
+	}
+	return files, rows.Err()
 }
 
 func (d *DB) DeleteAgentSourceFiles(ctx context.Context, tenantID int32, audienceType *string) error {
-	return errNotImplemented
+	if audienceType != nil {
+		_, err := d.db.ExecContext(ctx, "DELETE FROM agent_source_files WHERE tenant_id = $1 AND audience_type = $2", tenantID, *audienceType)
+		return err
+	}
+	_, err := d.db.ExecContext(ctx, "DELETE FROM agent_source_files WHERE tenant_id = $1", tenantID)
+	return err
 }
 
 // Agent Rate Limit methods
 
 func (d *DB) GetOrCreateAgentRateLimit(ctx context.Context, tenantID int32, audienceType, clientIP string) (*store.AgentRateLimit, error) {
-	return nil, errNotImplemented
+	var rl store.AgentRateLimit
+	err := d.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, audience_type, client_ip, request_count, window_start
+		FROM agent_rate_limits
+		WHERE tenant_id = $1 AND audience_type = $2 AND client_ip = $3
+	`, tenantID, audienceType, clientIP).Scan(
+		&rl.ID, &rl.TenantID, &rl.AudienceType, &rl.ClientIP, &rl.RequestCount, &rl.WindowStart,
+	)
+	if err == nil {
+		return &rl, nil
+	}
+	if err != sql.ErrNoRows {
+		return nil, err
+	}
+
+	now := time.Now()
+	err = d.db.QueryRowContext(ctx, `
+		INSERT INTO agent_rate_limits (tenant_id, audience_type, client_ip, request_count, window_start)
+		VALUES ($1, $2, $3, 0, $4)
+		RETURNING id
+	`, tenantID, audienceType, clientIP, now).Scan(&rl.ID)
+	if err != nil {
+		return nil, err
+	}
+	rl.TenantID = tenantID
+	rl.AudienceType = audienceType
+	rl.ClientIP = clientIP
+	rl.RequestCount = 0
+	rl.WindowStart = now
+	return &rl, nil
 }
 
 func (d *DB) IncrementAgentRateLimit(ctx context.Context, tenantID int32, audienceType, clientIP string) error {
-	return errNotImplemented
+	_, err := d.db.ExecContext(ctx, `
+		UPDATE agent_rate_limits
+		SET request_count = request_count + 1
+		WHERE tenant_id = $1 AND audience_type = $2 AND client_ip = $3
+	`, tenantID, audienceType, clientIP)
+	return err
 }
 
 func (d *DB) ResetAgentRateLimit(ctx context.Context, tenantID int32, audienceType, clientIP string) error {
-	return errNotImplemented
+	now := time.Now()
+	_, err := d.db.ExecContext(ctx, `
+		UPDATE agent_rate_limits
+		SET request_count = 0, window_start = $1
+		WHERE tenant_id = $2 AND audience_type = $3 AND client_ip = $4
+	`, now, tenantID, audienceType, clientIP)
+	return err
 }
 
 // Agent Simulation Transcript methods
 
 func (d *DB) CreateAgentSimulationTranscript(ctx context.Context, transcript *store.AgentSimulationTranscript) (*store.AgentSimulationTranscript, error) {
-	return nil, errNotImplemented
+	messagesJSON, _ := json.Marshal(transcript.Messages)
+
+	stmt := `
+		INSERT INTO agent_simulation_transcripts (
+			id, tenant_id, user_id, initial_prompt, persona_hint,
+			total_turns, end_reason, messages, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`
+	now := time.Now()
+	_, err := d.db.ExecContext(ctx, stmt,
+		transcript.ID, transcript.TenantID, transcript.UserID,
+		transcript.InitialPrompt, transcript.PersonaHint,
+		transcript.TotalTurns, transcript.EndReason, string(messagesJSON), now,
+	)
+	if err != nil {
+		return nil, err
+	}
+	transcript.CreatedAt = now
+	return transcript, nil
 }
 
 func (d *DB) GetAgentSimulationTranscript(ctx context.Context, find *store.FindAgentSimulationTranscript) (*store.AgentSimulationTranscript, error) {
-	return nil, errNotImplemented
+	transcripts, _, err := d.ListAgentSimulationTranscripts(ctx, find)
+	if err != nil {
+		return nil, err
+	}
+	if len(transcripts) == 0 {
+		return nil, nil
+	}
+	return transcripts[0], nil
 }
 
 func (d *DB) ListAgentSimulationTranscripts(ctx context.Context, find *store.FindAgentSimulationTranscript) ([]*store.AgentSimulationTranscript, int, error) {
-	return nil, 0, errNotImplemented
+	where := []string{"TRUE"}
+	args := []any{}
+	add := func(clause string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(clause, len(args)))
+	}
+	if find.ID != nil {
+		add("id = $%d", *find.ID)
+	}
+	if find.TenantID != nil {
+		add("tenant_id = $%d", *find.TenantID)
+	}
+	if find.UserID != nil {
+		add("user_id = $%d", *find.UserID)
+	}
+
+	countQuery := fmt.Sprintf(`
+		SELECT COUNT(*) FROM agent_simulation_transcripts WHERE %s
+	`, strings.Join(where, " AND "))
+
+	var total int
+	if err := d.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, tenant_id, user_id, initial_prompt, persona_hint,
+			total_turns, end_reason, messages, created_at
+		FROM agent_simulation_transcripts
+		WHERE %s
+		ORDER BY created_at DESC
+	`, strings.Join(where, " AND "))
+
+	limitPos := 0
+	if find.Limit > 0 {
+		limitPos = len(args) + 1
+		query += fmt.Sprintf(" LIMIT $%d", limitPos)
+		if find.Offset > 0 {
+			query += fmt.Sprintf(" OFFSET $%d", limitPos+1)
+		}
+	}
+
+	argsCopy := append([]any{}, args...)
+	if find.Limit > 0 {
+		argsCopy = append(argsCopy, find.Limit)
+		if find.Offset > 0 {
+			argsCopy = append(argsCopy, find.Offset)
+		}
+	}
+
+	rows, err := d.db.QueryContext(ctx, query, argsCopy...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var transcripts []*store.AgentSimulationTranscript
+	for rows.Next() {
+		var t store.AgentSimulationTranscript
+		var personaHint sql.NullString
+		var messagesJSON string
+		if err := rows.Scan(
+			&t.ID, &t.TenantID, &t.UserID, &t.InitialPrompt, &personaHint,
+			&t.TotalTurns, &t.EndReason, &messagesJSON, &t.CreatedAt,
+		); err != nil {
+			return nil, 0, err
+		}
+		if personaHint.Valid {
+			t.PersonaHint = personaHint.String
+		}
+		json.Unmarshal([]byte(messagesJSON), &t.Messages)
+		transcripts = append(transcripts, &t)
+	}
+	return transcripts, total, rows.Err()
 }
 
 func (d *DB) DeleteAgentSimulationTranscript(ctx context.Context, id string) error {
-	return errNotImplemented
+	_, err := d.db.ExecContext(ctx, "DELETE FROM agent_simulation_transcripts WHERE id = $1", id)
+	return err
 }
 
 // Agent Tenant Script methods
 
 func (d *DB) UpsertAgentTenantScript(ctx context.Context, script *store.AgentTenantScript) (*store.AgentTenantScript, error) {
-	return nil, errNotImplemented
+	var existingID int32
+	err := d.db.QueryRowContext(ctx, "SELECT id FROM agent_tenant_scripts WHERE tenant_id = $1", script.TenantID).Scan(&existingID)
+
+	now := time.Now()
+	if err == sql.ErrNoRows {
+		stmt := `
+			INSERT INTO agent_tenant_scripts (tenant_id, content, content_hash, summary, imported_at, version)
+			VALUES ($1, $2, $3, $4, $5, 1)
+			RETURNING id
+		`
+		if err := d.db.QueryRowContext(ctx, stmt,
+			script.TenantID, script.Content, script.ContentHash, script.Summary, now,
+		).Scan(&script.ID); err != nil {
+			return nil, err
+		}
+		script.Version = 1
+	} else if err != nil {
+		return nil, err
+	} else {
+		stmt := `
+			UPDATE agent_tenant_scripts
+			SET content = $1, content_hash = $2, summary = $3, imported_at = $4, version = version + 1
+			WHERE tenant_id = $5
+			RETURNING id, version
+		`
+		if err := d.db.QueryRowContext(ctx, stmt,
+			script.Content, script.ContentHash, script.Summary, now, script.TenantID,
+		).Scan(&script.ID, &script.Version); err != nil {
+			return nil, err
+		}
+	}
+	script.ImportedAt = now
+	return script, nil
 }
 
 func (d *DB) GetAgentTenantScript(ctx context.Context, find *store.FindAgentTenantScript) (*store.AgentTenantScript, error) {
-	return nil, errNotImplemented
+	where := []string{"TRUE"}
+	args := []any{}
+	add := func(clause string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(clause, len(args)))
+	}
+	if find.ID != nil {
+		add("id = $%d", *find.ID)
+	}
+	if find.TenantID != nil {
+		add("tenant_id = $%d", *find.TenantID)
+	}
+
+	var s store.AgentTenantScript
+	var summary sql.NullString
+	err := d.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, content, content_hash, summary, imported_at, version
+		FROM agent_tenant_scripts WHERE `+strings.Join(where, " AND "),
+		args...).Scan(
+		&s.ID, &s.TenantID, &s.Content, &s.ContentHash, &summary, &s.ImportedAt, &s.Version,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if summary.Valid {
+		s.Summary = summary.String
+	}
+	return &s, nil
 }
 
 func (d *DB) DeleteAgentTenantScript(ctx context.Context, tenantID int32) error {
-	return errNotImplemented
+	_, err := d.db.ExecContext(ctx, "DELETE FROM agent_tenant_scripts WHERE tenant_id = $1", tenantID)
+	return err
 }
 
 // Agent Analysis Result methods
 
 func (d *DB) CreateAgentAnalysisResult(ctx context.Context, result *store.AgentAnalysisResult) (*store.AgentAnalysisResult, error) {
-	return nil, errNotImplemented
+	breakdownJSON, _ := json.Marshal(result.Breakdown)
+	issuesJSON, _ := json.Marshal(result.Issues)
+	suggestionsJSON, _ := json.Marshal(result.Suggestions)
+
+	stmt := `
+		INSERT INTO agent_analysis_results (
+			id, tenant_id, conversation_id, conversation_type, user_id,
+			score, grade, breakdown, issues, suggestions, benchmark_version, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+	`
+	now := time.Now()
+	_, err := d.db.ExecContext(ctx, stmt,
+		result.ID, result.TenantID, result.ConversationID, result.ConversationType, result.UserID,
+		result.Score, result.Grade, string(breakdownJSON), string(issuesJSON),
+		string(suggestionsJSON), result.BenchmarkVersion, now,
+	)
+	if err != nil {
+		return nil, err
+	}
+	result.CreatedAt = now
+	return result, nil
 }
 
 func (d *DB) GetAgentAnalysisResult(ctx context.Context, find *store.FindAgentAnalysisResult) (*store.AgentAnalysisResult, error) {
-	return nil, errNotImplemented
+	results, _, err := d.ListAgentAnalysisResults(ctx, find)
+	if err != nil {
+		return nil, err
+	}
+	if len(results) == 0 {
+		return nil, nil
+	}
+	return results[0], nil
 }
 
 func (d *DB) ListAgentAnalysisResults(ctx context.Context, find *store.FindAgentAnalysisResult) ([]*store.AgentAnalysisResult, int, error) {
-	return nil, 0, errNotImplemented
+	where := []string{"TRUE"}
+	args := []any{}
+	add := func(clause string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(clause, len(args)))
+	}
+	if find.ID != nil {
+		add("id = $%d", *find.ID)
+	}
+	if find.TenantID != nil {
+		add("tenant_id = $%d", *find.TenantID)
+	}
+	if find.ConversationID != nil {
+		add("conversation_id = $%d", *find.ConversationID)
+	}
+	if find.UserID != nil {
+		add("user_id = $%d", *find.UserID)
+	}
+
+	countQuery := fmt.Sprintf(`
+		SELECT COUNT(*) FROM agent_analysis_results WHERE %s
+	`, strings.Join(where, " AND "))
+
+	var total int
+	if err := d.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, tenant_id, conversation_id, conversation_type, user_id,
+			score, grade, breakdown, issues, suggestions, benchmark_version, created_at
+		FROM agent_analysis_results
+		WHERE %s
+		ORDER BY created_at DESC
+	`, strings.Join(where, " AND "))
+
+	if find.Limit > 0 {
+		limitPos := len(args) + 1
+		query += fmt.Sprintf(" LIMIT $%d", limitPos)
+		if find.Offset > 0 {
+			query += fmt.Sprintf(" OFFSET $%d", limitPos+1)
+		}
+	}
+
+	argsCopy := append([]any{}, args...)
+	if find.Limit > 0 {
+		argsCopy = append(argsCopy, find.Limit)
+		if find.Offset > 0 {
+			argsCopy = append(argsCopy, find.Offset)
+		}
+	}
+
+	rows, err := d.db.QueryContext(ctx, query, argsCopy...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var results []*store.AgentAnalysisResult
+	for rows.Next() {
+		var r store.AgentAnalysisResult
+		var breakdownJSON, issuesJSON, suggestionsJSON string
+		var benchmarkVersion sql.NullString
+		if err := rows.Scan(
+			&r.ID, &r.TenantID, &r.ConversationID, &r.ConversationType, &r.UserID,
+			&r.Score, &r.Grade, &breakdownJSON, &issuesJSON, &suggestionsJSON,
+			&benchmarkVersion, &r.CreatedAt,
+		); err != nil {
+			return nil, 0, err
+		}
+		json.Unmarshal([]byte(breakdownJSON), &r.Breakdown)
+		json.Unmarshal([]byte(issuesJSON), &r.Issues)
+		json.Unmarshal([]byte(suggestionsJSON), &r.Suggestions)
+		if benchmarkVersion.Valid {
+			r.BenchmarkVersion = benchmarkVersion.String
+		}
+		results = append(results, &r)
+	}
+	return results, total, rows.Err()
 }
 
 // Agent Learning Memory methods
 
 func (d *DB) GetOrCreateAgentLearningMemory(ctx context.Context, tenantID int32) (*store.AgentLearningMemory, error) {
-	return nil, errNotImplemented
+	query := `
+		SELECT id, tenant_id, common_issues, learned_behaviors, improvement_areas,
+			pending_suggestions, analysis_count, last_updated, version
+		FROM agent_learning_memory
+		WHERE tenant_id = $1
+	`
+	var m store.AgentLearningMemory
+	var commonIssuesJSON, learnedBehaviorsJSON, improvementAreasJSON, pendingSuggestionsJSON string
+	err := d.db.QueryRowContext(ctx, query, tenantID).Scan(
+		&m.ID, &m.TenantID, &commonIssuesJSON, &learnedBehaviorsJSON,
+		&improvementAreasJSON, &pendingSuggestionsJSON, &m.AnalysisCount,
+		&m.LastUpdated, &m.Version,
+	)
+	if err == nil {
+		json.Unmarshal([]byte(commonIssuesJSON), &m.CommonIssues)
+		json.Unmarshal([]byte(learnedBehaviorsJSON), &m.LearnedBehaviors)
+		json.Unmarshal([]byte(improvementAreasJSON), &m.ImprovementAreas)
+		json.Unmarshal([]byte(pendingSuggestionsJSON), &m.PendingSuggestions)
+		if m.CommonIssues == nil {
+			m.CommonIssues = []store.CommonIssue{}
+		}
+		if m.LearnedBehaviors == nil {
+			m.LearnedBehaviors = []store.LearnedBehavior{}
+		}
+		if m.ImprovementAreas == nil {
+			m.ImprovementAreas = []store.ImprovementArea{}
+		}
+		if m.PendingSuggestions == nil {
+			m.PendingSuggestions = []store.PendingSuggestion{}
+		}
+		return &m, nil
+	}
+	if err != sql.ErrNoRows {
+		return nil, err
+	}
+
+	stmt := `
+		INSERT INTO agent_learning_memory (
+			tenant_id, common_issues, learned_behaviors, improvement_areas,
+			pending_suggestions, analysis_count, last_updated, version
+		) VALUES ($1, '[]', '[]', '[]', '[]', 0, $2, 1)
+	`
+	now := time.Now()
+	result, err := d.db.ExecContext(ctx, stmt, tenantID, now)
+	if err != nil {
+		return nil, err
+	}
+	id, _ := result.LastInsertId()
+	return &store.AgentLearningMemory{
+		ID:                 int32(id),
+		TenantID:           tenantID,
+		CommonIssues:       []store.CommonIssue{},
+		LearnedBehaviors:   []store.LearnedBehavior{},
+		ImprovementAreas:   []store.ImprovementArea{},
+		PendingSuggestions: []store.PendingSuggestion{},
+		AnalysisCount:      0,
+		LastUpdated:        now,
+		Version:            1,
+	}, nil
 }
 
 func (d *DB) UpdateAgentLearningMemory(ctx context.Context, memory *store.AgentLearningMemory) (*store.AgentLearningMemory, error) {
-	return nil, errNotImplemented
+	commonIssuesJSON, _ := json.Marshal(memory.CommonIssues)
+	learnedBehaviorsJSON, _ := json.Marshal(memory.LearnedBehaviors)
+	improvementAreasJSON, _ := json.Marshal(memory.ImprovementAreas)
+	pendingSuggestionsJSON, _ := json.Marshal(memory.PendingSuggestions)
+
+	stmt := `
+		UPDATE agent_learning_memory SET
+			common_issues = $1,
+			learned_behaviors = $2,
+			improvement_areas = $3,
+			pending_suggestions = $4,
+			analysis_count = $5,
+			last_updated = $6,
+			version = version + 1
+		WHERE tenant_id = $7
+	`
+	now := time.Now()
+	_, err := d.db.ExecContext(ctx, stmt,
+		string(commonIssuesJSON), string(learnedBehaviorsJSON),
+		string(improvementAreasJSON), string(pendingSuggestionsJSON),
+		memory.AnalysisCount, now, memory.TenantID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	memory.LastUpdated = now
+	memory.Version++
+	return memory, nil
 }
 
 func (d *DB) DeleteAgentLearningMemory(ctx context.Context, tenantID int32) error {
-	return errNotImplemented
+	_, err := d.db.ExecContext(ctx, "DELETE FROM agent_learning_memory WHERE tenant_id = $1", tenantID)
+	return err
 }
 
 // Agent Compliance Audit methods
 
 func (d *DB) CreateAgentComplianceAudit(ctx context.Context, audit *store.AgentComplianceAudit) error {
-	return errNotImplemented
+	stmt := `
+		INSERT INTO agent_compliance_audits (
+			id, tenant_id, conversation_id, conversation_type,
+			score, checks, overall_passed, audited_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`
+	_, err := d.db.ExecContext(ctx, stmt,
+		audit.ID, audit.TenantID, audit.ConversationID, audit.ConversationType,
+		audit.Score, audit.Checks, audit.OverallPassed, audit.AuditedAt,
+	)
+	return err
 }
 
 func (d *DB) GetAgentComplianceAudit(ctx context.Context, find *store.FindAgentComplianceAudit) (*store.AgentComplianceAudit, error) {
-	return nil, errNotImplemented
+	where := []string{"TRUE"}
+	args := []any{}
+	if find.ID != nil {
+		args = append(args, *find.ID)
+		where = append(where, fmt.Sprintf("id = $%d", len(args)))
+	}
+	if find.TenantID != nil {
+		args = append(args, *find.TenantID)
+		where = append(where, fmt.Sprintf("tenant_id = $%d", len(args)))
+	}
+	if find.ConversationID != nil {
+		args = append(args, *find.ConversationID)
+		where = append(where, fmt.Sprintf("conversation_id = $%d", len(args)))
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, tenant_id, conversation_id, conversation_type,
+			   score, checks, overall_passed, audited_at
+		FROM agent_compliance_audits
+		WHERE %s
+		ORDER BY audited_at DESC
+		LIMIT 1
+	`, strings.Join(where, " AND "))
+
+	audit := &store.AgentComplianceAudit{}
+	err := d.db.QueryRowContext(ctx, query, args...).Scan(
+		&audit.ID, &audit.TenantID, &audit.ConversationID, &audit.ConversationType,
+		&audit.Score, &audit.Checks, &audit.OverallPassed, &audit.AuditedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return audit, nil
 }
 
 func (d *DB) ListAgentComplianceAudits(ctx context.Context, find *store.FindAgentComplianceAudit) ([]*store.AgentComplianceAudit, error) {
-	return nil, errNotImplemented
+	where := []string{"TRUE"}
+	args := []any{}
+	if find.TenantID != nil {
+		args = append(args, *find.TenantID)
+		where = append(where, fmt.Sprintf("tenant_id = $%d", len(args)))
+	}
+	if find.ConversationType != nil {
+		args = append(args, *find.ConversationType)
+		where = append(where, fmt.Sprintf("conversation_type = $%d", len(args)))
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, tenant_id, conversation_id, conversation_type,
+			   score, checks, overall_passed, audited_at
+		FROM agent_compliance_audits
+		WHERE %s
+		ORDER BY audited_at DESC
+	`, strings.Join(where, " AND "))
+
+	if find.Limit != nil && *find.Limit > 0 {
+		limitPos := len(args) + 1
+		query += fmt.Sprintf(" LIMIT $%d", limitPos)
+		args = append(args, *find.Limit)
+		if find.Offset != nil && *find.Offset > 0 {
+			query += fmt.Sprintf(" OFFSET $%d", limitPos+1)
+			args = append(args, *find.Offset)
+		}
+	}
+
+	rows, err := d.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var audits []*store.AgentComplianceAudit
+	for rows.Next() {
+		audit := &store.AgentComplianceAudit{}
+		if err := rows.Scan(
+			&audit.ID, &audit.TenantID, &audit.ConversationID, &audit.ConversationType,
+			&audit.Score, &audit.Checks, &audit.OverallPassed, &audit.AuditedAt,
+		); err != nil {
+			return nil, err
+		}
+		audits = append(audits, audit)
+	}
+	return audits, nil
 }
 
 // Agent Scoring Config methods
 
 func (d *DB) GetOrCreateAgentScoringConfig(ctx context.Context, tenantID int32) (*store.AgentScoringConfig, error) {
-	return nil, errNotImplemented
+	query := `
+		SELECT id, tenant_id, version, config, created_at, updated_at
+		FROM agent_scoring_config
+		WHERE tenant_id = $1
+	`
+	config := &store.AgentScoringConfig{}
+	err := d.db.QueryRowContext(ctx, query, tenantID).Scan(
+		&config.ID, &config.TenantID, &config.Version, &config.Config,
+		&config.CreatedAt, &config.UpdatedAt,
+	)
+	if err == nil {
+		return config, nil
+	}
+	if err != sql.ErrNoRows {
+		return nil, err
+	}
+
+	defaultConfig := `{
+		"version": "1.0",
+		"thresholds": {
+			"high_urgency": 75,
+			"medium_urgency": 40,
+			"low_urgency": 0
+		},
+		"categories": [
+			{"name": "urgency", "weight": 25},
+			{"name": "safety_risk", "weight": 20},
+			{"name": "service_match", "weight": 20},
+			{"name": "escalation_signal", "weight": 15},
+			{"name": "lead_quality", "weight": 10},
+			{"name": "sentiment", "weight": 10}
+		]
+	}`
+
+	now := time.Now()
+	stmt := `
+		INSERT INTO agent_scoring_config (tenant_id, version, config, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5)
+	`
+	result, err := d.db.ExecContext(ctx, stmt, tenantID, "1.0", defaultConfig, now, now)
+	if err != nil {
+		return nil, err
+	}
+
+	id, _ := result.LastInsertId()
+	return &store.AgentScoringConfig{
+		ID:        int32(id),
+		TenantID:  tenantID,
+		Version:   "1.0",
+		Config:    defaultConfig,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}, nil
 }
 
 func (d *DB) UpdateAgentScoringConfig(ctx context.Context, config *store.AgentScoringConfig) (*store.AgentScoringConfig, error) {
-	return nil, errNotImplemented
+	now := time.Now()
+	stmt := `
+		UPDATE agent_scoring_config SET
+			version = $1,
+			config = $2,
+			updated_at = $3
+		WHERE tenant_id = $4
+	`
+	_, err := d.db.ExecContext(ctx, stmt, config.Version, config.Config, now, config.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	config.UpdatedAt = now
+	return config, nil
 }
 
 // Agent Q&A Pair methods
 
 func (d *DB) CreateAgentQAPair(ctx context.Context, pair *store.AgentQAPair) (*store.AgentQAPair, error) {
-	return nil, errNotImplemented
+	now := time.Now()
+	stmt := `
+		INSERT INTO agent_qa_pairs (
+			tenant_id, question, expected_answer, source_section, source_chunk_id,
+			difficulty, category, is_active, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	`
+	result, err := d.db.ExecContext(ctx, stmt,
+		pair.TenantID, pair.Question, pair.ExpectedAnswer, pair.SourceSection, pair.SourceChunkID,
+		pair.Difficulty, pair.Category, pair.IsActive, now, now,
+	)
+	if err != nil {
+		return nil, err
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	pair.ID = int32(id)
+	pair.CreatedAt = now
+	pair.UpdatedAt = now
+	return pair, nil
 }
 
 func (d *DB) ListAgentQAPairs(ctx context.Context, find *store.FindAgentQAPair) ([]*store.AgentQAPair, error) {
-	return nil, errNotImplemented
+	where := []string{"TRUE"}
+	args := []any{}
+	add := func(clause string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(clause, len(args)))
+	}
+	if find.ID != nil {
+		add("id = $%d", *find.ID)
+	}
+	if find.TenantID != nil {
+		add("tenant_id = $%d", *find.TenantID)
+	}
+	if find.Category != nil {
+		add("category = $%d", *find.Category)
+	}
+	if find.IsActive != nil {
+		add("is_active = $%d", *find.IsActive)
+	}
+
+	query := `
+		SELECT id, tenant_id, question, expected_answer, source_section, source_chunk_id,
+			difficulty, category, is_active, created_at, updated_at
+		FROM agent_qa_pairs
+		WHERE ` + strings.Join(where, " AND ") + `
+		ORDER BY id ASC
+	`
+
+	rows, err := d.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var pairs []*store.AgentQAPair
+	for rows.Next() {
+		pair := &store.AgentQAPair{}
+		var sourceSection, sourceChunkID, difficulty, category sql.NullString
+		if err := rows.Scan(
+			&pair.ID, &pair.TenantID, &pair.Question, &pair.ExpectedAnswer,
+			&sourceSection, &sourceChunkID, &difficulty, &category,
+			&pair.IsActive, &pair.CreatedAt, &pair.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		pair.SourceSection = sourceSection.String
+		pair.SourceChunkID = sourceChunkID.String
+		pair.Difficulty = difficulty.String
+		pair.Category = category.String
+		pairs = append(pairs, pair)
+	}
+	return pairs, nil
 }
 
 func (d *DB) UpdateAgentQAPair(ctx context.Context, pair *store.AgentQAPair, tenantID int32) (*store.AgentQAPair, error) {
-	return nil, errNotImplemented
+	now := time.Now()
+	stmt := `
+		UPDATE agent_qa_pairs SET
+			question = $1,
+			expected_answer = $2,
+			source_section = $3,
+			source_chunk_id = $4,
+			difficulty = $5,
+			category = $6,
+			is_active = $7,
+			updated_at = $8
+		WHERE id = $9 AND tenant_id = $10
+	`
+	result, err := d.db.ExecContext(ctx, stmt,
+		pair.Question, pair.ExpectedAnswer, pair.SourceSection, pair.SourceChunkID,
+		pair.Difficulty, pair.Category, pair.IsActive, now, pair.ID, tenantID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return nil, fmt.Errorf("QA pair not found or not owned by tenant")
+	}
+	pair.UpdatedAt = now
+	return pair, nil
 }
 
 func (d *DB) DeleteAgentQAPair(ctx context.Context, id int32, tenantID int32) error {
-	return errNotImplemented
+	result, err := d.db.ExecContext(ctx, "DELETE FROM agent_qa_pairs WHERE id = $1 AND tenant_id = $2", id, tenantID)
+	if err != nil {
+		return err
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("QA pair not found or not owned by tenant")
+	}
+	return nil
 }
 
 func (d *DB) DeleteAgentQAPairsByTenant(ctx context.Context, tenantID int32) error {
-	return errNotImplemented
+	_, err := d.db.ExecContext(ctx, "DELETE FROM agent_qa_pairs WHERE tenant_id = $1", tenantID)
+	return err
 }
 
 // Agent Transcript methods
 
 func (d *DB) CreateAgentTranscript(ctx context.Context, transcript *store.AgentTranscript) (*store.AgentTranscript, error) {
-	return nil, errNotImplemented
+	messagesJSON, err := json.Marshal(transcript.Messages)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal messages: %w", err)
+	}
+
+	now := time.Now()
+	if transcript.StartedAt.IsZero() {
+		transcript.StartedAt = now
+	}
+	transcript.LastMessageAt = now
+
+	stmt := `
+		INSERT INTO agent_transcripts (
+			id, tenant_id, session_id, audience_type, messages, message_count,
+			client_ip, user_agent, customer_name, customer_phone, customer_email,
+			customer_location, detected_intent, started_at, last_message_at,
+			is_completed, completion_reason
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+	`
+	_, err = d.db.ExecContext(ctx, stmt,
+		transcript.ID, transcript.TenantID, transcript.SessionID, transcript.AudienceType,
+		string(messagesJSON), transcript.MessageCount,
+		transcript.ClientIP, transcript.UserAgent,
+		transcript.CustomerName, transcript.CustomerPhone, transcript.CustomerEmail,
+		transcript.CustomerLocation, transcript.DetectedIntent,
+		transcript.StartedAt, transcript.LastMessageAt,
+		transcript.IsCompleted, transcript.CompletionReason,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create transcript: %w", err)
+	}
+
+	return transcript, nil
 }
 
 func (d *DB) GetAgentTranscript(ctx context.Context, find *store.FindAgentTranscript) (*store.AgentTranscript, error) {
-	return nil, errNotImplemented
+	where := []string{"TRUE"}
+	args := []any{}
+	if find.ID != nil {
+		args = append(args, *find.ID)
+		where = append(where, fmt.Sprintf("id = $%d", len(args)))
+	}
+	if find.TenantID != nil {
+		args = append(args, *find.TenantID)
+		where = append(where, fmt.Sprintf("tenant_id = $%d", len(args)))
+	}
+	if find.SessionID != nil {
+		args = append(args, *find.SessionID)
+		where = append(where, fmt.Sprintf("session_id = $%d", len(args)))
+	}
+
+	row := d.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, session_id, audience_type, messages, message_count,
+			client_ip, user_agent, customer_name, customer_phone, customer_email,
+			customer_location, detected_intent, started_at, ended_at, last_message_at,
+			is_completed, completion_reason
+		FROM agent_transcripts
+		WHERE `+strings.Join(where, " AND ")+`
+		LIMIT 1
+	`, args...)
+
+	var t store.AgentTranscript
+	var messagesJSON string
+	var clientIP, userAgent, customerName, customerPhone, customerEmail sql.NullString
+	var customerLocation, detectedIntent, completionReason sql.NullString
+	var endedAt sql.NullTime
+
+	err := row.Scan(
+		&t.ID, &t.TenantID, &t.SessionID, &t.AudienceType, &messagesJSON, &t.MessageCount,
+		&clientIP, &userAgent, &customerName, &customerPhone, &customerEmail,
+		&customerLocation, &detectedIntent, &t.StartedAt, &endedAt, &t.LastMessageAt,
+		&t.IsCompleted, &completionReason,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan transcript: %w", err)
+	}
+
+	if err := json.Unmarshal([]byte(messagesJSON), &t.Messages); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal messages: %w", err)
+	}
+
+	t.ClientIP = clientIP.String
+	t.UserAgent = userAgent.String
+	t.CustomerName = customerName.String
+	t.CustomerPhone = customerPhone.String
+	t.CustomerEmail = customerEmail.String
+	t.CustomerLocation = customerLocation.String
+	t.DetectedIntent = detectedIntent.String
+	t.CompletionReason = completionReason.String
+	if endedAt.Valid {
+		t.EndedAt = &endedAt.Time
+	}
+
+	return &t, nil
 }
 
 func (d *DB) ListAgentTranscripts(ctx context.Context, find *store.FindAgentTranscript) ([]*store.AgentTranscript, error) {
-	return nil, errNotImplemented
+	where := []string{"TRUE"}
+	args := []any{}
+	if find.TenantID != nil {
+		args = append(args, *find.TenantID)
+		where = append(where, fmt.Sprintf("tenant_id = $%d", len(args)))
+	}
+	if find.AudienceType != nil {
+		args = append(args, *find.AudienceType)
+		where = append(where, fmt.Sprintf("audience_type = $%d", len(args)))
+	}
+
+	limit := 100
+	if find.Limit > 0 {
+		limit = find.Limit
+	}
+
+	limitPos := len(args) + 1
+	offsetPos := limitPos + 1
+
+	query := fmt.Sprintf(`
+		SELECT id, tenant_id, session_id, audience_type, messages, message_count,
+			client_ip, user_agent, customer_name, customer_phone, customer_email,
+			customer_location, detected_intent, started_at, ended_at, last_message_at,
+			is_completed, completion_reason
+		FROM agent_transcripts
+		WHERE %s
+		ORDER BY started_at DESC
+		LIMIT $%d OFFSET $%d
+	`, strings.Join(where, " AND "), limitPos, offsetPos)
+
+	args = append(args, limit, find.Offset)
+
+	rows, err := d.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list transcripts: %w", err)
+	}
+	defer rows.Close()
+
+	var transcripts []*store.AgentTranscript
+	for rows.Next() {
+		var t store.AgentTranscript
+		var messagesJSON string
+		var clientIP, userAgent, customerName, customerPhone, customerEmail sql.NullString
+		var customerLocation, detectedIntent, completionReason sql.NullString
+		var endedAt sql.NullTime
+
+		err := rows.Scan(
+			&t.ID, &t.TenantID, &t.SessionID, &t.AudienceType, &messagesJSON, &t.MessageCount,
+			&clientIP, &userAgent, &customerName, &customerPhone, &customerEmail,
+			&customerLocation, &detectedIntent, &t.StartedAt, &endedAt, &t.LastMessageAt,
+			&t.IsCompleted, &completionReason,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan transcript: %w", err)
+		}
+
+		if err := json.Unmarshal([]byte(messagesJSON), &t.Messages); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal messages: %w", err)
+		}
+
+		t.ClientIP = clientIP.String
+		t.UserAgent = userAgent.String
+		t.CustomerName = customerName.String
+		t.CustomerPhone = customerPhone.String
+		t.CustomerEmail = customerEmail.String
+		t.CustomerLocation = customerLocation.String
+		t.DetectedIntent = detectedIntent.String
+		t.CompletionReason = completionReason.String
+		if endedAt.Valid {
+			t.EndedAt = &endedAt.Time
+		}
+
+		transcripts = append(transcripts, &t)
+	}
+
+	return transcripts, nil
 }
 
 func (d *DB) UpdateAgentTranscript(ctx context.Context, transcript *store.AgentTranscript) error {
-	return errNotImplemented
+	messagesJSON, err := json.Marshal(transcript.Messages)
+	if err != nil {
+		return fmt.Errorf("failed to marshal messages: %w", err)
+	}
+
+	transcript.LastMessageAt = time.Now()
+
+	stmt := `
+		UPDATE agent_transcripts SET
+			messages = $1,
+			message_count = $2,
+			customer_name = $3,
+			customer_phone = $4,
+			customer_email = $5,
+			customer_location = $6,
+			detected_intent = $7,
+			last_message_at = $8,
+			ended_at = $9,
+			is_completed = $10,
+			completion_reason = $11
+		WHERE id = $12
+	`
+	_, err = d.db.ExecContext(ctx, stmt,
+		string(messagesJSON), transcript.MessageCount,
+		transcript.CustomerName, transcript.CustomerPhone, transcript.CustomerEmail,
+		transcript.CustomerLocation, transcript.DetectedIntent,
+		transcript.LastMessageAt, transcript.EndedAt,
+		transcript.IsCompleted, transcript.CompletionReason,
+		transcript.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update transcript: %w", err)
+	}
+
+	return nil
 }
 
 func (d *DB) DeleteAgentTranscript(ctx context.Context, id string) error {
-	return errNotImplemented
+	_, err := d.db.ExecContext(ctx, "DELETE FROM agent_transcripts WHERE id = $1", id)
+	return err
 }
 
 func (d *DB) UpsertAgentLead(ctx context.Context, lead *store.AgentLead) (*store.AgentLead, error) {
@@ -714,17 +2269,115 @@ func scanAgentLead(scanner agentLeadScanner) (*store.AgentLead, error) {
 // Reindex Checkpoint methods
 
 func (d *DB) UpsertReindexCheckpoint(ctx context.Context, checkpoint *store.ReindexCheckpoint) (*store.ReindexCheckpoint, error) {
-	return nil, errNotImplemented
+	now := time.Now()
+	checkpoint.UpdatedAt = now
+
+	if checkpoint.Status == "completed" && checkpoint.CompletedAt == nil {
+		checkpoint.CompletedAt = &now
+	}
+
+	stmt := `
+		INSERT INTO agent_reindex_checkpoints (
+			tenant_id, audience, total_chunks, processed_chunks, current_batch,
+			total_batches, batch_size, status, error_message, last_message, error_batch,
+			started_at, updated_at, completed_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		ON CONFLICT(tenant_id, audience) DO UPDATE SET
+			total_chunks = excluded.total_chunks,
+			processed_chunks = excluded.processed_chunks,
+			current_batch = excluded.current_batch,
+			total_batches = excluded.total_batches,
+			batch_size = excluded.batch_size,
+			status = excluded.status,
+			error_message = excluded.error_message,
+			last_message = excluded.last_message,
+			error_batch = excluded.error_batch,
+			updated_at = excluded.updated_at,
+			completed_at = excluded.completed_at
+	`
+
+	result, err := d.db.ExecContext(ctx, stmt,
+		checkpoint.TenantID, checkpoint.Audience, checkpoint.TotalChunks,
+		checkpoint.ProcessedChunks, checkpoint.CurrentBatch, checkpoint.TotalBatches,
+		checkpoint.BatchSize, checkpoint.Status, checkpoint.ErrorMessage,
+		checkpoint.LastMessage, checkpoint.ErrorBatch, checkpoint.StartedAt,
+		checkpoint.UpdatedAt, checkpoint.CompletedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to upsert reindex checkpoint: %w", err)
+	}
+
+	if checkpoint.ID == 0 {
+		id, err := result.LastInsertId()
+		if err == nil {
+			checkpoint.ID = int32(id)
+		}
+	}
+
+	return checkpoint, nil
 }
 
 func (d *DB) GetReindexCheckpoint(ctx context.Context, find *store.FindReindexCheckpoint) (*store.ReindexCheckpoint, error) {
-	return nil, errNotImplemented
+	where := []string{"TRUE"}
+	args := []any{}
+	if find.TenantID != nil {
+		args = append(args, *find.TenantID)
+		where = append(where, fmt.Sprintf("tenant_id = $%d", len(args)))
+	}
+	if find.Audience != nil {
+		args = append(args, *find.Audience)
+		where = append(where, fmt.Sprintf("audience = $%d", len(args)))
+	}
+	if find.Status != nil {
+		args = append(args, *find.Status)
+		where = append(where, fmt.Sprintf("status = $%d", len(args)))
+	}
+
+	var c store.ReindexCheckpoint
+	var errorMessage, errorBatch sql.NullString
+	var completedAt sql.NullTime
+
+	err := d.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, audience, total_chunks, processed_chunks, current_batch,
+			total_batches, batch_size, status, error_message, last_message, error_batch,
+			started_at, updated_at, completed_at
+		FROM agent_reindex_checkpoints
+		WHERE `+strings.Join(where, " AND ")+`
+		ORDER BY updated_at DESC
+		LIMIT 1
+	`, args...).Scan(
+		&c.ID, &c.TenantID, &c.Audience, &c.TotalChunks, &c.ProcessedChunks,
+		&c.CurrentBatch, &c.TotalBatches, &c.BatchSize, &c.Status,
+		&errorMessage, &c.LastMessage, &errorBatch, &c.StartedAt, &c.UpdatedAt, &completedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get reindex checkpoint: %w", err)
+	}
+
+	c.ErrorMessage = errorMessage.String
+	if errorBatch.Valid {
+		batch := int32(0)
+		fmt.Sscanf(errorBatch.String, "%d", &batch)
+		c.ErrorBatch = &batch
+	}
+	if completedAt.Valid {
+		c.CompletedAt = &completedAt.Time
+	}
+
+	return &c, nil
 }
 
 func (d *DB) DeleteReindexCheckpoint(ctx context.Context, tenantID int32, audience string) error {
-	return errNotImplemented
+	_, err := d.db.ExecContext(ctx,
+		"DELETE FROM agent_reindex_checkpoints WHERE tenant_id = $1 AND audience = $2",
+		tenantID, audience,
+	)
+	return err
 }
 
 func (d *DB) SupportsBridgeDelivery() bool {
-	return false
+	return true
 }

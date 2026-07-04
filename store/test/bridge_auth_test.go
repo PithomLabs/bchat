@@ -14,7 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/usememos/memos/store"
 	"github.com/usememos/memos/store/db/mysql"
-	"github.com/usememos/memos/store/db/postgres"
 )
 
 func TestBridgeAuthSQLiteMigrationApplies(t *testing.T) {
@@ -260,32 +259,6 @@ func TestBridgeAuthNonceRequiresExistingKey(t *testing.T) {
 	}
 	err := ts.StoreBridgeAuthNonce(ctx, nonce)
 	require.Error(t, err)
-}
-
-func TestBridgeAuthPostgresUnsupported(t *testing.T) {
-	d := &postgres.DB{}
-	ctx := context.Background()
-
-	_, err := d.CreateBridgeAuthKey(ctx, &store.BridgeAuthKey{})
-	require.ErrorIs(t, err, store.ErrBridgeUnsupportedDatabase)
-
-	_, err = d.GetBridgeAuthKey(ctx, 1, "key")
-	require.ErrorIs(t, err, store.ErrBridgeUnsupportedDatabase)
-
-	_, err = d.ListBridgeAuthKeys(ctx, 1)
-	require.ErrorIs(t, err, store.ErrBridgeUnsupportedDatabase)
-
-	err = d.UpdateBridgeAuthKeyLastUsed(ctx, 1, "key", time.Now())
-	require.ErrorIs(t, err, store.ErrBridgeUnsupportedDatabase)
-
-	err = d.RevokeBridgeAuthKey(ctx, 1, "key", time.Now())
-	require.ErrorIs(t, err, store.ErrBridgeUnsupportedDatabase)
-
-	err = d.StoreBridgeAuthNonce(ctx, &store.BridgeAuthNonce{})
-	require.ErrorIs(t, err, store.ErrBridgeUnsupportedDatabase)
-
-	err = d.CleanupBridgeAuthNonces(ctx, time.Now())
-	require.ErrorIs(t, err, store.ErrBridgeUnsupportedDatabase)
 }
 
 func TestBridgeAuthMySQLUnsupported(t *testing.T) {

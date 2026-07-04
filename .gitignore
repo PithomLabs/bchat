@@ -1,6 +1,5 @@
 lancedb-go-main/
 build/
-bin/
 mastra-main/
 
 # Node template downloaded with gut

@@ -1,11 +1,12 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"log"
+	"time"
 
-	// Import the PostgreSQL driver.
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pkg/errors"
 
 	"github.com/usememos/memos/internal/profile"
@@ -15,7 +16,6 @@ import (
 type DB struct {
 	db      *sql.DB
 	profile *profile.Profile
-	// Add any other fields as needed
 }
 
 func NewDB(profile *profile.Profile) (store.Driver, error) {
@@ -23,20 +23,24 @@ func NewDB(profile *profile.Profile) (store.Driver, error) {
 		return nil, errors.New("profile is nil")
 	}
 
-	// Open the PostgreSQL connection
-	db, err := sql.Open("postgres", profile.DSN)
+	db, err := sql.Open("pgx", profile.DSN)
 	if err != nil {
 		log.Printf("Failed to open database: %s", err)
 		return nil, errors.Wrapf(err, "failed to open database: %s", profile.DSN)
 	}
 
-	var driver store.Driver = &DB{
-		db:      db,
-		profile: profile,
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(5 * time.Minute)
+	db.SetConnMaxIdleTime(1 * time.Minute)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
+		return nil, errors.Wrapf(err, "failed to ping database")
 	}
 
-	// Return the DB struct
-	return driver, nil
+	return &DB{db: db, profile: profile}, nil
 }
 
 func (d *DB) GetDB() *sql.DB {

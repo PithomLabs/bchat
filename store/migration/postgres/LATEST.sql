@@ -235,3 +235,700 @@ CREATE INDEX IF NOT EXISTS idx_agent_leads_tenant_status
     ON agent_leads(tenant_id, status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_leads_session
     ON agent_leads(tenant_id, session_id);
+
+-- agent_services
+CREATE TABLE agent_services (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    audience_type TEXT NOT NULL,
+    code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    is_emergency BOOLEAN DEFAULT FALSE,
+    response_time TEXT,
+    is_active BOOLEAN DEFAULT TRUE,
+    UNIQUE(tenant_id, audience_type, code)
+);
+
+CREATE INDEX idx_agent_services_tenant_audience ON agent_services(tenant_id, audience_type);
+
+-- agent_exclusions
+CREATE TABLE agent_exclusions (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    audience_type TEXT NOT NULL,
+    code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    exception_rule TEXT,
+    referral TEXT,
+    is_active BOOLEAN DEFAULT TRUE,
+    UNIQUE(tenant_id, audience_type, code)
+);
+
+-- agent_coverage
+CREATE TABLE agent_coverage (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    area_type TEXT NOT NULL,
+    area_name TEXT NOT NULL,
+    state_code TEXT,
+    is_included BOOLEAN NOT NULL,
+    UNIQUE(tenant_id, area_type, area_name)
+);
+
+-- agent_faqs
+CREATE TABLE agent_faqs (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    audience_type TEXT NOT NULL,
+    code TEXT NOT NULL,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    UNIQUE(tenant_id, audience_type, code)
+);
+
+-- agent_safety_protocols
+CREATE TABLE agent_safety_protocols (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    audience_type TEXT NOT NULL,
+    code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    trigger_intents TEXT NOT NULL,
+    instructions TEXT NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    UNIQUE(tenant_id, audience_type, code)
+);
+
+-- agent_kb_sections
+CREATE TABLE agent_kb_sections (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    audience_type TEXT NOT NULL,
+    code TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    section_type TEXT DEFAULT 'general',
+    is_active BOOLEAN DEFAULT TRUE,
+    UNIQUE(tenant_id, audience_type, code)
+);
+
+-- agent_intents
+CREATE TABLE agent_intents (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    audience_type TEXT,
+    code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    category TEXT NOT NULL,
+    description TEXT NOT NULL,
+    examples TEXT,
+    counter_examples TEXT,
+    urgency INTEGER,
+    action TEXT NOT NULL,
+    confidence_threshold DOUBLE PRECISION,
+    is_active BOOLEAN DEFAULT TRUE
+);
+
+CREATE INDEX idx_agent_intents_tenant_audience ON agent_intents(tenant_id, audience_type);
+
+-- agent_rules
+CREATE TABLE agent_rules (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    audience_type TEXT NOT NULL,
+    code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    priority INTEGER DEFAULT 5,
+    applies_to TEXT,
+    is_active BOOLEAN DEFAULT TRUE,
+    UNIQUE(tenant_id, audience_type, code)
+);
+
+-- agent_sessions
+CREATE TABLE agent_sessions (
+    id TEXT PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES "user"(id),
+    audience_type TEXT NOT NULL DEFAULT 'internal',
+    phase TEXT DEFAULT 'triage',
+    current_intent TEXT,
+    urgency_level INTEGER DEFAULT 0,
+    coverage_status TEXT DEFAULT 'unknown',
+    customer_name TEXT,
+    customer_phone TEXT,
+    customer_location TEXT,
+    detected_service TEXT,
+    message_count INTEGER DEFAULT 0,
+    messages TEXT DEFAULT '[]',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    is_completed BOOLEAN DEFAULT FALSE,
+    completion_reason TEXT
+);
+
+CREATE INDEX idx_agent_sessions_tenant ON agent_sessions(tenant_id);
+CREATE INDEX idx_agent_sessions_user ON agent_sessions(user_id);
+
+-- agent_source_files (supports versioning - no unique constraint)
+CREATE TABLE agent_source_files (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    audience_type TEXT NOT NULL,
+    file_type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    imported_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_source_files_lookup ON agent_source_files(tenant_id, audience_type, file_type, imported_at DESC);
+CREATE INDEX idx_source_files_version ON agent_source_files(tenant_id, audience_type, file_type, version DESC);
+
+-- agent_rate_limits
+CREATE TABLE agent_rate_limits (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    audience_type TEXT NOT NULL,
+    client_ip TEXT NOT NULL,
+    request_count INTEGER DEFAULT 0,
+    window_start TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(tenant_id, audience_type, client_ip)
+);
+
+CREATE INDEX idx_agent_rate_limits_lookup ON agent_rate_limits(tenant_id, audience_type, client_ip);
+
+-- agent_simulation_transcripts
+CREATE TABLE agent_simulation_transcripts (
+    id TEXT PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES "user"(id),
+    initial_prompt TEXT NOT NULL,
+    persona_hint TEXT,
+    total_turns INTEGER NOT NULL DEFAULT 0,
+    end_reason TEXT NOT NULL DEFAULT 'unknown',
+    messages TEXT NOT NULL DEFAULT '[]',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_simulation_transcript_tenant ON agent_simulation_transcripts(tenant_id);
+CREATE INDEX idx_simulation_transcript_user ON agent_simulation_transcripts(user_id);
+CREATE INDEX idx_simulation_transcript_created ON agent_simulation_transcripts(created_at);
+
+-- agent_tenant_scripts
+CREATE TABLE agent_tenant_scripts (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER NOT NULL,
+    audience_type TEXT NOT NULL DEFAULT 'external',
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    summary TEXT,
+    imported_at TIMESTAMPTZ DEFAULT NOW(),
+    version INTEGER DEFAULT 1,
+    FOREIGN KEY (tenant_id) REFERENCES agent_tenants(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_tenant_scripts_lookup ON agent_tenant_scripts(tenant_id, audience_type, imported_at DESC);
+CREATE INDEX idx_agent_tenant_scripts_tenant ON agent_tenant_scripts(tenant_id);
+
+-- agent_script_analysis
+CREATE TABLE agent_script_analysis (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    simulation_id TEXT REFERENCES agent_simulations(id) ON DELETE CASCADE,
+    audience_type TEXT NOT NULL DEFAULT 'external',
+    analysis_type TEXT NOT NULL DEFAULT 'compliance',
+    input_messages TEXT NOT NULL,
+    result TEXT NOT NULL,
+    score DOUBLE PRECISION,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_script_analysis_tenant ON agent_script_analysis(tenant_id);
+CREATE INDEX idx_script_analysis_simulation ON agent_script_analysis(simulation_id);
+
+-- agent_analysis_results
+CREATE TABLE agent_analysis_results (
+    id TEXT PRIMARY KEY,
+    tenant_id INTEGER NOT NULL,
+    conversation_id TEXT NOT NULL,
+    conversation_type TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    score INTEGER NOT NULL,
+    grade TEXT NOT NULL,
+    breakdown TEXT NOT NULL,
+    issues TEXT NOT NULL,
+    suggestions TEXT,
+    benchmark_version TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    FOREIGN KEY (tenant_id) REFERENCES agent_tenants(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_agent_analysis_tenant ON agent_analysis_results(tenant_id);
+CREATE INDEX idx_agent_analysis_conversation ON agent_analysis_results(conversation_id);
+CREATE INDEX idx_agent_analysis_created ON agent_analysis_results(created_at);
+
+-- agent_learning_memory
+CREATE TABLE agent_learning_memory (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER NOT NULL UNIQUE,
+    common_issues TEXT NOT NULL DEFAULT '[]',
+    learned_behaviors TEXT NOT NULL DEFAULT '[]',
+    improvement_areas TEXT NOT NULL DEFAULT '[]',
+    pending_suggestions TEXT NOT NULL DEFAULT '[]',
+    analysis_count INTEGER DEFAULT 0,
+    last_updated TIMESTAMPTZ DEFAULT NOW(),
+    version INTEGER DEFAULT 1,
+    FOREIGN KEY (tenant_id) REFERENCES agent_tenants(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_agent_learning_memory_tenant ON agent_learning_memory(tenant_id);
+
+-- agent_compliance_audits
+CREATE TABLE agent_compliance_audits (
+    id TEXT PRIMARY KEY,
+    tenant_id INTEGER NOT NULL,
+    conversation_id TEXT NOT NULL,
+    conversation_type TEXT NOT NULL,
+    score INTEGER NOT NULL,
+    checks TEXT NOT NULL,
+    overall_passed BOOLEAN NOT NULL DEFAULT FALSE,
+    audited_at TIMESTAMPTZ DEFAULT NOW(),
+    FOREIGN KEY (tenant_id) REFERENCES agent_tenants(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_compliance_audit_tenant ON agent_compliance_audits(tenant_id);
+CREATE INDEX idx_compliance_audit_conversation ON agent_compliance_audits(conversation_id);
+CREATE INDEX idx_compliance_audit_score ON agent_compliance_audits(score);
+CREATE INDEX idx_compliance_audit_date ON agent_compliance_audits(audited_at);
+
+-- agent_scoring_config
+CREATE TABLE agent_scoring_config (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER NOT NULL UNIQUE,
+    version TEXT NOT NULL DEFAULT '1.0',
+    config TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    FOREIGN KEY (tenant_id) REFERENCES agent_tenants(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_scoring_config_tenant ON agent_scoring_config(tenant_id);
+
+-- agent_qa_pairs
+CREATE TABLE agent_qa_pairs (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER NOT NULL,
+    question TEXT NOT NULL,
+    expected_answer TEXT NOT NULL,
+    source_section TEXT,
+    source_chunk_id TEXT,
+    difficulty TEXT DEFAULT 'medium',
+    category TEXT,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    FOREIGN KEY (tenant_id) REFERENCES agent_tenants(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_qa_pairs_tenant ON agent_qa_pairs(tenant_id);
+CREATE INDEX idx_qa_pairs_category ON agent_qa_pairs(category);
+CREATE INDEX idx_qa_pairs_active ON agent_qa_pairs(is_active);
+
+-- agent_transcripts
+CREATE TABLE agent_transcripts (
+    id TEXT PRIMARY KEY,
+    tenant_id INTEGER NOT NULL,
+    session_id TEXT NOT NULL,
+    audience_type TEXT NOT NULL,
+    messages TEXT NOT NULL DEFAULT '[]',
+    message_count INTEGER DEFAULT 0,
+    client_ip TEXT,
+    user_agent TEXT,
+    customer_name TEXT,
+    customer_phone TEXT,
+    customer_email TEXT,
+    customer_location TEXT,
+    detected_intent TEXT,
+    started_at TIMESTAMPTZ DEFAULT NOW(),
+    ended_at TIMESTAMPTZ,
+    last_message_at TIMESTAMPTZ DEFAULT NOW(),
+    is_completed BOOLEAN DEFAULT FALSE,
+    completion_reason TEXT,
+    FOREIGN KEY (tenant_id) REFERENCES agent_tenants(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_transcripts_tenant ON agent_transcripts(tenant_id);
+CREATE INDEX idx_transcripts_started ON agent_transcripts(started_at DESC);
+CREATE INDEX idx_transcripts_audience ON agent_transcripts(tenant_id, audience_type);
+CREATE INDEX idx_transcripts_session ON agent_transcripts(session_id);
+
+-- agent_workflows
+CREATE TABLE agent_workflows (
+    id SERIAL PRIMARY KEY,
+    ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL,
+    agent_name TEXT NOT NULL DEFAULT 'antigravity',
+    task_name TEXT,
+    task_mode TEXT CHECK(task_mode IN ('PLANNING', 'EXECUTION', 'VERIFICATION')),
+    task_status TEXT,
+    task_summary TEXT,
+    predicted_size INTEGER,
+    created_ts INTEGER NOT NULL,
+    metadata TEXT DEFAULT '{}'
+);
+
+CREATE INDEX idx_workflows_ticket ON agent_workflows(ticket_id);
+CREATE INDEX idx_workflows_session ON agent_workflows(session_id);
+CREATE INDEX idx_workflows_created ON agent_workflows(created_ts);
+
+-- agent_reindex_checkpoints
+CREATE TABLE agent_reindex_checkpoints (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER NOT NULL,
+    audience TEXT NOT NULL,
+    total_chunks INTEGER NOT NULL,
+    processed_chunks INTEGER NOT NULL DEFAULT 0,
+    current_batch INTEGER NOT NULL DEFAULT 0,
+    total_batches INTEGER NOT NULL,
+    batch_size INTEGER NOT NULL DEFAULT 25,
+    status TEXT NOT NULL DEFAULT 'in_progress',
+    error_message TEXT,
+    last_message TEXT NOT NULL DEFAULT '',
+    error_batch INTEGER,
+    started_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    FOREIGN KEY (tenant_id) REFERENCES agent_tenants(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX idx_reindex_checkpoint_tenant_audience ON agent_reindex_checkpoints(tenant_id, audience);
+
+-- agent_simulations
+CREATE TABLE agent_simulations (
+    id TEXT PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
+    audience_type TEXT NOT NULL DEFAULT 'external',
+    status TEXT NOT NULL DEFAULT 'pending',
+    scenario TEXT,
+    messages TEXT DEFAULT '[]',
+    message_count INTEGER DEFAULT 0,
+    max_turns INTEGER DEFAULT 20,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    error_message TEXT
+);
+
+CREATE INDEX idx_agent_simulations_tenant ON agent_simulations(tenant_id);
+CREATE INDEX idx_agent_simulations_user ON agent_simulations(user_id);
+CREATE INDEX idx_agent_simulations_status ON agent_simulations(status);
+
+-- agent_observations
+CREATE TABLE agent_observations (
+    session_id TEXT PRIMARY KEY REFERENCES agent_sessions(id) ON DELETE CASCADE,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    observation_log TEXT DEFAULT '',
+    last_observed_msg_index INTEGER DEFAULT 0,
+    tokens_in_log INTEGER DEFAULT 0,
+    current_task TEXT,
+    suggested_response TEXT,
+    resource_id TEXT DEFAULT '',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    last_updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_observations_tenant ON agent_observations(tenant_id);
+CREATE INDEX idx_agent_observations_resource ON agent_observations(resource_id);
+
+-- tenant_role_templates
+CREATE TABLE IF NOT EXISTS tenant_role_templates (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER CHECK (tenant_id IS NULL OR tenant_id >= 1) REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    code TEXT NOT NULL,
+    permissions TEXT NOT NULL DEFAULT '[]',
+    created_by INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
+    created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()),
+    updated_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()),
+    UNIQUE(tenant_id, code)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tenant_role_templates_tenant ON tenant_role_templates(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_tenant_role_templates_code ON tenant_role_templates(code);
+
+INSERT OR IGNORE INTO tenant_role_templates (tenant_id, name, code, permissions)
+VALUES
+    (NULL, 'Viewer', 'viewer', '["tenant:read"]'),
+    (NULL, 'Tester', 'tester', '["tenant:read","chat:test"]'),
+    (NULL, 'Analyst', 'analyst', '["tenant:read","chat:logs"]'),
+    (NULL, 'Editor', 'editor', '["tenant:read","tenant:write","files:upload"]'),
+    (NULL, 'Tenant Admin', 'tenant_admin', '["tenant:admin"]');
+
+-- system_secret
+CREATE TABLE system_secret (
+    id SERIAL PRIMARY KEY CHECK (id = 1),
+    encryption_salt BYTEA NOT NULL,
+    key_version INTEGER NOT NULL DEFAULT 1,
+    created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()),
+    rotated_at BIGINT
+);
+
+-- tickets
+CREATE TABLE tickets (
+    id SERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'OPEN',
+    priority TEXT NOT NULL DEFAULT 'MEDIUM',
+    creator_id INTEGER NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+    assignee_id INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
+    created_ts BIGINT NOT NULL,
+    updated_ts BIGINT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'TASK',
+    tags TEXT NOT NULL DEFAULT '[]',
+    beads_id TEXT UNIQUE,
+    parent_id INTEGER REFERENCES tickets(id) ON DELETE CASCADE,
+    labels TEXT DEFAULT '[]',
+    dependencies TEXT DEFAULT '[]',
+    discovery_context TEXT,
+    closed_reason TEXT,
+    issue_type TEXT
+);
+
+CREATE INDEX idx_tickets_creator_id ON tickets(creator_id);
+CREATE INDEX idx_tickets_status ON tickets(status);
+CREATE INDEX idx_tickets_assignee_id ON tickets(assignee_id);
+CREATE UNIQUE INDEX idx_tickets_beads_id ON tickets(beads_id) WHERE beads_id IS NOT NULL;
+CREATE INDEX idx_tickets_parent_id ON tickets(parent_id);
+CREATE INDEX idx_tickets_issue_type ON tickets(issue_type);
+CREATE UNIQUE INDEX idx_tickets_creator_description_memo ON tickets(creator_id, description) WHERE description LIKE '/m/%';
+
+-- notifications
+CREATE TABLE notifications (
+    id SERIAL PRIMARY KEY,
+    initiator_id INTEGER NOT NULL,
+    receiver_id INTEGER NOT NULL,
+    ticket_url TEXT NOT NULL,
+    created_ts BIGINT NOT NULL,
+    is_read BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+CREATE INDEX idx_notifications_receiver ON notifications(receiver_id);
+CREATE INDEX idx_notifications_is_read ON notifications(is_read);
+
+-- bridge_external_sessions
+CREATE TABLE bridge_external_sessions (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'closed', 'expired')),
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    expires_at BIGINT,
+    last_seen_at BIGINT,
+    UNIQUE(tenant_id, session_id)
+);
+
+CREATE INDEX idx_bridge_external_sessions_tenant_status ON bridge_external_sessions(tenant_id, status);
+CREATE INDEX idx_bridge_external_sessions_expiry ON bridge_external_sessions(expires_at);
+CREATE INDEX idx_bridge_external_sessions_tenant_session ON bridge_external_sessions(tenant_id, session_id);
+
+-- bridge_handoffs
+CREATE TABLE bridge_handoffs (
+    id SERIAL PRIMARY KEY,
+    external_session_id INTEGER NOT NULL REFERENCES bridge_external_sessions(id) ON DELETE CASCADE,
+    handoff_id TEXT NOT NULL,
+    tenant_id INTEGER NOT NULL,
+    session_id TEXT NOT NULL,
+    generation INTEGER NOT NULL CHECK(generation > 0),
+    routing_mode TEXT NOT NULL DEFAULT 'handoff_queued' CHECK(routing_mode IN ('handoff_queued', 'human_active', 'closed')),
+    outcome TEXT CHECK(outcome IS NULL OR outcome IN ('released', 'timeout_released', 'resolved', 'rejected', 'failed', 'closed')),
+    active BOOLEAN NOT NULL DEFAULT TRUE CHECK(active IN (TRUE, FALSE)),
+    version INTEGER NOT NULL DEFAULT 1 CHECK(version > 0),
+    harness_id TEXT,
+    operator_id TEXT,
+    ticket_id INTEGER,
+    memo_uid TEXT,
+    transition_reason TEXT,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    closed_at BIGINT,
+    UNIQUE(external_session_id, generation),
+    UNIQUE(tenant_id, session_id, generation),
+    UNIQUE(tenant_id, handoff_id)
+);
+
+CREATE INDEX idx_bridge_handoffs_external_active ON bridge_handoffs(external_session_id, active);
+CREATE INDEX idx_bridge_handoffs_tenant_session_active ON bridge_handoffs(tenant_id, session_id, active);
+CREATE INDEX idx_bridge_handoffs_tenant_mode ON bridge_handoffs(tenant_id, routing_mode);
+CREATE INDEX idx_bridge_handoffs_tenant_handoff ON bridge_handoffs(tenant_id, handoff_id);
+CREATE UNIQUE INDEX idx_bridge_handoffs_one_active ON bridge_handoffs(external_session_id) WHERE active = TRUE;
+
+-- bridge_handoff_replies
+CREATE TABLE IF NOT EXISTS bridge_handoff_replies (
+    id SERIAL PRIMARY KEY,
+    reply_id TEXT NOT NULL UNIQUE CHECK(length(reply_id) > 0 AND length(reply_id) <= 36),
+    tenant_id INTEGER NOT NULL,
+    session_id TEXT NOT NULL CHECK(length(session_id) > 0),
+    handoff_id TEXT NOT NULL CHECK(length(handoff_id) > 0),
+    generation INTEGER NOT NULL,
+    client_message_id TEXT NOT NULL CHECK(length(client_message_id) > 0 AND length(client_message_id) <= 128),
+    text TEXT NOT NULL CHECK(length(text) > 0 AND length(text) <= 2000),
+    delivery_status TEXT NOT NULL DEFAULT 'not_delivered' CHECK(delivery_status = 'not_delivered'),
+    created_at BIGINT NOT NULL,
+
+    UNIQUE(tenant_id, session_id, handoff_id, client_message_id),
+    FOREIGN KEY (tenant_id, handoff_id)
+        REFERENCES bridge_handoffs(tenant_id, handoff_id)
+        ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, session_id)
+        REFERENCES bridge_external_sessions(tenant_id, session_id)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_bridge_handoff_replies_lookup
+    ON bridge_handoff_replies(tenant_id, session_id, handoff_id, client_message_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bridge_handoff_replies_tenant_reply
+    ON bridge_handoff_replies(tenant_id, reply_id);
+
+-- bridge_reply_outbox
+CREATE TABLE IF NOT EXISTS bridge_reply_outbox (
+    id SERIAL PRIMARY KEY,
+    outbox_id TEXT NOT NULL UNIQUE CHECK(length(outbox_id) = 36),
+
+    tenant_id INTEGER NOT NULL,
+    session_id TEXT NOT NULL CHECK(length(session_id) > 0),
+    handoff_id TEXT NOT NULL CHECK(length(handoff_id) > 0),
+    reply_id TEXT NOT NULL CHECK(length(reply_id) = 36),
+
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+
+    claim_token TEXT UNIQUE CHECK(claim_token IS NULL OR length(claim_token) = 36),
+    claimed_by TEXT CHECK(claimed_by IS NULL OR length(claimed_by) BETWEEN 1 AND 128),
+    claimed_at BIGINT CHECK(claimed_at IS NULL OR claimed_at > 0),
+    claim_expires_at BIGINT CHECK(claim_expires_at IS NULL OR claim_expires_at > 0),
+
+    completed_at BIGINT CHECK(completed_at IS NULL OR completed_at > 0),
+
+    failed_at BIGINT CHECK(failed_at IS NULL OR failed_at > 0),
+    failure_code TEXT CHECK(failure_code IS NULL OR length(failure_code) BETWEEN 1 AND 64),
+    failure_message TEXT CHECK(failure_message IS NULL OR length(failure_message) BETWEEN 1 AND 1000),
+
+    created_at BIGINT NOT NULL,
+
+    UNIQUE(tenant_id, reply_id),
+
+    FOREIGN KEY (tenant_id, session_id)
+        REFERENCES bridge_external_sessions(tenant_id, session_id)
+        ON DELETE CASCADE,
+
+    FOREIGN KEY (tenant_id, handoff_id)
+        REFERENCES bridge_handoffs(tenant_id, handoff_id)
+        ON DELETE CASCADE,
+
+    FOREIGN KEY (tenant_id, reply_id)
+        REFERENCES bridge_handoff_replies(tenant_id, reply_id)
+        ON DELETE CASCADE,
+
+    CHECK(
+        (status = 'pending'
+          AND claim_token IS NULL
+          AND claimed_by IS NULL
+          AND claimed_at IS NULL
+          AND claim_expires_at IS NULL
+          AND completed_at IS NULL
+          AND failed_at IS NULL
+          AND failure_code IS NULL
+          AND failure_message IS NULL)
+        OR
+        (status = 'claimed'
+          AND claim_token IS NOT NULL
+          AND claimed_by IS NOT NULL
+          AND claimed_at IS NOT NULL
+          AND claim_expires_at IS NOT NULL
+          AND claim_expires_at > claimed_at
+          AND completed_at IS NULL
+          AND failed_at IS NULL
+          AND failure_code IS NULL
+          AND failure_message IS NULL)
+        OR
+        (status = 'completed'
+          AND claim_token IS NOT NULL
+          AND claimed_by IS NOT NULL
+          AND claimed_at IS NOT NULL
+          AND claim_expires_at IS NOT NULL
+          AND claim_expires_at > claimed_at
+          AND completed_at IS NOT NULL
+          AND completed_at >= claimed_at
+          AND failed_at IS NULL
+          AND failure_code IS NULL
+          AND failure_message IS NULL)
+        OR
+        (status = 'failed'
+          AND claim_token IS NOT NULL
+          AND claimed_by IS NOT NULL
+          AND claimed_at IS NOT NULL
+          AND claim_expires_at IS NOT NULL
+          AND claim_expires_at > claimed_at
+          AND completed_at IS NULL
+          AND failed_at IS NOT NULL
+          AND failed_at >= claimed_at
+          AND failure_code IS NOT NULL
+          AND failure_message IS NOT NULL)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_bridge_reply_outbox_claimable
+    ON bridge_reply_outbox(tenant_id, status, claim_expires_at, created_at);
+
+-- bridge_auth_keys
+CREATE TABLE bridge_auth_keys (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    key_id TEXT NOT NULL,
+    label TEXT,
+    secret_key_encrypted BYTEA NOT NULL,
+    secret_key_nonce BYTEA NOT NULL CHECK(length(secret_key_nonce) = 12),
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'revoked')),
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    last_used_at BIGINT,
+    revoked_at BIGINT,
+    UNIQUE(tenant_id, key_id),
+    CHECK(length(key_id) BETWEEN 16 AND 128),
+    CHECK(
+        (status = 'active' AND revoked_at IS NULL)
+        OR
+        (status = 'revoked' AND revoked_at IS NOT NULL)
+    )
+);
+
+CREATE INDEX idx_bridge_auth_keys_tenant_status ON bridge_auth_keys(tenant_id, status);
+
+-- bridge_auth_nonces
+CREATE TABLE bridge_auth_nonces (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    key_id TEXT NOT NULL,
+    nonce TEXT NOT NULL,
+    timestamp BIGINT NOT NULL,
+    created_at BIGINT NOT NULL,
+    expires_at BIGINT NOT NULL,
+    UNIQUE(tenant_id, key_id, nonce),
+    FOREIGN KEY (tenant_id, key_id) REFERENCES bridge_auth_keys(tenant_id, key_id) ON DELETE CASCADE,
+    CHECK(length(key_id) BETWEEN 16 AND 128),
+    CHECK(length(nonce) BETWEEN 16 AND 128),
+    CHECK(expires_at > created_at),
+    CHECK(expires_at > timestamp)
+);
+
+CREATE INDEX idx_bridge_auth_nonces_tenant_key ON bridge_auth_nonces(tenant_id, key_id);
+CREATE INDEX idx_bridge_auth_nonces_expiry ON bridge_auth_nonces(expires_at);
