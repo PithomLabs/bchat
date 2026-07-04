@@ -94,5 +94,12 @@ func (p *Profile) Validate() error {
 		p.DSN = filepath.Join(dataDir, dbFile)
 	}
 
+	if p.Driver == "postgres" && p.DSN == "" {
+		p.DSN = os.Getenv("DATABASE_URL")
+		if p.DSN == "" {
+			return errors.New("postgres driver requires DSN or DATABASE_URL environment variable")
+		}
+	}
+
 	return nil
 }
