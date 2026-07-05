@@ -82,14 +82,19 @@ bchat/
 Each tenant represents an isolated agent configuration:
 
 ```go
-type Tenant struct {
-    ID          int32   // Unique identifier
-    Slug        string  // URL-friendly (e.g., "acme-corp")
-    Name        string  // Display name
-    LLMModel    string  // LLM model override
-    Temperature float64 // Response temperature (0.0-1.0)
+type AgentTenant struct {
+    ID                int32
+    Slug              string      // URL-friendly (e.g., "acme-corp")
+    CompanyName       string      // Display name
+    GUID              string      // Unique identifier for widget embed
+    Vertical          string      // Industry vertical
+    IsActive          bool
+    ProcessingOptions string      // JSON-encoded processing options
+    AllowedDomains    string      // JSON array of allowed domains
 }
 ```
+
+**Key security property:** Every API request must be scoped to a single tenant. See [Tenant Isolation Architecture](#tenant-isolation-architecture) for implementation details.
 
 ### 2. Configuration Files
 
@@ -155,6 +160,61 @@ The parser uses a generic annotation format:
 | `@intent` | Customer intent categories |
 | `@rule` | Behavioral rules |
 | `@thresholds` | Numeric thresholds |
+
+---
+
+## Tenant Isolation Architecture
+
+Every API request must be scoped to a single tenant. The system uses a dual-context mechanism to extract tenant ID from JWT claims.
+
+### JWT Claims
+
+The `ClaimsMessage` struct includes a `TenantID` field:
+
+```go
+type ClaimsMessage struct {
+    Username string
+    Role     RoleType
+    TenantID *int32  // json:"tenant_id,omitempty"
+    // ... other fields
+}
+```
+
+- **Single-tenant users**: JWT contains their tenant ID automatically
+- **Multi-tenant users**: Must explicitly select tenant via REST flow (see [Multi-Tenant Auth Flow](#multi-tenant-auth-flow))
+
+### Context Mechanism
+
+Two context implementations exist for different frameworks:
+
+| Framework | Function | Return Type |
+|-----------|----------|-------------|
+| Echo (HTTP) | `getTenantFromContext(c)` | `*int32` |
+| gRPC | `GetTenantIDFromContext(ctx)` | `*int32` |
+
+Both extract tenant ID from context values set by the auth middleware.
+
+### Required Pattern
+
+Every handler that reads/writes tenant-scoped data must:
+
+1. **Extract tenant ID** from context
+2. **Apply tenant filter** to database queries
+3. **Verify tenant ownership** for update/delete operations
+
+```go
+// Echo handler example
+func (h *Handler) CreateMemo(c echo.Context) error {
+    tenantID := getTenantFromContext(c)
+    memo := &store.Memo{
+        TenantID: tenantID,
+        // ... other fields
+    }
+    // ...
+}
+```
+
+For detailed implementation patterns, see [Security Guidelines](#security-guidelines-tenant-isolation).
 
 ---
 
@@ -307,6 +367,12 @@ LLM_VERIFIER_ENABLED=true      # Enable LLM verification
 | POST | `/api/v1/agent/:slug/chat` | Send chat message |
 | GET | `/api/v1/agent/:slug/chat/stream` | SSE stream |
 
+### Auth (Public)
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/auth/tenants` | List tenants for multi-tenant user |
+| POST | `/api/v1/auth/select-tenant` | Select tenant, return JWT with tenant_id |
+
 ### Admin (Authenticated)
 | Method | Path | Description | Permission |
 |--------|------|-------------|------------|
@@ -337,6 +403,83 @@ if !hasPermission {
     return echo.NewHTTPError(http.StatusForbidden, "Permission denied")
 }
 ```
+
+---
+
+## Security Guidelines (Tenant Isolation)
+
+### DO
+
+- ✅ Always extract tenant ID from context in handlers
+- ✅ Apply `ApplyTenantFilter(c, find)` before database queries
+- ✅ Verify tenant ownership before update/delete operations
+- ✅ Check `!isSuperUser(user)` before tenant ownership checks
+- ✅ Use `GetTenantIDFromContext(ctx)` in gRPC handlers
+- ✅ Use `getTenantFromContext(c)` in Echo handlers
+- ✅ Set tenant ID on create operations for tenant-scoped data
+
+### DON'T
+
+- ❌ Never hardcode tenant IDs in queries
+- ❌ Never skip tenant filtering for "convenience"
+- ❌ Never expose tenant IDs in error messages
+- ❌ Never allow cross-tenant data access (even for superusers without explicit check)
+- ❌ Never store PII (like tenant_id) in plaintext descriptions
+- ❌ Never trust user-supplied tenant IDs from request body
+
+### Superuser Bypass Pattern
+
+```go
+tenantID := getTenantFromContext(c)
+if tenantID != nil && item.TenantID != nil && *item.TenantID != *tenantID && !isSuperUser(user) {
+    return echo.NewHTTPError(http.StatusForbidden, "permission denied")
+}
+```
+
+---
+
+## Adding Tenant-Scoped Features
+
+When adding a new tenant-scoped feature, follow this checklist:
+
+### 1. Database Layer
+- [ ] Add `tenant_id INTEGER DEFAULT NULL` column (if new table)
+- [ ] Add index on `tenant_id`
+- [ ] Add `TenantID *int32` to store structs
+
+### 2. Store Layer
+- [ ] Add `tenant_id` to SQL queries (INSERT, SELECT, WHERE, UPDATE)
+- [ ] Update CEL filter if applicable (remove `tenant_id` from CEL identifiers)
+
+### 3. Handler Layer
+- [ ] Extract tenant ID from context
+- [ ] Set tenant ID on create operations
+- [ ] Apply tenant filter on list operations
+- [ ] Verify tenant ownership on update/delete operations
+
+### 4. Security
+- [ ] Add superuser bypass check
+- [ ] Test cross-tenant access denial
+- [ ] Verify no PII leakage in error messages
+
+---
+
+## Multi-Tenant Authentication
+
+### Single-Tenant Users
+- gRPC `SignIn` auto-selects the single tenant
+- JWT includes `tenant_id`
+
+### Multi-Tenant Users
+- gRPC `SignIn` returns error: "multiple tenants found, use /auth/tenants endpoint"
+- Must use REST flow:
+  1. `POST /api/v1/auth/tenants` → Returns tenant list + selection token
+  2. `POST /api/v1/auth/select-tenant` → Returns JWT with `tenant_id`
+
+### Selection Token
+- Random 32-byte string stored in `user_access_token`
+- 5-minute expiry enforced via timestamp in description
+- Single-use (deleted after successful selection)
 
 ---
 
@@ -438,6 +581,12 @@ const fetchMyNewItems = async (slug: string) => {
 | [`embedding.go`](server/router/api/v1/agent/embedding.go) | Embedding providers |
 | [`observer.go`](server/router/api/v1/agent/observer.go) | Observational memory |
 | [`simulation.go`](server/router/api/v1/agent/simulation.go) | Agent simulation |
+| [`auth.go`](server/router/api/v1/auth.go) | JWT claims, token generation |
+| [`auth_service.go`](server/router/api/v1/auth_service.go) | Auth endpoints, tenant selection |
+| [`acl.go`](server/router/api/v1/acl.go) | gRPC auth interceptor, context extraction |
+| [`tenant_context.go`](server/router/api/v1/tenant_context.go) | Echo tenant context helpers |
+| [`memo_service.go`](server/router/api/v1/memo_service.go) | Memo CRUD with tenant scoping |
+| [`ticket_service.go`](server/router/api/v1/ticket_service.go) | Ticket CRUD with tenant scoping |
 | [`store/agent.go`](store/agent.go) | Data types and store interface |
 | [`store/driver.go`](store/driver.go) | Database driver interface |
 
@@ -462,6 +611,13 @@ const fetchMyNewItems = async (slug: string) => {
 - Always use `IF NOT EXISTS` in migrations
 - Add indexes for foreign keys and common query fields
 - Use `ON DELETE CASCADE` for tenant-scoped data
+
+### Tenant Isolation
+- Always extract tenant ID from context (never hardcode)
+- Apply `ApplyTenantFilter(c, find)` before database queries
+- Verify tenant ownership for update/delete operations
+- Use wrapper functions (`ApplyTenantFilter`, `ApplyTicketTenantFilter`) for consistency
+- Remove `tenant_id` from CEL filter identifiers (SQLite + Postgres)
 
 ---
 
@@ -497,6 +653,88 @@ curl -X POST "http://localhost:8081/api/v1/agent/:slug/rag/search" \
   -H "Content-Type: application/json" \
   -d '{"query": "test"}'
 ```
+
+---
+
+## Database Queries
+
+```bash
+# List tenants
+sqlite3 build/data/memos_dev.db "SELECT id, slug, company_name FROM agent_tenants;"
+
+# Get tenant by slug
+sqlite3 build/data/memos_dev.db "SELECT * FROM agent_tenants WHERE slug='inc';"
+
+# List source files for tenant
+sqlite3 build/data/memos_dev.db "SELECT id, audience_type, file_type, length(content), version FROM agent_source_files WHERE tenant_id=4 ORDER BY file_type, version DESC;"
+
+# Get latest KB content
+sqlite3 build/data/memos_dev.db "SELECT content FROM agent_source_files WHERE tenant_id=<ID> AND file_type='kb' ORDER BY id DESC LIMIT 1;"
+
+# Get latest POLICY content
+sqlite3 build/data/memos_dev.db "SELECT content FROM agent_source_files WHERE tenant_id=<ID> AND file_type='policy' ORDER BY id DESC LIMIT 1;"
+
+# Get SCRIPT content
+sqlite3 build/data/memos_dev.db "SELECT content FROM agent_tenant_scripts WHERE tenant_id=<ID> ORDER BY id DESC LIMIT 1;"
+
+# List all tables
+sqlite3 build/data/memos_dev.db ".tables"
+
+# Show table schema
+sqlite3 build/data/memos_dev.db ".schema agent_tenants"
+```
+
+---
+
+## Testing Endpoints
+
+```bash
+# Validate tenant
+curl http://localhost:5230/api/v1/agent/inc/validate
+
+# Reindex tenant (needs auth cookie)
+curl -X POST http://localhost:5230/api/v1/agent/inc/reindex
+
+# RAG stats
+curl http://localhost:5230/api/v1/admin/rag/stats
+
+# Test RAG search
+curl -X POST http://localhost:5230/api/v1/admin/rag/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "water damage", "tenant_id": 4, "limit": 5}'
+```
+
+---
+
+## Useful Grep Patterns
+
+```bash
+# Find handler
+grep -n "func.*Handle" server/router/api/v1/agent/handlers.go
+
+# Find route registration
+grep -n "adminGroup\|authGroup" server/router/api/v1/v1.go
+
+# Find store method
+grep -n "func.*Store" store/agent.go
+
+# Find translation key usage
+grep -rn "agent-admin.my-key" web/src/
+```
+
+---
+
+## Gotchas
+
+| Issue | Solution |
+|-------|----------|
+| Table name wrong | Use **plural**: `agent_tenants` not `agent_tenant` |
+| Env vars not working in Taskfile | Use inline: `VAR=value ./binary` not `env:` block |
+| Frontend state not updating | Wrap in `runInAction()` |
+| Store method not accessible | Add to return object |
+| Mock embeddings not semantic | Use `openrouter` instead |
+| Migration not running | Check filename: `NN__snake_case.sql` |
+| CGO errors | Run `task setup:lancedb` first |
 
 ---
 
