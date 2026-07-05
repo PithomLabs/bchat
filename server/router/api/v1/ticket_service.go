@@ -86,6 +86,7 @@ func (s *APIV1Service) CreateTicket(c echo.Context) error {
 		AssigneeID:  request.AssigneeID,
 		CreatedTs:   time.Now().Unix(),
 		UpdatedTs:   time.Now().Unix(),
+		TenantID:    getTenantFromContext(c),
 	}
 
 	if ticket.Type == "" {
@@ -193,6 +194,9 @@ func (s *APIV1Service) ListTickets(c echo.Context) error {
 		find.CreatorID = &userID
 	}
 
+	// Apply tenant filter (defense-in-depth)
+	ApplyTicketTenantFilter(c, find)
+
 	list, err := s.Store.ListTickets(ctx, find)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list tickets").SetInternal(err)
@@ -269,6 +273,12 @@ func (s *APIV1Service) UpdateTicket(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "Ticket not found")
 	}
 	existingTicket := existingList[0]
+
+	// Check tenant ownership (superusers bypass this check)
+	tenantID := getTenantFromContext(c)
+	if tenantID != nil && existingTicket.TenantID != nil && *existingTicket.TenantID != *tenantID && !isSuperUser(user) {
+		return echo.NewHTTPError(http.StatusForbidden, "You do not have permission to update this ticket")
+	}
 
 	if !isSuperUser(user) && existingTicket.CreatorID != userID {
 		return echo.NewHTTPError(http.StatusForbidden, "You do not have permission to update this ticket")
@@ -401,6 +411,13 @@ func (s *APIV1Service) GetTicket(c echo.Context) error {
 	}
 
 	ticket := list[0]
+
+	// Check tenant ownership (superusers bypass this check)
+	tenantID := getTenantFromContext(c)
+	if tenantID != nil && ticket.TenantID != nil && *ticket.TenantID != *tenantID && !isSuperUser(user) {
+		return echo.NewHTTPError(http.StatusForbidden, "You do not have permission to access this ticket")
+	}
+
 	// Security check: Only superusers or creator can see the ticket details
 	if !isSuperUser(user) && ticket.CreatorID != userID {
 		return echo.NewHTTPError(http.StatusForbidden, "You do not have permission to access this ticket")
@@ -429,4 +446,8 @@ func convertTicketFromStore(ticket *store.Ticket) *Ticket {
 // Helper to match the key used in common/auth.go checks
 func getUserIDContextKey() string {
 	return "user-id"
+}
+
+func getTenantIDContextKey() string {
+	return "tenant-id"
 }

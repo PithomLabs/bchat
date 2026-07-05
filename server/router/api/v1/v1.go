@@ -153,6 +153,11 @@ func (s *APIV1Service) RegisterGateway(ctx context.Context, echoServer *echo.Ech
 	// Register agent routes
 	s.RegisterAgentRoutes(echoServer)
 
+	// Register auth REST endpoints (unauthenticated)
+	authRESTGroup := echoServer.Group("/api/v1/auth")
+	authRESTGroup.POST("/tenants", s.HandleAuthTenants)
+	authRESTGroup.POST("/select-tenant", s.HandleSelectTenant)
+
 	handler := echo.WrapHandler(gwMux)
 	gwGroup.Any("/api/v1/*", handler)
 	gwGroup.Any("/file/*", handler)
@@ -398,6 +403,12 @@ func (s *APIV1Service) AuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		}
 
 		c.Set(getUserIDContextKey(), userID)
+
+		// Set tenant context from JWT claims
+		if claims.TenantID != nil {
+			c.Set(getTenantIDContextKey(), *claims.TenantID)
+		}
+
 		return next(c)
 	}
 }

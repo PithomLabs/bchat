@@ -45,8 +45,11 @@ CREATE TABLE memo (
   content TEXT NOT NULL,
   visibility TEXT NOT NULL DEFAULT 'PRIVATE',
   pinned BOOLEAN NOT NULL DEFAULT FALSE,
-  payload JSONB NOT NULL DEFAULT '{}'
+  payload JSONB NOT NULL DEFAULT '{}',
+  tenant_id INTEGER DEFAULT NULL
 );
+
+CREATE INDEX idx_memo_tenant ON memo(tenant_id);
 
 -- memo_organizer
 CREATE TABLE memo_organizer (
@@ -698,7 +701,8 @@ CREATE TABLE tickets (
     dependencies TEXT DEFAULT '[]',
     discovery_context TEXT,
     closed_reason TEXT,
-    issue_type TEXT
+    issue_type TEXT,
+    tenant_id INTEGER DEFAULT NULL
 );
 
 CREATE INDEX idx_tickets_creator_id ON tickets(creator_id);
@@ -708,6 +712,7 @@ CREATE UNIQUE INDEX idx_tickets_beads_id ON tickets(beads_id) WHERE beads_id IS 
 CREATE INDEX idx_tickets_parent_id ON tickets(parent_id);
 CREATE INDEX idx_tickets_issue_type ON tickets(issue_type);
 CREATE UNIQUE INDEX idx_tickets_creator_description_memo ON tickets(creator_id, description) WHERE description LIKE '/m/%';
+CREATE INDEX idx_tickets_tenant ON tickets(tenant_id);
 
 -- notifications
 CREATE TABLE notifications (

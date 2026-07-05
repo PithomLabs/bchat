@@ -29,17 +29,18 @@ const (
 )
 
 type ClaimsMessage struct {
-	Name string `json:"name"`
+	Name     string `json:"name"`
+	TenantID *int32 `json:"tenant_id,omitempty"`
 	jwt.RegisteredClaims
 }
 
 // GenerateAccessToken generates an access token.
-func GenerateAccessToken(username string, userID int32, expirationTime time.Time, secret []byte) (string, error) {
-	return generateToken(username, userID, AccessTokenAudienceName, expirationTime, secret)
+func GenerateAccessToken(username string, userID int32, tenantID *int32, expirationTime time.Time, secret []byte) (string, error) {
+	return generateToken(username, userID, tenantID, AccessTokenAudienceName, expirationTime, secret)
 }
 
 // generateToken generates a jwt token.
-func generateToken(username string, userID int32, audience string, expirationTime time.Time, secret []byte) (string, error) {
+func generateToken(username string, userID int32, tenantID *int32, audience string, expirationTime time.Time, secret []byte) (string, error) {
 	registeredClaims := jwt.RegisteredClaims{
 		Issuer:   Issuer,
 		Audience: jwt.ClaimStrings{audience},
@@ -53,6 +54,7 @@ func generateToken(username string, userID int32, audience string, expirationTim
 	// Declare the token with the HS256 algorithm used for signing, and the claims.
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, &ClaimsMessage{
 		Name:             username,
+		TenantID:         tenantID,
 		RegisteredClaims: registeredClaims,
 	})
 	token.Header["kid"] = KeyID

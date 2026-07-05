@@ -4,8 +4,6 @@ under docs subfolder write your proposal as DOCS_INITIAL_CHAT_PAGE.MD on how to 
 
 Requirements:
 
-- that chat agent is to use OPENROUTER_API_KEY and LLM_MODEL env vars (read code under /home/chaschel/Documents/ibm/ai/distance.so/agent which already did this, use the same library and functionality but focus on providing just the initial opening conversation, no more no less)
-
 - that chat agent should assume the LLM model provided in the env var and will answer based on my question and conversation
 
 - do not provide code in the docs, just an overview
@@ -101,8 +99,6 @@ You need to install the frontend dependencies first:
 
 
 ------
-read thoroughly the chat agent CLI codebase at /home/chaschel/Documents/ibm/ai/distance.so/agent
-
 write your analysis on how to vastly improve the chat agent CLI to API based on the chat integration already done at /home/chaschel/Documents/ibm/ai/chat
 
 I want the chat agent design to be comprehensive enough to address questions regardless if customer already or not yet across services business (e.g. hvac, plumbing, restoration etc) based on provided context at KB.MD, POLICY.MD and PROMPT.MD
@@ -453,9 +449,6 @@ ask if you need to clarify anything
 
 
 ----
-read the codebase at /home/chaschel/Documents/ibm/ai/distance.so/agent since it 
-has sophisticated bag of tricks like phase-based etc.
-
 can you confirm that the chat agent codebase at /home/chaschel/Documents/ibm/ai/chat
 incorporates the same techniques? if not, adapt them, you do not adapt it
 wholesale, just the general ideas or principles.
@@ -577,7 +570,6 @@ write your documentation as addendum to DOCS_SIMULATION.MD
 
 
 ---
-read again the codebase at /home/chaschel/Documents/ibm/ai/distance.so/agent
 and adapt its heuristic ranking based on broad categories that can be 
 applicable regardless of services businesses
 

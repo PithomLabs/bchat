@@ -14,8 +14,8 @@ import (
 )
 
 func (d *DB) CreateMemo(ctx context.Context, create *store.Memo) (*store.Memo, error) {
-	fields := []string{"`uid`", "`creator_id`", "`content`", "`visibility`", "`payload`"}
-	placeholder := []string{"?", "?", "?", "?", "?"}
+	fields := []string{"`uid`", "`creator_id`", "`content`", "`visibility`", "`payload`", "`tenant_id`"}
+	placeholder := []string{"?", "?", "?", "?", "?", "?"}
 	payload := "{}"
 	if create.Payload != nil {
 		payloadBytes, err := protojson.Marshal(create.Payload)
@@ -24,7 +24,7 @@ func (d *DB) CreateMemo(ctx context.Context, create *store.Memo) (*store.Memo, e
 		}
 		payload = string(payloadBytes)
 	}
-	args := []any{create.UID, create.CreatorID, create.Content, create.Visibility, payload}
+	args := []any{create.UID, create.CreatorID, create.Content, create.Visibility, payload, create.TenantID}
 
 	stmt := "INSERT INTO `memo` (" + strings.Join(fields, ", ") + ") VALUES (" + strings.Join(placeholder, ", ") + ") RETURNING `id`, `created_ts`, `updated_ts`, `row_status`"
 	if err := d.db.QueryRowContext(ctx, stmt, args...).Scan(
@@ -81,6 +81,9 @@ func (d *DB) ListMemos(ctx context.Context, find *store.FindMemo) ([]*store.Memo
 	}
 	if v := find.Pinned; v != nil {
 		where, args = append(where, "`memo`.`pinned` = ?"), append(args, *v)
+	}
+	if v := find.TenantID; v != nil {
+		where, args = append(where, "`memo`.`tenant_id` = ?"), append(args, *v)
 	}
 	if v := find.PayloadFind; v != nil {
 		if v.Raw != nil {
@@ -149,6 +152,7 @@ func (d *DB) ListMemos(ctx context.Context, find *store.FindMemo) ([]*store.Memo
 		"`memo`.`visibility` AS `visibility`",
 		"`memo`.`pinned` AS `pinned`",
 		"`memo`.`payload` AS `payload`",
+		"`memo`.`tenant_id` AS `tenant_id`",
 		"`memo_relation`.`related_memo_id` AS `parent_id`",
 	}
 	if !find.ExcludeContent {
@@ -186,6 +190,7 @@ func (d *DB) ListMemos(ctx context.Context, find *store.FindMemo) ([]*store.Memo
 			&memo.Visibility,
 			&memo.Pinned,
 			&payloadBytes,
+			&memo.TenantID,
 			&memo.ParentID,
 		}
 		if !find.ExcludeContent {
@@ -238,6 +243,9 @@ func (d *DB) UpdateMemo(ctx context.Context, update *store.UpdateMemo) error {
 			return err
 		}
 		set, args = append(set, "`payload` = ?"), append(args, string(payloadBytes))
+	}
+	if v := update.TenantID; v != nil {
+		set, args = append(set, "`tenant_id` = ?"), append(args, *v)
 	}
 	if len(set) == 0 {
 		return nil

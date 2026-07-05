@@ -51,6 +51,9 @@ type Memo struct {
 	Pinned     bool
 	Payload    *storepb.MemoPayload
 
+	// Tenant isolation
+	TenantID *int32
+
 	// Composed fields
 	ParentID *int32
 }
@@ -75,6 +78,9 @@ type FindMemo struct {
 	ExcludeContent  bool
 	ExcludeComments bool
 	Filter          *string
+
+	// Tenant isolation
+	TenantID *int32
 
 	// Pagination
 	Limit  *int
@@ -105,6 +111,7 @@ type UpdateMemo struct {
 	Visibility *Visibility
 	Pinned     *bool
 	Payload    *storepb.MemoPayload
+	TenantID   *int32
 }
 
 type DeleteMemo struct {

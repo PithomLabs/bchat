@@ -25,6 +25,7 @@ const (
 	// user id is extracted from the jwt token subject field.
 	usernameContextKey ContextKey = iota
 	accessTokenContextKey
+	tenantIDContextKey
 )
 
 // GRPCAuthInterceptor is the auth interceptor for gRPC server.
@@ -52,7 +53,7 @@ func (in *GRPCAuthInterceptor) AuthenticationInterceptor(ctx context.Context, re
 		return nil, status.Errorf(codes.Unauthenticated, "failed to get access token: %v", err)
 	}
 
-	username, err := in.authenticate(ctx, accessToken)
+	username, tenantID, err := in.authenticate(ctx, accessToken)
 	if err != nil {
 		if isUnauthorizeAllowedMethod(serverInfo.FullMethod) {
 			return handler(ctx, request)
@@ -77,12 +78,15 @@ func (in *GRPCAuthInterceptor) AuthenticationInterceptor(ctx context.Context, re
 
 	ctx = context.WithValue(ctx, usernameContextKey, username)
 	ctx = context.WithValue(ctx, accessTokenContextKey, accessToken)
+	if tenantID != nil {
+		ctx = context.WithValue(ctx, tenantIDContextKey, *tenantID)
+	}
 	return handler(ctx, request)
 }
 
-func (in *GRPCAuthInterceptor) authenticate(ctx context.Context, accessToken string) (string, error) {
+func (in *GRPCAuthInterceptor) authenticate(ctx context.Context, accessToken string) (string, *int32, error) {
 	if accessToken == "" {
-		return "", status.Errorf(codes.Unauthenticated, "access token not found")
+		return "", nil, status.Errorf(codes.Unauthenticated, "access token not found")
 	}
 	claims := &ClaimsMessage{}
 	_, err := jwt.ParseWithClaims(accessToken, claims, func(t *jwt.Token) (any, error) {
@@ -97,36 +101,36 @@ func (in *GRPCAuthInterceptor) authenticate(ctx context.Context, accessToken str
 		return nil, status.Errorf(codes.Unauthenticated, "unexpected access token kid=%v", t.Header["kid"])
 	})
 	if err != nil {
-		return "", status.Errorf(codes.Unauthenticated, "Invalid or expired access token")
+		return "", nil, status.Errorf(codes.Unauthenticated, "Invalid or expired access token")
 	}
 
 	// We either have a valid access token or we will attempt to generate new access token.
 	userID, err := util.ConvertStringToInt32(claims.Subject)
 	if err != nil {
-		return "", errors.Wrap(err, "malformed ID in the token")
+		return "", nil, errors.Wrap(err, "malformed ID in the token")
 	}
 	user, err := in.Store.GetUser(ctx, &store.FindUser{
 		ID: &userID,
 	})
 	if err != nil {
-		return "", errors.Wrap(err, "failed to get user")
+		return "", nil, errors.Wrap(err, "failed to get user")
 	}
 	if user == nil {
-		return "", errors.Errorf("user %q not exists", userID)
+		return "", nil, errors.Errorf("user %q not exists", userID)
 	}
 	if user.RowStatus == store.Archived {
-		return "", errors.Errorf("user %q is archived", userID)
+		return "", nil, errors.Errorf("user %q is archived", userID)
 	}
 
 	accessTokens, err := in.Store.GetUserAccessTokens(ctx, user.ID)
 	if err != nil {
-		return "", errors.Wrapf(err, "failed to get user access tokens")
+		return "", nil, errors.Wrapf(err, "failed to get user access tokens")
 	}
 	if !validateAccessToken(accessToken, accessTokens) {
-		return "", status.Errorf(codes.Unauthenticated, "invalid access token")
+		return "", nil, status.Errorf(codes.Unauthenticated, "invalid access token")
 	}
 
-	return user.Username, nil
+	return user.Username, claims.TenantID, nil
 }
 
 func getTokenFromMetadata(md metadata.MD) (string, error) {
@@ -159,4 +163,13 @@ func validateAccessToken(accessTokenString string, userAccessTokens []*storepb.A
 		}
 	}
 	return false
+}
+
+// GetTenantIDFromContext extracts the tenant ID from the gRPC context.
+// Returns nil if no tenant is set (e.g., for admin users or legacy tokens).
+func GetTenantIDFromContext(ctx context.Context) *int32 {
+	if v, ok := ctx.Value(tenantIDContextKey).(int32); ok {
+		return &v
+	}
+	return nil
 }

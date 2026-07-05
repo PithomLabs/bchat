@@ -8,7 +8,7 @@ See [DOCS_CHAT_PAGE.MD](./DOCS_CHAT_PAGE.MD) for the existing chat integration i
 
 ## Executive Summary
 
-This document analyzes the existing CLI-based chat agent at `/home/chaschel/Documents/ibm/ai/distance.so/agent` and provides a comprehensive design for transforming it into a multi-tenant API service integrated with the Memos chat platform. The design supports multiple service verticals (HVAC, plumbing, restoration, etc.) with a unified architecture.
+This document analyzes the existing CLI-based chat agent and provides a comprehensive design for transforming it into a multi-tenant API service integrated with the Memos chat platform. The design supports multiple service verticals (HVAC, plumbing, restoration, etc.) with a unified architecture.
 
 ---
 

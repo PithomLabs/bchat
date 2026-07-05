@@ -3589,17 +3589,15 @@ func (s *Service) findExistingEscalationTicket(ctx context.Context, tenantID int
 		return nil
 	}
 	ticketType := "agent_escalation"
-	tickets, err := s.store.ListTickets(ctx, &store.FindTicket{Type: &ticketType})
+	tickets, err := s.store.ListTickets(ctx, &store.FindTicket{Type: &ticketType, TenantID: &tenantID})
 	if err != nil {
 		slog.Warn("failed to list escalation tickets for dedupe", "tenant_id", tenantID, "session_id", sessionID, "error", err)
 		return nil
 	}
-	tenantMarker := fmt.Sprintf("Tenant ID:** %d", tenantID)
 	sessionMarker := fmt.Sprintf("Session ID:** %s", sessionID)
-	fallbackTenantMarker := fmt.Sprintf("Tenant ID: %d", tenantID)
 	fallbackSessionMarker := fmt.Sprintf("Session ID: %s", sessionID)
 	for _, ticket := range tickets {
-		if strings.Contains(ticket.Description, fallbackTenantMarker) && strings.Contains(ticket.Description, fallbackSessionMarker) {
+		if strings.Contains(ticket.Description, fallbackSessionMarker) {
 			return ticket
 		}
 		memoUID := strings.TrimPrefix(ticket.Description, "/m/")
@@ -3610,7 +3608,7 @@ func (s *Service) findExistingEscalationTicket(ctx context.Context, tenantID int
 		if err != nil || memo == nil {
 			continue
 		}
-		if strings.Contains(memo.Content, tenantMarker) && strings.Contains(memo.Content, sessionMarker) {
+		if strings.Contains(memo.Content, sessionMarker) {
 			return ticket
 		}
 	}
@@ -3752,13 +3750,14 @@ func (s *Service) CreateEscalationTicket(ctx context.Context, tenantID int32, ti
 		CreatorID:  creatorID,
 		Content:    memoContent.String(),
 		Visibility: store.Protected,
+		TenantID:   &tenantID,
 	}
 
 	createdMemo, err := s.store.CreateMemo(ctx, memo)
 	if err != nil {
 		slog.Error("failed to create escalation memo", "error", err, "ticket_number", ticketNumber)
 		// Fall back to old behavior if memo creation fails
-		return s.createEscalationTicketFallback(ctx, ticketNumber, ticketType, customerInfo, issue)
+		return s.createEscalationTicketFallback(ctx, tenantID, ticketNumber, ticketType, customerInfo, issue)
 	}
 
 	// Determine priority
@@ -3778,6 +3777,7 @@ func (s *Service) CreateEscalationTicket(ctx context.Context, tenantID int32, ti
 		CreatedTs:   now,
 		UpdatedTs:   now,
 		Type:        "agent_escalation",
+		TenantID:    &tenantID,
 	}
 
 	created, err := s.store.CreateTicket(ctx, ticket)
@@ -3800,10 +3800,10 @@ func (s *Service) CreateEscalationTicket(ctx context.Context, tenantID int32, ti
 }
 
 // createEscalationTicketFallback creates a ticket without memo (legacy fallback)
-func (s *Service) createEscalationTicketFallback(ctx context.Context, ticketNumber, ticketType string, customerInfo map[string]string, issue string) (*EscalationTicketInfo, error) {
+func (s *Service) createEscalationTicketFallback(ctx context.Context, tenantID int32, ticketNumber, ticketType string, customerInfo map[string]string, issue string) (*EscalationTicketInfo, error) {
 	// Build description with embedded content (fallback)
+	// NOTE: Do NOT include tenant_id in description - it's a security risk (PII leak)
 	description := fmt.Sprintf("/m/agent-escalation\n\nTicket: %s\nType: %s\n", ticketNumber, ticketType)
-	description += fmt.Sprintf("Tenant ID: %s\n", customerInfo["tenant_id"])
 	if sessionID, ok := customerInfo["session_id"]; ok && sessionID != "" {
 		description += fmt.Sprintf("Session ID: %s\n", sessionID)
 	}
@@ -3842,6 +3842,7 @@ func (s *Service) createEscalationTicketFallback(ctx context.Context, ticketNumb
 		CreatedTs:   now,
 		UpdatedTs:   now,
 		Type:        "agent_escalation",
+		TenantID:    &tenantID,
 	}
 
 	created, err := s.store.CreateTicket(ctx, ticket)

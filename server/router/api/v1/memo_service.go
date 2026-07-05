@@ -49,6 +49,10 @@ func (s *APIV1Service) CreateMemo(ctx context.Context, request *v1pb.CreateMemoR
 		Content:    request.Memo.Content,
 		Visibility: convertVisibilityToStore(request.Memo.Visibility),
 	}
+	// Set tenant ID from context
+	if tenantID := GetTenantIDFromContext(ctx); tenantID != nil {
+		create.TenantID = tenantID
+	}
 	if !isSuperUser(user) {
 		create.Visibility = store.Private
 	}
@@ -155,6 +159,11 @@ func (s *APIV1Service) ListMemos(ctx context.Context, request *v1pb.ListMemosReq
 		memoFind.Filter = &request.Filter
 	}
 
+	// Apply tenant filter from context (defense-in-depth SQL safety net)
+	if tenantID := GetTenantIDFromContext(ctx); tenantID != nil {
+		memoFind.TenantID = tenantID
+	}
+
 	currentUser, err := s.GetCurrentUser(ctx)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to get user")
@@ -247,11 +256,18 @@ func (s *APIV1Service) GetMemo(ctx context.Context, request *v1pb.GetMemoRequest
 	if memo == nil {
 		return nil, status.Errorf(codes.NotFound, "memo not found")
 	}
+
+	// Check tenant ownership (superusers bypass this check)
+	user, err := s.GetCurrentUser(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get user")
+	}
+	tenantID := GetTenantIDFromContext(ctx)
+	if tenantID != nil && memo.TenantID != nil && *memo.TenantID != *tenantID && !isSuperUser(user) {
+		return nil, status.Errorf(codes.PermissionDenied, "permission denied")
+	}
+
 	if memo.Visibility != store.Public {
-		user, err := s.GetCurrentUser(ctx)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to get user")
-		}
 		if user == nil {
 			return nil, status.Errorf(codes.PermissionDenied, "permission denied")
 		}
@@ -288,6 +304,13 @@ func (s *APIV1Service) UpdateMemo(ctx context.Context, request *v1pb.UpdateMemoR
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to get current user")
 	}
+
+	// Check tenant ownership (superusers bypass this check)
+	tenantID := GetTenantIDFromContext(ctx)
+	if tenantID != nil && memo.TenantID != nil && *memo.TenantID != *tenantID && !isSuperUser(user) {
+		return nil, status.Errorf(codes.PermissionDenied, "permission denied")
+	}
+
 	// Only the creator or admin can update the memo.
 	if memo.CreatorID != user.ID && !isSuperUser(user) {
 		return nil, status.Errorf(codes.PermissionDenied, "permission denied")
@@ -410,7 +433,14 @@ func (s *APIV1Service) DeleteMemo(ctx context.Context, request *v1pb.DeleteMemoR
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to get current user")
 	}
-	// Only the creator or admin can update the memo.
+
+	// Check tenant ownership (superusers bypass this check)
+	tenantID := GetTenantIDFromContext(ctx)
+	if tenantID != nil && memo.TenantID != nil && *memo.TenantID != *tenantID && !isSuperUser(user) {
+		return nil, status.Errorf(codes.PermissionDenied, "permission denied")
+	}
+
+	// Only the creator or admin can delete the memo.
 	if memo.CreatorID != user.ID && !isSuperUser(user) {
 		return nil, status.Errorf(codes.PermissionDenied, "permission denied")
 	}
@@ -1126,6 +1156,7 @@ func (s *APIV1Service) handleTicketAIResponse(ctx context.Context, memoUID strin
 		CreatorID:  store.SystemBotID,
 		Content:    aiReply,
 		Visibility: store.Protected,
+		TenantID:   &tenantID,
 	}
 	if err := memopayload.RebuildMemoPayload(aiMemo); err != nil {
 		slog.Error("AI support: failed to rebuild payload", "error", err)

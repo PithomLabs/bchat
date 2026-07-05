@@ -44,57 +44,15 @@ func (s *RSSService) RegisterRoutes(g *echo.Group) {
 }
 
 func (s *RSSService) GetExploreRSS(c echo.Context) error {
-	ctx := c.Request().Context()
-	normalStatus := store.Normal
-	memoFind := store.FindMemo{
-		RowStatus:      &normalStatus,
-		VisibilityList: []store.Visibility{store.Public},
-	}
-	memoList, err := s.Store.ListMemos(ctx, &memoFind)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to find memo list").SetInternal(err)
-	}
-
-	baseURL := c.Scheme() + "://" + c.Request().Host
-	rss, err := s.generateRSSFromMemoList(ctx, memoList, baseURL)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate rss").SetInternal(err)
-	}
-	c.Response().Header().Set(echo.HeaderContentType, echo.MIMEApplicationXMLCharsetUTF8)
-	return c.String(http.StatusOK, rss)
+	return c.JSON(http.StatusGone, map[string]string{
+		"error": "RSS feeds are disabled for security reasons",
+	})
 }
 
 func (s *RSSService) GetUserRSS(c echo.Context) error {
-	ctx := c.Request().Context()
-	username := c.Param("username")
-	user, err := s.Store.GetUser(ctx, &store.FindUser{
-		Username: &username,
+	return c.JSON(http.StatusGone, map[string]string{
+		"error": "RSS feeds are disabled for security reasons",
 	})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to find user").SetInternal(err)
-	}
-	if user == nil {
-		return echo.NewHTTPError(http.StatusNotFound, "User not found")
-	}
-
-	normalStatus := store.Normal
-	memoFind := store.FindMemo{
-		CreatorID:      &user.ID,
-		RowStatus:      &normalStatus,
-		VisibilityList: []store.Visibility{store.Public},
-	}
-	memoList, err := s.Store.ListMemos(ctx, &memoFind)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to find memo list").SetInternal(err)
-	}
-
-	baseURL := c.Scheme() + "://" + c.Request().Host
-	rss, err := s.generateRSSFromMemoList(ctx, memoList, baseURL)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate rss").SetInternal(err)
-	}
-	c.Response().Header().Set(echo.HeaderContentType, echo.MIMEApplicationXMLCharsetUTF8)
-	return c.String(http.StatusOK, rss)
 }
 
 func (s *RSSService) generateRSSFromMemoList(ctx context.Context, memoList []*store.Memo, baseURL string) (string, error) {
