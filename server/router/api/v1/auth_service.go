@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/labstack/echo/v4"
 	"github.com/pkg/errors"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc"
@@ -162,13 +164,13 @@ func (s *APIV1Service) SignIn(ctx context.Context, request *v1pb.SignInRequest) 
 		// Previously this was 100 years, which posed a security risk.
 		expireTime = time.Now().Add(MaxNeverExpireDuration)
 	}
-	if err := s.doSignIn(ctx, existingUser, expireTime); err != nil {
+	if err := s.doSignIn(ctx, existingUser, nil, expireTime); err != nil {
 		return nil, err
 	}
 	return convertUserFromStore(existingUser), nil
 }
 
-func (s *APIV1Service) doSignIn(ctx context.Context, user *store.User, expireTime time.Time) error {
+func (s *APIV1Service) doSignIn(ctx context.Context, user *store.User, tenantID *int32, expireTime time.Time) error {
 	// External users MUST have a company association to log in.
 	if user.Role == store.RoleUser {
 		perms, err := s.Store.ListUserTenantPermissions(ctx, &store.FindUserTenantPermission{UserID: &user.ID})
@@ -178,9 +180,15 @@ func (s *APIV1Service) doSignIn(ctx context.Context, user *store.User, expireTim
 		if len(perms) == 0 {
 			return status.Errorf(codes.PermissionDenied, "user is not associated with any company")
 		}
+		// Auto-select single tenant if not already specified
+		if tenantID == nil && len(perms) == 1 {
+			tenantID = &perms[0].TenantID
+		} else if tenantID == nil && len(perms) > 1 {
+			return status.Errorf(codes.FailedPrecondition, "multiple tenants found, use /auth/tenants endpoint")
+		}
 	}
 
-	accessToken, err := GenerateAccessToken(user.Email, user.ID, expireTime, []byte(s.Secret))
+	accessToken, err := GenerateAccessToken(user.Email, user.ID, tenantID, expireTime, []byte(s.Secret))
 	if err != nil {
 		return status.Errorf(codes.Internal, "failed to generate access token, error: %v", err)
 	}
@@ -243,7 +251,7 @@ func (s *APIV1Service) SignUp(ctx context.Context, request *v1pb.SignUpRequest) 
 		return nil, status.Errorf(codes.Internal, "failed to create user, error: %v", err)
 	}
 
-	if err := s.doSignIn(ctx, user, time.Now().Add(AccessTokenDuration)); err != nil {
+	if err := s.doSignIn(ctx, user, nil, time.Now().Add(AccessTokenDuration)); err != nil {
 		return nil, err
 	}
 	return convertUserFromStore(user), nil
@@ -325,4 +333,201 @@ func (s *APIV1Service) GetCurrentUser(ctx context.Context) (*store.User, error) 
 		return nil, err
 	}
 	return user, nil
+}
+
+// ============================================================================
+// REST Endpoints for Tenant Selection (multi-tenant sign-in flow)
+// ============================================================================
+
+// TenantInfo represents a tenant in the selection response.
+type TenantInfo struct {
+	ID   int32  `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+}
+
+// AuthTenantsResponse is the response for POST /api/v1/auth/tenants.
+type AuthTenantsResponse struct {
+	Tenants       []TenantInfo `json:"tenants"`
+	SelectionToken string      `json:"selection_token"`
+}
+
+// SelectTenantRequest is the request for POST /api/v1/auth/select-tenant.
+type SelectTenantRequest struct {
+	SelectionToken string `json:"selection_token"`
+	TenantID       int32  `json:"tenant_id"`
+}
+
+// HandleAuthTenants handles POST /api/v1/auth/tenants.
+// Validates credentials and returns available tenants + selection token.
+func (s *APIV1Service) HandleAuthTenants(c echo.Context) error {
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
+	}
+
+	// Validate credentials
+	user, err := s.Store.GetUser(c.Request().Context(), &store.FindUser{
+		Username: &req.Username,
+	})
+	if err != nil || user == nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "invalid credentials")
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "invalid credentials")
+	}
+	if user.RowStatus == store.Archived {
+		return echo.NewHTTPError(http.StatusForbidden, "user is archived")
+	}
+
+	// Check if password auth is allowed
+	workspaceGeneralSetting, err := s.Store.GetWorkspaceGeneralSetting(c.Request().Context())
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get workspace settings")
+	}
+	if workspaceGeneralSetting.DisallowPasswordAuth && user.Role == store.RoleUser {
+		return echo.NewHTTPError(http.StatusForbidden, "password signin is not allowed")
+	}
+
+	// Get tenant permissions
+	perms, err := s.Store.ListUserTenantPermissions(c.Request().Context(), &store.FindUserTenantPermission{UserID: &user.ID})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get tenant permissions")
+	}
+	if len(perms) == 0 {
+		return echo.NewHTTPError(http.StatusForbidden, "user is not associated with any company")
+	}
+
+	// Build tenant list
+	tenants := make([]TenantInfo, 0, len(perms))
+	for _, perm := range perms {
+		tenant, err := s.Store.GetAgentTenant(c.Request().Context(), &store.FindAgentTenant{ID: &perm.TenantID})
+		if err != nil || tenant == nil {
+			continue
+		}
+		tenants = append(tenants, TenantInfo{
+			ID:   tenant.ID,
+			Name: tenant.CompanyName,
+			Slug: tenant.Slug,
+		})
+	}
+
+	// Generate selection token (random string)
+	selectionToken, err := util.RandomString(32)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to generate selection token")
+	}
+
+	// Store selection token with timestamp in description for 5-min expiry enforcement
+	tokenTimestamp := time.Now().Unix()
+	selectionDescription := fmt.Sprintf("tenant-selection-token:%d", tokenTimestamp)
+	if err := s.UpsertAccessTokenToStore(c.Request().Context(), user, "selection:"+selectionToken, selectionDescription); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to store selection token")
+	}
+
+	return c.JSON(http.StatusOK, AuthTenantsResponse{
+		Tenants:        tenants,
+		SelectionToken: selectionToken,
+	})
+}
+
+// HandleSelectTenant handles POST /api/v1/auth/select-tenant.
+// Validates selection token and returns full JWT with tenant_id.
+func (s *APIV1Service) HandleSelectTenant(c echo.Context) error {
+	var req SelectTenantRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
+	}
+
+	if req.SelectionToken == "" || req.TenantID == 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "selection_token and tenant_id are required")
+	}
+
+	// Find user by selection token
+	// The selection token is stored as "selection:<token>" in the access token
+	// We need to find which user owns this token
+	ctx := c.Request().Context()
+	users, err := s.Store.ListUsers(ctx, &store.FindUser{})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to list users")
+	}
+
+	var matchedUser *store.User
+	var tokenCreatedAt time.Time
+	for _, user := range users {
+		tokens, err := s.Store.GetUserAccessTokens(ctx, user.ID)
+		if err != nil {
+			continue
+		}
+		for _, token := range tokens {
+			if token.AccessToken == "selection:"+req.SelectionToken {
+				matchedUser = user
+				// Parse timestamp from description
+				if _, err := fmt.Sscanf(token.Description, "tenant-selection-token:%d", &tokenCreatedAt); err == nil {
+					tokenCreatedAt = time.Unix(tokenCreatedAt.Unix(), 0)
+				}
+				break
+			}
+		}
+		if matchedUser != nil {
+			break
+		}
+	}
+
+	if matchedUser == nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "invalid or expired selection token")
+	}
+
+	// Check if selection token was created within 5 minutes
+	if time.Since(tokenCreatedAt) > 5*time.Minute {
+		// Token expired, remove it
+		_ = s.Store.RemoveUserAccessToken(ctx, matchedUser.ID, "selection:"+req.SelectionToken)
+		return echo.NewHTTPError(http.StatusUnauthorized, "selection token expired, please sign in again")
+	}
+
+	// Verify user has access to the target tenant
+	perm, err := s.Store.GetUserTenantPermission(ctx, &store.FindUserTenantPermission{
+		UserID:   &matchedUser.ID,
+		TenantID: &req.TenantID,
+	})
+	if err != nil || perm == nil {
+		return echo.NewHTTPError(http.StatusForbidden, "user does not have access to this tenant")
+	}
+
+	// Delete the selection token (single-use)
+	if err := s.Store.RemoveUserAccessToken(ctx, matchedUser.ID, "selection:"+req.SelectionToken); err != nil {
+		slog.Warn("failed to delete selection token", "error", err)
+	}
+
+	// Generate full JWT with tenant_id
+	expireTime := time.Now().Add(AccessTokenDuration)
+	accessToken, err := GenerateAccessToken(matchedUser.Email, matchedUser.ID, &req.TenantID, expireTime, []byte(s.Secret))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to generate access token")
+	}
+	if err := s.UpsertAccessTokenToStore(ctx, matchedUser, accessToken, "tenant-selection"); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to store access token")
+	}
+
+	// Set cookie
+	cookie, err := s.buildAccessTokenCookie(ctx, accessToken, expireTime)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to build cookie")
+	}
+	c.SetCookie(&http.Cookie{
+		Name:     AccessTokenCookieName,
+		Value:    accessToken,
+		Path:     "/",
+		HttpOnly: true,
+		Expires:  expireTime,
+	})
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"access_token": accessToken,
+		"cookie":       cookie,
+		"tenant_id":    req.TenantID,
+	})
 }

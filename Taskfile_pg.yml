@@ -1,0 +1,128 @@
+version: '3'
+
+includes:
+  common:
+    taskfile: ./Taskfile.yml
+    flatten: true
+    excludes:
+      - validate:migrations
+      - run
+      - run:rag
+      - run:testrag
+      - run:binary
+      - run:rag:l12
+      - fly:db-check
+
+tasks:
+
+  # =============================================================================
+  # Postgres Validation
+  # =============================================================================
+
+  validate:migrations:
+    desc: Validate Postgres LATEST.sql is in sync with migration files
+    cmds:
+      - ./scripts/validate-pg-migrations.sh
+
+  # =============================================================================
+  # Postgres Database Management
+  # =============================================================================
+
+  postgres:start:
+    desc: Start local Postgres container for development
+    cmds:
+      - docker compose -f scripts/docker-compose.postgres.yml up -d
+      - echo "Postgres running at postgresql://bchat:bchat@localhost:5432/bchat"
+
+  postgres:stop:
+    desc: Stop local Postgres container (data preserved)
+    cmds:
+      - docker compose -f scripts/docker-compose.postgres.yml stop
+
+  postgres:status:
+    desc: Show local Postgres container status
+    cmds:
+      - docker compose -f scripts/docker-compose.postgres.yml ps
+
+  postgres:logs:
+    desc: Stream local Postgres container logs (Ctrl+C to exit)
+    cmds:
+      - docker compose -f scripts/docker-compose.postgres.yml logs -f
+
+  postgres:reset:
+    desc: Reset local Postgres database (destroys all data)
+    cmds:
+      - docker compose -f scripts/docker-compose.postgres.yml down -v
+      - docker compose -f scripts/docker-compose.postgres.yml up -d
+      - echo "Postgres reset. Database recreated at postgresql://bchat:bchat@localhost:5432/bchat"
+
+  # =============================================================================
+  # Run Commands (Postgres variants)
+  # =============================================================================
+
+  run:
+    desc: Run development server with Postgres (sources .env file if present)
+    deps: [build:backend]
+    cmds:
+      - |
+        if [ -f .env ]; then
+          echo "Loading environment from .env file..."
+          set -a && source .env && set +a
+        fi
+        DB_DRIVER=postgres ./build/memos --mode dev
+
+  run:rag:
+    desc: Run with RAG + Postgres (sources .env file, local storage)
+    deps: [build:backend:rag]
+    cmds:
+      - |
+        if [ -f .env ]; then
+          echo "Loading environment from .env file..."
+          set -a && source .env && set +a
+        fi
+        DB_DRIVER=postgres FORCE_REINDEX_ON_STARTUP=false RAG_PIPELINE_ENABLED=true EMBEDDING_MODEL=openai/text-embedding-3-small EMBEDDING_BATCH_SIZE=1 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev
+
+  run:testrag:
+    desc: Run with RAG + Postgres + force full reindex on startup
+    deps: [build:backend:rag]
+    cmds:
+      - |
+        if [ -f .env ]; then
+          echo "Loading environment from .env file..."
+          set -a && source .env && set +a
+        fi
+        DB_DRIVER=postgres FORCE_REINDEX_ON_STARTUP=true RAG_PIPELINE_ENABLED=true EMBEDDING_MODEL=qwen/qwen3-embedding-8b EMBEDDING_BATCH_SIZE=32 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev
+
+  run:binary:
+    desc: Run pre-compiled binary with RAG + Postgres (sources .env file)
+    cmds:
+      - |
+        if [ -f .env ]; then
+          echo "Loading environment from .env file..."
+          set -a && source .env && set +a
+        fi
+        LD_LIBRARY_PATH={{.LANCEDB_LIB_DIR}}:$LD_LIBRARY_PATH DB_DRIVER=postgres RAG_PIPELINE_ENABLED=true EMBEDDING_MODEL=qwen/qwen3-embedding-8b EMBEDDING_BATCH_SIZE=10 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev
+
+  run:rag:l12:
+    desc: Run with RAG + L12 embeddings + Postgres (sources .env file)
+    deps: [build:backend:rag]
+    cmds:
+      - |
+        if [ -f .env ]; then
+          echo "Loading environment from .env file..."
+          set -a && source .env && set +a
+        fi
+        DB_DRIVER=postgres \
+        RAG_PIPELINE_ENABLED=true \
+        EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L12-v2 \
+        LANCEDB_STORAGE_PROVIDER=local \
+        ./build/memos --mode dev
+
+  # =============================================================================
+  # Fly.io Deployment (Postgres variants)
+  # =============================================================================
+
+  fly:db-check:
+    desc: Validate Postgres database migrations before fly.io deployment
+    cmds:
+      - ./scripts/validate-pg-migrations.sh

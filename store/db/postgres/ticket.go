@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -18,11 +19,18 @@ func (d *DB) CreateTicket(ctx context.Context, create *store.Ticket) (*store.Tic
 			creator_id,
 			assignee_id,
 			created_ts,
-			updated_ts
+			updated_ts,
+			type,
+			tags,
+			tenant_id
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id
 	`
+	tagsBytes, err := json.Marshal(create.Tags)
+	if err != nil {
+		return nil, err
+	}
 	if err := d.db.QueryRowContext(
 		ctx,
 		stmt,
@@ -34,6 +42,9 @@ func (d *DB) CreateTicket(ctx context.Context, create *store.Ticket) (*store.Tic
 		create.AssigneeID,
 		create.CreatedTs,
 		create.UpdatedTs,
+		create.Type,
+		string(tagsBytes),
+		create.TenantID,
 	).Scan(&create.ID); err != nil {
 		return nil, err
 	}
@@ -66,6 +77,11 @@ func (d *DB) ListTickets(ctx context.Context, find *store.FindTicket) ([]*store.
 		args = append(args, *find.Description)
 		argCounter++
 	}
+	if find.TenantID != nil {
+		where = append(where, fmt.Sprintf("tenant_id = $%d", argCounter))
+		args = append(args, *find.TenantID)
+		argCounter++
+	}
 
 	query := fmt.Sprintf(`
 		SELECT
@@ -77,7 +93,10 @@ func (d *DB) ListTickets(ctx context.Context, find *store.FindTicket) ([]*store.
 			creator_id,
 			assignee_id,
 			created_ts,
-			updated_ts
+			updated_ts,
+			type,
+			tags,
+			tenant_id
 		FROM tickets
 		WHERE %s
 		ORDER BY created_ts DESC
@@ -92,6 +111,7 @@ func (d *DB) ListTickets(ctx context.Context, find *store.FindTicket) ([]*store.
 	list := make([]*store.Ticket, 0)
 	for rows.Next() {
 		var ticket store.Ticket
+		var tagsStr string
 		if err := rows.Scan(
 			&ticket.ID,
 			&ticket.Title,
@@ -102,8 +122,14 @@ func (d *DB) ListTickets(ctx context.Context, find *store.FindTicket) ([]*store.
 			&ticket.AssigneeID,
 			&ticket.CreatedTs,
 			&ticket.UpdatedTs,
+			&ticket.Type,
+			&tagsStr,
+			&ticket.TenantID,
 		); err != nil {
 			return nil, err
+		}
+		if err := json.Unmarshal([]byte(tagsStr), &ticket.Tags); err != nil {
+			ticket.Tags = []string{}
 		}
 		list = append(list, &ticket)
 	}
@@ -166,10 +192,11 @@ func (d *DB) UpdateTicket(ctx context.Context, update *store.UpdateTicket) (*sto
 		UPDATE tickets
 		SET %s
 		WHERE id = $%d
-		RETURNING id, title, description, status, priority, creator_id, assignee_id, created_ts, updated_ts
+		RETURNING id, title, description, status, priority, creator_id, assignee_id, created_ts, updated_ts, type, tags, tenant_id
 	`, strings.Join(set, ", "), argCounter)
 
 	var ticket store.Ticket
+	var tagsStr string
 	if err := d.db.QueryRowContext(ctx, stmt, args...).Scan(
 		&ticket.ID,
 		&ticket.Title,
@@ -180,6 +207,9 @@ func (d *DB) UpdateTicket(ctx context.Context, update *store.UpdateTicket) (*sto
 		&ticket.AssigneeID,
 		&ticket.CreatedTs,
 		&ticket.UpdatedTs,
+		&ticket.Type,
+		&tagsStr,
+		&ticket.TenantID,
 	); err != nil {
 		return nil, err
 	}

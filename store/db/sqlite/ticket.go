@@ -25,9 +25,10 @@ func (d *DB) CreateTicket(ctx context.Context, create *store.Ticket) (*store.Tic
 			created_ts,
 			updated_ts,
 			type,
-			tags
+			tags,
+			tenant_id
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		RETURNING id
 	`
 	if err := d.db.QueryRowContext(
@@ -43,6 +44,7 @@ func (d *DB) CreateTicket(ctx context.Context, create *store.Ticket) (*store.Tic
 		create.UpdatedTs,
 		create.Type,
 		string(tagsBytes),
+		create.TenantID,
 	).Scan(&create.ID); err != nil {
 		return nil, err
 	}
@@ -68,6 +70,10 @@ func (d *DB) ListTickets(ctx context.Context, find *store.FindTicket) ([]*store.
 		where = append(where, "description = ?")
 		args = append(args, *find.Description)
 	}
+	if find.TenantID != nil {
+		where = append(where, "tenant_id = ?")
+		args = append(args, *find.TenantID)
+	}
 
 	query := fmt.Sprintf(`
 		SELECT
@@ -81,7 +87,8 @@ func (d *DB) ListTickets(ctx context.Context, find *store.FindTicket) ([]*store.
 			created_ts,
 			updated_ts,
 			type,
-			tags
+			tags,
+			tenant_id
 		FROM tickets
 		WHERE %s
 		ORDER BY created_ts DESC
@@ -109,6 +116,7 @@ func (d *DB) ListTickets(ctx context.Context, find *store.FindTicket) ([]*store.
 			&ticket.UpdatedTs,
 			&ticket.Type,
 			&tagsStr,
+			&ticket.TenantID,
 		); err != nil {
 			return nil, err
 		}
@@ -181,7 +189,7 @@ func (d *DB) UpdateTicket(ctx context.Context, update *store.UpdateTicket) (*sto
 		UPDATE tickets
 		SET %s
 		WHERE id = ?
-		RETURNING id, title, description, status, priority, creator_id, assignee_id, created_ts, updated_ts, type, tags
+		RETURNING id, title, description, status, priority, creator_id, assignee_id, created_ts, updated_ts, type, tags, tenant_id
 	`, strings.Join(set, ", "))
 
 	var ticket store.Ticket
@@ -198,6 +206,7 @@ func (d *DB) UpdateTicket(ctx context.Context, update *store.UpdateTicket) (*sto
 		&ticket.UpdatedTs,
 		&ticket.Type,
 		&tagsStr,
+		&ticket.TenantID,
 	); err != nil {
 		return nil, err
 	}

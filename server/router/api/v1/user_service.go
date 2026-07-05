@@ -458,7 +458,7 @@ func (s *APIV1Service) CreateUserAccessToken(ctx context.Context, request *v1pb.
 		expiresAt = request.ExpiresAt.AsTime()
 	}
 
-	accessToken, err := GenerateAccessToken(currentUser.Username, currentUser.ID, expiresAt, []byte(s.Secret))
+	accessToken, err := GenerateAccessToken(currentUser.Username, currentUser.ID, nil, expiresAt, []byte(s.Secret))
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to generate access token: %v", err)
 	}

@@ -33,6 +33,7 @@ type Ticket struct {
 	UpdatedTs   int64
 	Type        string
 	Tags        []string
+	TenantID    *int32
 }
 
 type FindTicket struct {
@@ -40,6 +41,7 @@ type FindTicket struct {
 	CreatorID   *int32
 	Type        *string
 	Description *string
+	TenantID    *int32
 }
 
 type UpdateTicket struct {

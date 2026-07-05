@@ -24,7 +24,7 @@ Based on a detailed analysis of the `bchat` codebase at `/home/chaschel/Document
 
 **No, the current active codebase does not use the PocketFlow library/framework directly.** 
 
-According to [DOCS_CHAT_DESIGN.MD](file:///home/chaschel/Documents/go/bchat/docs/DOCS_CHAT_DESIGN.MD) and [DOCS_SIMULATION_2.26.MD](file:///home/chaschel/Documents/go/bchat/docs/DOCS_SIMULATION_2.26.MD), the original chat agent (initially built as a CLI tool at `/home/chaschel/Documents/ibm/ai/distance.so/agent`) was implemented using **PocketFlow**, a node-based workflow pipeline engine. That pipeline operated via a sequence of distinct execution blocks:
+According to [DOCS_CHAT_DESIGN.MD](file:///home/chaschel/Documents/go/bchat/docs/DOCS_CHAT_DESIGN.MD) and [DOCS_SIMULATION_2.26.MD](file:///home/chaschel/Documents/go/bchat/docs/DOCS_SIMULATION_2.26.MD), the original chat agent was implemented using **PocketFlow**, a node-based workflow pipeline engine. That pipeline operated via a sequence of distinct execution blocks:
 ```
 User Input ──▶ P0Node ──▶ [Emergency | Extract]Node ──▶ DecideNode ──▶ ChatNode ──▶ SupervisorNode
 ```

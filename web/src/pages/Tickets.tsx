@@ -645,7 +645,7 @@ const Tickets = observer(() => {
                                                     cacheKey="ticket-description-new"
                                                     placeholder="Write ticket description..."
                                                     autoFocus
-                                                    defaultVisibility={Visibility.PUBLIC}
+                                                    defaultVisibility={Visibility.PROTECTED}
                                                     onConfirm={handleDescriptionCreated}
                                                     onCancel={() => setIsCreatingDescription(false)}
                                                 />

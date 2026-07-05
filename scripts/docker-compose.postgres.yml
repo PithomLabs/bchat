@@ -1,0 +1,39 @@
+# =============================================================================
+# Local Postgres Container for BCHAT Development
+# =============================================================================
+# Start:   docker compose -f scripts/docker-compose.postgres.yml up -d
+# Stop:    docker compose -f scripts/docker-compose.postgres.yml down
+# Status:  docker compose -f scripts/docker-compose.postgres.yml ps
+# Logs:    docker compose -f scripts/docker-compose.postgres.yml logs -f
+# Reset:   docker compose -f scripts/docker-compose.postgres.yml down -v && docker compose -f scripts/docker-compose.postgres.yml up -d
+#
+# Credentials:
+#   URL:      postgresql://bchat:bchat@localhost:5432/bchat
+#   Host:     localhost
+#   Port:     5432
+#   Database: bchat
+#   User:     bchat
+#   Password: bchat
+# =============================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: bchat-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: bchat
+      POSTGRES_USER: bchat
+      POSTGRES_PASSWORD: bchat
+    ports:
+      - "5432:5432"
+    volumes:
+      - bchat_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bchat -d bchat"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  bchat_pgdata:

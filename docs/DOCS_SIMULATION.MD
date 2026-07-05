@@ -1731,7 +1731,6 @@ Based on conversation analysis, apply these specific behaviors:
 
 **Date:** 2026-01-20
 **Status:** Proposal (Not Yet Implemented)
-**Reference:** Analysis of distance.so/agent sophisticated patterns
 
 ## Executive Summary
 
@@ -1852,7 +1851,7 @@ CLOSING PROTOCOL:
 5. If 3 turns without closure → gently prompt: "If you're all set, feel free to reach out anytime!"
 ```
 
-**D. Escape Hatch (from distance.so/agent):**
+**D. Escape Hatch **
 
 If in `closing` phase and user sends revert keywords, return to `gathering`:
 ```go
@@ -1944,7 +1943,7 @@ if exclusion.Referral != "" {
 | Safety concern | Safety protocol triggered + unresolved | Auto-escalate |
 | Out of scope + insistent | Declined + customer persists | Offer escalation |
 
-**B. Two-Stage Verification (from distance.so/agent):**
+**B. Two-Stage Verification:**
 
 ```go
 func (s *Service) shouldEscalate(ctx context.Context, message string, session *store.AgentSession) (bool, string) {
@@ -2153,7 +2152,7 @@ INFORMATION TO COLLECT:
 
 ---
 
-## Design Principles (from distance.so/agent)
+## Design Principles 
 
 ### Adapted Principles
 
@@ -3547,9 +3546,9 @@ The current agent self-improvement system has critical issues:
 
 ---
 
-## Reference Architecture: OPUS13 (distance.so/agent)
+## Reference Architecture: OPUS13
 
-The `distance.so/agent` codebase implements a sophisticated multi-tier heuristic system called **OPUS13**. Key innovations:
+Codebase implements a sophisticated multi-tier heuristic system called **OPUS13**. Key innovations:
 
 ### 1. Multi-Tier Scoring with Fail-Safe Defaults
 

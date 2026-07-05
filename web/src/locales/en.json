@@ -11,8 +11,11 @@
     "host-tip": "You are registering as the Site Host.",
     "new-password": "New password",
     "repeat-new-password": "Repeat the new password",
+    "select-tenant": "Select Company",
+    "select-tenant-tip": "Please select a company to continue",
     "sign-in-tip": "Already have an account?",
-    "sign-up-tip": "Don't have an account yet?"
+    "sign-up-tip": "Don't have an account yet?",
+    "switch-tenant": "Switch Company"
   },
   "common": {
     "about": "About",
