@@ -18,14 +18,15 @@ import (
 
 func (d *DB) CreateAgentTenant(ctx context.Context, tenant *store.AgentTenant) (*store.AgentTenant, error) {
 	stmt := `
-		INSERT INTO agent_tenants (slug, company_name, guid, vertical, is_active, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO agent_tenants (slug, company_name, guid, widget_key, vertical, is_active, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		RETURNING id
 	`
 	now := time.Now()
-	tenant.GUID = uuid.New().String() // Generate UUID for security
+	tenant.GUID = uuid.New().String()
+	tenant.WidgetKey = uuid.New().String()
 	if err := d.db.QueryRowContext(ctx, stmt,
-		tenant.Slug, tenant.CompanyName, tenant.GUID, tenant.Vertical, tenant.IsActive, now, now,
+		tenant.Slug, tenant.CompanyName, tenant.GUID, tenant.WidgetKey, tenant.Vertical, tenant.IsActive, now, now,
 	).Scan(&tenant.ID); err != nil {
 		return nil, err
 	}
@@ -61,7 +62,7 @@ func (d *DB) ListAgentTenants(ctx context.Context, find *store.FindAgentTenant) 
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, slug, company_name, guid, vertical, is_active, processing_options, allowed_domains, created_at, updated_at
+		SELECT id, slug, company_name, guid, widget_key, vertical, is_active, processing_options, allowed_domains, created_at, updated_at
 		FROM agent_tenants
 		WHERE %s
 		ORDER BY created_at DESC
@@ -76,12 +77,15 @@ func (d *DB) ListAgentTenants(ctx context.Context, find *store.FindAgentTenant) 
 	var tenants []*store.AgentTenant
 	for rows.Next() {
 		var t store.AgentTenant
-		var guid, vertical, processingOptions, allowedDomains sql.NullString
-		if err := rows.Scan(&t.ID, &t.Slug, &t.CompanyName, &guid, &vertical, &t.IsActive, &processingOptions, &allowedDomains, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		var guid, widgetKey, vertical, processingOptions, allowedDomains sql.NullString
+		if err := rows.Scan(&t.ID, &t.Slug, &t.CompanyName, &guid, &widgetKey, &vertical, &t.IsActive, &processingOptions, &allowedDomains, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if guid.Valid {
 			t.GUID = guid.String
+		}
+		if widgetKey.Valid {
+			t.WidgetKey = widgetKey.String
 		}
 		if vertical.Valid {
 			t.Vertical = vertical.String
@@ -100,7 +104,7 @@ func (d *DB) ListAgentTenants(ctx context.Context, find *store.FindAgentTenant) 
 func (d *DB) UpdateAgentTenant(ctx context.Context, tenant *store.AgentTenant) (*store.AgentTenant, error) {
 	stmt := `
 		UPDATE agent_tenants
-		SET company_name = ?, vertical = ?, is_active = ?, processing_options = ?, allowed_domains = ?, updated_at = ?
+		SET company_name = ?, vertical = ?, is_active = ?, processing_options = ?, allowed_domains = ?, widget_key = ?, updated_at = ?
 		WHERE id = ?
 	`
 	now := time.Now()
@@ -112,7 +116,11 @@ func (d *DB) UpdateAgentTenant(ctx context.Context, tenant *store.AgentTenant) (
 	if tenant.AllowedDomains != "" {
 		allowedDomains = tenant.AllowedDomains
 	}
-	_, err := d.db.ExecContext(ctx, stmt, tenant.CompanyName, tenant.Vertical, tenant.IsActive, processingOptions, allowedDomains, now, tenant.ID)
+	var widgetKey interface{} = nil
+	if tenant.WidgetKey != "" {
+		widgetKey = tenant.WidgetKey
+	}
+	_, err := d.db.ExecContext(ctx, stmt, tenant.CompanyName, tenant.Vertical, tenant.IsActive, processingOptions, allowedDomains, widgetKey, now, tenant.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -1270,6 +1278,103 @@ func (d *DB) ResetAgentRateLimit(ctx context.Context, tenantID int32, audienceTy
 		WHERE tenant_id = ? AND audience_type = ? AND client_ip = ?
 	`, now, tenantID, audienceType, clientIP)
 	return err
+}
+
+// CheckAndIncrementAgentRateLimit atomically checks the rate limit and increments
+// the counter in a single SQL statement, eliminating the TOCTOU race condition.
+// Returns true if the request is allowed, false if rate limited.
+func (d *DB) CheckAndIncrementAgentRateLimit(ctx context.Context, tenantID int32, audienceType, clientIP string, rpm int) (bool, error) {
+	if rpm <= 0 {
+		rpm = 60
+	}
+	now := time.Now()
+	windowSeconds := 60.0
+
+	// CTE captures the pre-update count so RETURNING can decide correctly.
+	// Without CTE, RETURNING sees post-update state and can't distinguish
+	// "just incremented to rpm" from "already at rpm before this request".
+	var allowed bool
+	err := d.db.QueryRowContext(ctx, `
+		WITH old AS (
+			SELECT request_count FROM agent_rate_limits
+			WHERE tenant_id = ? AND audience_type = ? AND client_ip = ?
+		)
+		INSERT INTO agent_rate_limits (tenant_id, audience_type, client_ip, request_count, window_start)
+		VALUES (?, ?, ?, 1, ?)
+		ON CONFLICT(tenant_id, audience_type, client_ip) DO UPDATE SET
+			request_count = CASE
+				WHEN (julianday(?) - julianday(agent_rate_limits.window_start)) * 86400 > ? THEN 1
+				WHEN agent_rate_limits.request_count < ? THEN agent_rate_limits.request_count + 1
+				ELSE agent_rate_limits.request_count
+			END,
+			window_start = CASE
+				WHEN (julianday(?) - julianday(agent_rate_limits.window_start)) * 86400 > ? THEN ?
+				ELSE agent_rate_limits.window_start
+			END
+		RETURNING CASE
+			WHEN (julianday(?) - julianday(window_start)) * 86400 > ? THEN 1
+			WHEN NOT EXISTS (SELECT 1 FROM old) THEN 1
+			WHEN (SELECT request_count FROM old) < ? THEN 1
+			ELSE 0
+		END
+	`, tenantID, audienceType, clientIP,
+		tenantID, audienceType, clientIP, now,
+		now, windowSeconds, rpm,
+		now, windowSeconds, now,
+		now, windowSeconds, rpm,
+	).Scan(&allowed)
+	if err != nil {
+		return false, err
+	}
+	return allowed, nil
+}
+
+const tenantGlobalIPSentinel = "__tenant_global__"
+
+// CheckAndIncrementTenantGlobalRateLimit atomically checks the per-tenant global
+// rate limit (ignoring IP) to cap total requests per tenant per minute.
+func (d *DB) CheckAndIncrementTenantGlobalRateLimit(ctx context.Context, tenantID int32, audienceType string, rpm int) (bool, error) {
+	if rpm <= 0 {
+		rpm = 300 // default global tenant cap
+	}
+	now := time.Now()
+	windowSeconds := 60.0
+	clientIP := tenantGlobalIPSentinel
+
+	var allowed bool
+	err := d.db.QueryRowContext(ctx, `
+		WITH old AS (
+			SELECT request_count FROM agent_rate_limits
+			WHERE tenant_id = ? AND audience_type = ? AND client_ip = ?
+		)
+		INSERT INTO agent_rate_limits (tenant_id, audience_type, client_ip, request_count, window_start)
+		VALUES (?, ?, ?, 1, ?)
+		ON CONFLICT(tenant_id, audience_type, client_ip) DO UPDATE SET
+			request_count = CASE
+				WHEN (julianday(?) - julianday(agent_rate_limits.window_start)) * 86400 > ? THEN 1
+				WHEN agent_rate_limits.request_count < ? THEN agent_rate_limits.request_count + 1
+				ELSE agent_rate_limits.request_count
+			END,
+			window_start = CASE
+				WHEN (julianday(?) - julianday(agent_rate_limits.window_start)) * 86400 > ? THEN ?
+				ELSE agent_rate_limits.window_start
+			END
+		RETURNING CASE
+			WHEN (julianday(?) - julianday(window_start)) * 86400 > ? THEN 1
+			WHEN NOT EXISTS (SELECT 1 FROM old) THEN 1
+			WHEN (SELECT request_count FROM old) < ? THEN 1
+			ELSE 0
+		END
+	`, tenantID, audienceType, clientIP,
+		tenantID, audienceType, clientIP, now,
+		now, windowSeconds, rpm,
+		now, windowSeconds, now,
+		now, windowSeconds, rpm,
+	).Scan(&allowed)
+	if err != nil {
+		return false, err
+	}
+	return allowed, nil
 }
 
 // ============================================================================

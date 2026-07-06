@@ -258,6 +258,15 @@ func (s *Store) getSchemaVersionOfMigrateScript(filePath string) (string, error)
 // execute runs a single SQL statement within a transaction.
 func (*Store) execute(ctx context.Context, tx *sql.Tx, stmt string) error {
 	if _, err := tx.ExecContext(ctx, stmt); err != nil {
+		// Tolerate "duplicate column" errors for ALTER TABLE ADD COLUMN.
+		// This makes migrations idempotent if re-run (e.g., corrupted history).
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "duplicate column") ||
+			strings.Contains(errMsg, "already exists") ||
+			strings.Contains(errMsg, "column already exists") {
+			slog.Warn("migration: column already exists, skipping", slog.String("error", errMsg))
+			return nil
+		}
 		return errors.Wrap(err, "failed to execute statement")
 	}
 	return nil

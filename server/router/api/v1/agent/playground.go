@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -530,6 +531,20 @@ func (h *Handler) HandlePlaygroundRun(c echo.Context) error {
 	existingTenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
 	if err != nil || existingTenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Playground demo not available. Try again later.")
+	}
+
+	// Widget key gate (fail-closed, same as chat/ext)
+	if existingTenant.WidgetKey == "" {
+		slog.Error("playground: tenant has no widget key", "slug", slug)
+		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
+	}
+	widgetKey := c.Request().Header.Get("X-Widget-Key")
+	if widgetKey == "" {
+		widgetKey = c.QueryParam("widget_key")
+	}
+	if widgetKey == "" || subtle.ConstantTimeCompare([]byte(widgetKey), []byte(existingTenant.WidgetKey)) != 1 {
+		slog.Info("playground: invalid widget key", "slug", slug)
+		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
 	}
 
 	var req PlaygroundRunRequest

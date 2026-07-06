@@ -18,6 +18,7 @@ interface AgentChatWidgetProps {
   position?: "bottom-right" | "bottom-left";
   primaryColor?: string;
   companyName?: string;
+  widgetKey?: string;
 }
 
 const AgentChatWidget = ({
@@ -25,6 +26,7 @@ const AgentChatWidget = ({
   position = "bottom-right",
   primaryColor = "#0d9488",
   companyName,
+  widgetKey,
 }: AgentChatWidgetProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
@@ -152,7 +154,10 @@ const AgentChatWidget = ({
     try {
       const response = await fetch(`/api/v1/agent/${tenantSlug}/chat/ext`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(widgetKey ? { "X-Widget-Key": widgetKey } : {}),
+        },
         body: JSON.stringify({
           session_id: sessionId,
           message: userMessage,

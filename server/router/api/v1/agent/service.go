@@ -104,6 +104,11 @@ func NewService(s *store.Store, p *profile.Profile) *Service {
 		// Fall back to no-op if initialization fails
 		vectorDB = NewNoOpVectorDB()
 	}
+	// Wire store into pool for per-tenant override resolution
+	if pool, ok := vectorDB.(*TenantVectorDBPool); ok {
+		pool.SetStore(s)
+		slog.Info("Per-tenant VectorDB pool initialized with store")
+	}
 	svc.vectorDB = vectorDB
 	svc.vectorDBConfig = vectorDBConfig
 
@@ -246,6 +251,10 @@ func (s *Service) RefreshVectorDB() error {
 	vectorDB, err := NewVectorDB(vectorDBConfig)
 	if err != nil {
 		return fmt.Errorf("failed to refresh VectorDB: %w", err)
+	}
+	// Wire store into pool for per-tenant override resolution
+	if pool, ok := vectorDB.(*TenantVectorDBPool); ok {
+		pool.SetStore(s.store)
 	}
 
 	s.vectorDB = vectorDB
@@ -1331,35 +1340,17 @@ func (s *Service) verifyResponseWithLLM(ctx context.Context, response string, co
 // ============================================================================
 
 // CheckRateLimit checks if a request is within rate limits.
+// Uses an atomic store-level check-and-increment to prevent TOCTOU races.
 func (s *Service) CheckRateLimit(ctx context.Context, tenantID int32, audienceType, clientIP string, rpm int) (bool, error) {
 	if rpm <= 0 {
 		rpm = 60 // default
 	}
 
-	rl, err := s.store.GetOrCreateAgentRateLimit(ctx, tenantID, audienceType, clientIP)
+	allowed, err := s.store.CheckAndIncrementAgentRateLimit(ctx, tenantID, audienceType, clientIP, rpm)
 	if err != nil {
 		return false, err
 	}
-
-	// Check if window has expired (1 minute)
-	if time.Since(rl.WindowStart) > time.Minute {
-		if err := s.store.ResetAgentRateLimit(ctx, tenantID, audienceType, clientIP); err != nil {
-			return false, err
-		}
-		return true, nil
-	}
-
-	// Check if under limit
-	if rl.RequestCount >= rpm {
-		return false, nil
-	}
-
-	// Increment counter
-	if err := s.store.IncrementAgentRateLimit(ctx, tenantID, audienceType, clientIP); err != nil {
-		return false, err
-	}
-
-	return true, nil
+	return allowed, nil
 }
 
 // ============================================================================
@@ -1575,7 +1566,7 @@ func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAg
 	}
 
 	// Validate message length (Issue #2)
-	maxLen := 4000 // default
+	maxLen := 2000 // default
 	if config.Audience != nil && config.Audience.MaxMessageLength > 0 {
 		maxLen = config.Audience.MaxMessageLength
 	}
@@ -1599,15 +1590,32 @@ func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAg
 		return nil, fmt.Errorf("rate limit exceeded")
 	}
 
+	// Global per-tenant rate limit (ignores IP, caps total tenant throughput)
+	const globalTenantRPM = 300
+	globalAllowed, err := s.store.CheckAndIncrementTenantGlobalRateLimit(ctx, config.TenantID, "external", globalTenantRPM)
+	if err != nil {
+		slog.Error("global tenant rate limit check failed", "error", err)
+	}
+	if !globalAllowed {
+		return nil, fmt.Errorf("rate limit exceeded")
+	}
+
 	// Get or create a tenant-scoped in-memory session.
 	session := s.memorySessions.GetOrCreate(config.TenantID, sessionID)
 
+	// Per-session turn cap (defense-in-depth against spam; real cost boundary is global tenant cap)
+	const maxSessionTurns = 50
+	if session.MessageCount >= maxSessionTurns {
+		return nil, fmt.Errorf("session turn limit exceeded (%d turns)", maxSessionTurns)
+	}
+
 	// Generate HMAC session token for transcript access (30-minute expiry)
+	// Uses private WidgetKey instead of GUID (GUID is exposed in widget.js/config).
 	tokenExpiry := time.Now().Add(30 * time.Minute)
 	tenant, tErr := s.store.GetAgentTenant(ctx, &store.FindAgentTenant{ID: &config.TenantID})
 	var sessionToken, sessionTokenExpiry string
-	if tErr == nil && tenant != nil && tenant.GUID != "" {
-		sessionToken = generateSessionToken(session.ID, tokenExpiry, tenant.GUID)
+	if tErr == nil && tenant != nil && tenant.WidgetKey != "" {
+		sessionToken = generateSessionToken(session.ID, tokenExpiry, tenant.WidgetKey)
 		sessionTokenExpiry = tokenExpiry.Format(time.RFC3339)
 	}
 
@@ -1792,7 +1800,7 @@ func (s *Service) ChatInternal(ctx context.Context, tenantSlug string, userID in
 	}
 
 	// Validate message length
-	maxLen := 4000 // default
+	maxLen := 2000 // default
 	if config.Audience != nil && config.Audience.MaxMessageLength > 0 {
 		maxLen = config.Audience.MaxMessageLength
 	}

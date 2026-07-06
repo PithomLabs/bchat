@@ -67,12 +67,18 @@ type VectorDBConfig struct {
 	StorageProvider string // "memory", "local", or "s3"
 	LocalPath       string // For local: "build/data/lancedb/"
 
+	// URI override — when set, newLanceVectorDB uses this instead of building from bucket/path.
+	// Used by the per-tenant pool to pass pre-built per-tenant URIs.
+	URI string
+
 	// S3/Tigrisdata configuration (for production)
-	S3Endpoint  string // "fly.storage.tigris.dev" for Tigrisdata
-	S3Bucket    string
-	S3Region    string // "auto" for Tigrisdata
-	S3AccessKey string
-	S3SecretKey string
+	S3Endpoint      string // "t3.storage.dev" for Tigrisdata (canonical)
+	S3Bucket        string
+	S3Region        string // "auto" for Tigrisdata
+	S3AccessKey     string
+	S3SecretKey     string
+	S3ForcePathStyle bool   // false for Tigris (virtual-hosted); true for MinIO/R2 path-style
+	S3AllowHTTP     bool   // false for production (HTTPS); true for local dev
 
 	// Embedding configuration
 	EmbeddingConfig *EmbeddingConfig
@@ -88,14 +94,22 @@ type VectorDBConfig struct {
 
 // NewVectorDBConfigFromEnv creates a VectorDBConfig from environment variables.
 func NewVectorDBConfigFromEnv() *VectorDBConfig {
+	// S3 endpoint: prefer LANCEDB_S3_ENDPOINT, fallback to AWS_ENDPOINT_URL_S3
+	s3Endpoint := getEnvOrDefault("LANCEDB_S3_ENDPOINT", "")
+	if s3Endpoint == "" {
+		s3Endpoint = getEnvOrDefault("AWS_ENDPOINT_URL_S3", "t3.storage.dev")
+	}
+
 	return &VectorDBConfig{
 		StorageProvider:     getEnvOrDefault("LANCEDB_STORAGE_PROVIDER", "memory"),
 		LocalPath:           getEnvOrDefault("LANCEDB_LOCAL_PATH", "build/data/lancedb"),
-		S3Endpoint:          getEnvOrDefault("LANCEDB_S3_ENDPOINT", "fly.storage.tigris.dev"),
+		S3Endpoint:          s3Endpoint,
 		S3Bucket:            os.Getenv("LANCEDB_S3_BUCKET"),
 		S3Region:            getEnvOrDefault("LANCEDB_S3_REGION", "auto"),
 		S3AccessKey:         os.Getenv("AWS_ACCESS_KEY_ID"),
 		S3SecretKey:         os.Getenv("AWS_SECRET_ACCESS_KEY"),
+		S3ForcePathStyle:    getEnvOrDefault("LANCEDB_S3_FORCE_PATH_STYLE", "false") == "true",
+		S3AllowHTTP:         getEnvOrDefault("LANCEDB_S3_ALLOW_HTTP", "false") == "true",
 		EmbeddingConfig:     NewEmbeddingConfigFromEnv(),
 		Enabled:             os.Getenv("RAG_PIPELINE_ENABLED") == "true",
 		HybridSearchEnabled: os.Getenv("HYBRID_SEARCH_ENABLED") == "true",
@@ -165,6 +179,60 @@ type VectorDBStats struct {
 	LastOptimized time.Time
 }
 
+// TenantS3Override holds per-tenant S3 storage overrides.
+// Stored as JSON in TenantConfig.VectorDBS3Override.
+type TenantS3Override struct {
+	Bucket        string `json:"bucket,omitempty"`
+	Prefix        string `json:"prefix,omitempty"`
+	Endpoint      string `json:"endpoint,omitempty"`
+	Region        string `json:"region,omitempty"`
+	AccessKeyID   string `json:"access_key_id,omitempty"`
+	SecretAccessKey string `json:"secret_access_key,omitempty"`
+	ForcePathStyle *bool `json:"force_path_style,omitempty"`
+}
+
+// resolveStorageTarget resolves the S3 URI and config for a tenant,
+// applying per-tenant overrides on top of global config.
+func resolveStorageTarget(global *VectorDBConfig, override *TenantS3Override, tenantID int32) (uri string, s3Cfg *VectorDBConfig) {
+	// Clone global config
+	resolved := *global
+
+	if override != nil {
+		if override.Bucket != "" {
+			resolved.S3Bucket = override.Bucket
+		}
+		if override.Endpoint != "" {
+			resolved.S3Endpoint = override.Endpoint
+		}
+		if override.Region != "" {
+			resolved.S3Region = override.Region
+		}
+		if override.AccessKeyID != "" {
+			resolved.S3AccessKey = override.AccessKeyID
+		}
+		if override.SecretAccessKey != "" {
+			resolved.S3SecretKey = override.SecretAccessKey
+		}
+		if override.ForcePathStyle != nil {
+			resolved.S3ForcePathStyle = *override.ForcePathStyle
+		}
+	}
+
+	// Build S3 URI with tenant prefix
+	prefix := "lancedb"
+	if override != nil && override.Prefix != "" {
+		prefix = override.Prefix
+	}
+	uri = fmt.Sprintf("s3://%s/%s/%d", resolved.S3Bucket, prefix, tenantID)
+
+	return uri, &resolved
+}
+
+// resolveLocalTarget resolves the local storage path for a tenant.
+func resolveLocalTarget(config *VectorDBConfig, tenantID int32) string {
+	return fmt.Sprintf("%s/%d", config.LocalPath, tenantID)
+}
+
 // NewVectorDB creates a vector database based on configuration.
 func NewVectorDB(config *VectorDBConfig) (VectorDB, error) {
 	if !config.Enabled {
@@ -185,10 +253,10 @@ func NewVectorDB(config *VectorDBConfig) (VectorDB, error) {
 		return NewMemoryVectorDB(embedSvc), nil
 	case "local":
 		slog.Info("Using local LanceDB storage", "path", config.LocalPath)
-		return newLanceVectorDB(config, embedSvc)
+		return newPool(config, embedSvc)
 	case "s3":
 		slog.Info("Using S3 LanceDB storage", "endpoint", config.S3Endpoint, "bucket", config.S3Bucket)
-		return newLanceVectorDB(config, embedSvc)
+		return newPool(config, embedSvc)
 	default:
 		return NewMemoryVectorDB(embedSvc), nil
 	}

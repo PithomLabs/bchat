@@ -203,6 +203,7 @@ CREATE TABLE agent_tenants (
     slug TEXT UNIQUE NOT NULL,
     company_name TEXT NOT NULL,
     guid TEXT,
+    widget_key TEXT,
     vertical TEXT,
     is_active INTEGER NOT NULL DEFAULT 1,
     processing_options TEXT,
@@ -212,6 +213,7 @@ CREATE TABLE agent_tenants (
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_tenants_guid ON agent_tenants(guid);
+CREATE INDEX IF NOT EXISTS idx_agent_tenants_widget_key ON agent_tenants(widget_key);
 
 -- agent_audiences
 CREATE TABLE agent_audiences (
@@ -230,7 +232,7 @@ CREATE TABLE agent_audiences (
     escalation_confidence_threshold REAL DEFAULT 0.85,
     rate_limit_rpm INTEGER DEFAULT 60,
     require_contact_on_fallback INTEGER DEFAULT 1,
-    max_message_length INTEGER DEFAULT 4000,
+    max_message_length INTEGER DEFAULT 2000,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(tenant_id, audience_type)
 );
@@ -456,6 +458,7 @@ CREATE TABLE tenant_config (
     record_transcripts INTEGER DEFAULT 1,
     reasoning_model TEXT DEFAULT '',
     admin_mutation_rate_limit_rpm INTEGER NOT NULL DEFAULT 30,
+    vector_db_s3_override TEXT DEFAULT '',
     updated_at BIGINT NOT NULL DEFAULT (strftime('%s', 'now')),
     updated_by INTEGER REFERENCES user(id) ON DELETE SET NULL
 );

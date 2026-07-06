@@ -11,11 +11,16 @@ export async function sendMessage(
 ): Promise<ChatResponse> {
   const url = `${config.baseUrl}/api/v1/agent/${config.tenant}/chat/ext`;
 
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (config.widgetKey) {
+    headers['X-Widget-Key'] = config.widgetKey;
+  }
+
   const response = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify({
       session_id: sessionId,
       message: message,

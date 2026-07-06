@@ -1,6 +1,7 @@
 # =============================================================================
 # Multi-stage Dockerfile for fly.io deployment with LanceDB RAG support
 # Runtime: Ubuntu 24.04 LTS (Noble Numbat)
+# Storage: S3/Tigris (per-tenant prefixes in shared bucket)
 # =============================================================================
 
 # Stage 1: Build frontend and widget
@@ -9,8 +10,10 @@ FROM node:20-alpine AS frontend
 # Build main frontend
 WORKDIR /frontend-build
 COPY web/package*.json ./
+COPY web/vendor ./vendor
 RUN npm ci
 COPY web/ .
+RUN test -f node_modules/@usememos/mui/dist/index.css
 RUN npm run release
 
 # Build widget
@@ -74,7 +77,7 @@ RUN chmod +x entrypoint.sh
 # Copy widget bundle for external embeds
 COPY --from=frontend /widget-build/dist ./widget/dist
 
-# Create data directory for SQLite and local storage
+# Create data directory for SQLite (LanceDB data lives in S3)
 RUN mkdir -p /var/opt/memos
 VOLUME /var/opt/memos
 
@@ -83,13 +86,20 @@ ENV TZ="UTC"
 ENV MEMOS_MODE="prod"
 ENV MEMOS_PORT="5230"
 
-# RAG pipeline configuration (mirrors task run:rag:l12)
+# RAG pipeline configuration (S3/Tigris storage)
 ENV RAG_PIPELINE_ENABLED="true"
 ENV LANCEDB_STORAGE_PROVIDER="s3"
-ENV LANCEDB_S3_ENDPOINT="fly.storage.tigris.dev"
+ENV LANCEDB_S3_ENDPOINT="t3.storage.dev"
 ENV LANCEDB_S3_REGION="auto"
+ENV LANCEDB_S3_FORCE_PATH_STYLE="false"
 ENV EMBEDDING_PROVIDER="openrouter"
 ENV EMBEDDING_MODEL="openai/text-embedding-3-small"
+ENV EMBEDDING_BATCH_SIZE="10"
+ENV EMBEDDING_TIMEOUT="10m"
+
+# LLM models
+ENV LLM_MODEL="poolside/laguna-m.1:free"
+ENV LLM_MODEL_REASONING="nvidia/nemotron-3-ultra-550b-a55b:free"
 
 # Optional LLM verifier (disabled by default)
 ENV LLM_VERIFIER_ENABLED="false"

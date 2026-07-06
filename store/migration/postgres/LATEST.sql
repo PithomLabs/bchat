@@ -140,6 +140,7 @@ CREATE TABLE agent_tenants (
   slug TEXT NOT NULL UNIQUE,
   company_name TEXT NOT NULL,
   guid TEXT NOT NULL UNIQUE,
+  widget_key TEXT,
   vertical TEXT,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   processing_options TEXT,
@@ -147,6 +148,8 @@ CREATE TABLE agent_tenants (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_agent_tenants_widget_key ON agent_tenants(widget_key);
 
 CREATE TABLE agent_audiences (
   id SERIAL PRIMARY KEY,
@@ -164,6 +167,7 @@ CREATE TABLE agent_audiences (
   escalation_confidence_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.85,
   rate_limit_rpm INTEGER NOT NULL DEFAULT 60,
   require_contact_on_fallback BOOLEAN NOT NULL DEFAULT TRUE,
+  max_message_length INTEGER NOT NULL DEFAULT 2000,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(tenant_id, audience_type)
 );

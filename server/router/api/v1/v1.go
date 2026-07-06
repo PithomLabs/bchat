@@ -251,6 +251,7 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	// Public routes (no auth required) - permissive CORS
 	publicGroup := echoServer.Group("/api/v1/agent")
 	publicGroup.Use(publicCORS)
+	publicGroup.Use(middleware.BodyLimit("16KB"))
 	publicGroup.GET("/playground/catalog", s.agentHandler.HandlePlaygroundCatalog)
 	publicGroup.POST("/:slug/chat/ext", s.agentHandler.HandleChatExternal)
 	publicGroup.GET("/:slug/chat/ext/transcript", s.agentHandler.HandleGetExternalTranscript)

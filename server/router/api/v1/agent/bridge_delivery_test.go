@@ -24,9 +24,9 @@ import (
 )
 
 // testTranscriptURL builds a transcript URL with valid HMAC session token.
-func testTranscriptURL(slug, sessionID, tenantGUID string) string {
+func testTranscriptURL(slug, sessionID, widgetKey string) string {
 	expiry := time.Now().Add(30 * time.Minute)
-	token := generateSessionToken(sessionID, expiry, tenantGUID)
+	token := generateSessionToken(sessionID, expiry, widgetKey)
 	expiryStr := expiry.Format(time.RFC3339)
 	q := url.Values{}
 	q.Set("session_id", sessionID)
@@ -88,7 +88,7 @@ func TestBChatLiveHumanReplyAppearsInVisitorTranscript(t *testing.T) {
 	// Verify via public GET transcript endpoint DTO mapping
 	e := echo.New()
 	handler := NewHandler(service, ts)
-	req := httptest.NewRequest(http.MethodGet, testTranscriptURL(tenant.Slug, sessionID, tenant.GUID), nil)
+	req := httptest.NewRequest(http.MethodGet, testTranscriptURL(tenant.Slug, sessionID, tenant.WidgetKey), nil)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetParamNames("slug")
@@ -657,7 +657,7 @@ func TestBChatLiveDoesNotExposeClaimTokenToVisitor(t *testing.T) {
 	handler := NewHandler(service, ts)
 
 	// Test GET transcript response body doesn't leak claim_token
-	req := httptest.NewRequest(http.MethodGet, testTranscriptURL(tenant.Slug, sessionID, tenant.GUID), nil)
+	req := httptest.NewRequest(http.MethodGet, testTranscriptURL(tenant.Slug, sessionID, tenant.WidgetKey), nil)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetParamNames("slug")
@@ -781,7 +781,7 @@ func TestBChatLiveWidgetLocalStorageUsage(t *testing.T) {
 }
 
 func TestLegacyWidgetDelegatesToModernBundle(t *testing.T) {
-	script := generateWidgetLoaderScript("https://chat.example.com", "acme support", "Acme")
+	script := generateWidgetLoaderScript("https://chat.example.com", "acme support", "Acme", "test-widget-key")
 
 	require.Contains(t, script, "window.AgentChatConfig")
 	require.Contains(t, script, `"https://chat.example.com/widget/acme%20support/embed.js"`)
@@ -842,6 +842,7 @@ func TestBChatLiveEndToEndVisitorHumanReplyFlow(t *testing.T) {
 	bodyChat1 := []byte(`{"message": "I need live operator help"}`)
 	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/live-e2e-flow/chat/ext", bytes.NewReader(bodyChat1))
 	req1.Header.Set("Content-Type", "application/json")
+	req1.Header.Set("X-Widget-Key", tenant.WidgetKey)
 	rec1 := httptest.NewRecorder()
 	c1 := e.NewContext(req1, rec1)
 	c1.SetParamNames("slug")
@@ -879,6 +880,7 @@ func TestBChatLiveEndToEndVisitorHumanReplyFlow(t *testing.T) {
 	bodyChat2 := []byte(fmt.Sprintf(`{"session_id": "%s", "message": "still waiting"}`, sessionID))
 	req3 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/live-e2e-flow/chat/ext", bytes.NewReader(bodyChat2))
 	req3.Header.Set("Content-Type", "application/json")
+	req3.Header.Set("X-Widget-Key", tenant.WidgetKey)
 	rec3 := httptest.NewRecorder()
 	c3 := e.NewContext(req3, rec3)
 	c3.SetParamNames("slug")
@@ -913,7 +915,7 @@ func TestBChatLiveEndToEndVisitorHumanReplyFlow(t *testing.T) {
 	require.Equal(t, "completed", respReply.WebChatDelivery.Status)
 
 	// 5. Visitor polls transcript (GET /chat/ext/transcript) and sees human reply
-	req5 := httptest.NewRequest(http.MethodGet, testTranscriptURL("live-e2e-flow", sessionID, tenant.GUID), nil)
+	req5 := httptest.NewRequest(http.MethodGet, testTranscriptURL("live-e2e-flow", sessionID, tenant.WidgetKey), nil)
 	rec5 := httptest.NewRecorder()
 	c5 := e.NewContext(req5, rec5)
 	c5.SetParamNames("slug")
@@ -950,6 +952,7 @@ func TestBChatLiveEndToEndVisitorHumanReplyFlow(t *testing.T) {
 	bodyChat3 := []byte(fmt.Sprintf(`{"session_id": "%s", "message": "thanks"}`, sessionID))
 	req6 := httptest.NewRequest(http.MethodPost, "/api/v1/agent/live-e2e-flow/chat/ext", bytes.NewReader(bodyChat3))
 	req6.Header.Set("Content-Type", "application/json")
+	req6.Header.Set("X-Widget-Key", tenant.WidgetKey)
 	rec6 := httptest.NewRecorder()
 	c6 := e.NewContext(req6, rec6)
 	c6.SetParamNames("slug")
@@ -991,7 +994,7 @@ func TestBChatLiveTranscriptEndpointDoesNotReturnSessionIDOrInternalIDs(t *testi
 
 	e := echo.New()
 	handler := NewHandler(service, ts)
-	req := httptest.NewRequest(http.MethodGet, testTranscriptURL(tenant.Slug, sessionID, tenant.GUID), nil)
+	req := httptest.NewRequest(http.MethodGet, testTranscriptURL(tenant.Slug, sessionID, tenant.WidgetKey), nil)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetParamNames("slug")
@@ -1025,7 +1028,7 @@ func TestBChatLiveTranscriptEndpointDoesNotLogRawSessionID(t *testing.T) {
 
 	e := echo.New()
 	handler := NewHandler(service, ts)
-	req := httptest.NewRequest(http.MethodGet, testTranscriptURL(tenant.Slug, sessionID, tenant.GUID), nil)
+	req := httptest.NewRequest(http.MethodGet, testTranscriptURL(tenant.Slug, sessionID, tenant.WidgetKey), nil)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetParamNames("slug")

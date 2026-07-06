@@ -13,7 +13,7 @@ func TestGetCurrentSchemaVersion(t *testing.T) {
 
 	currentSchemaVersion, err := ts.GetCurrentSchemaVersion()
 	require.NoError(t, err)
-	// Schema version should start with the current minor version (0.26.x).
+	// Schema version should start with the current minor version (0.28.x).
 	// Using Contains to avoid updating test on every patch version bump
-	require.Contains(t, currentSchemaVersion, "0.26.", "schema version should be 0.26.x")
+	require.Contains(t, currentSchemaVersion, "0.29.", "schema version should be 0.29.x")
 }

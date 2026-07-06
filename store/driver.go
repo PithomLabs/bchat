@@ -175,6 +175,8 @@ type Driver interface {
 	GetOrCreateAgentRateLimit(ctx context.Context, tenantID int32, audienceType, clientIP string) (*AgentRateLimit, error)
 	IncrementAgentRateLimit(ctx context.Context, tenantID int32, audienceType, clientIP string) error
 	ResetAgentRateLimit(ctx context.Context, tenantID int32, audienceType, clientIP string) error
+	CheckAndIncrementAgentRateLimit(ctx context.Context, tenantID int32, audienceType, clientIP string, rpm int) (bool, error)
+	CheckAndIncrementTenantGlobalRateLimit(ctx context.Context, tenantID int32, audienceType string, rpm int) (bool, error)
 
 	CreateAgentSimulationTranscript(ctx context.Context, transcript *AgentSimulationTranscript) (*AgentSimulationTranscript, error)
 	GetAgentSimulationTranscript(ctx context.Context, find *FindAgentSimulationTranscript) (*AgentSimulationTranscript, error)
