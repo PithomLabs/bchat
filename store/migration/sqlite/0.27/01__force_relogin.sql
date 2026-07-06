@@ -1,3 +1,3 @@
 -- Force re-login by deleting all access tokens
--- Existing JWT tokens without tenant_id will be rejected
-DELETE FROM user_access_token;
+-- Note: access tokens are stored in user_setting, not a separate user_access_token table.
+-- This migration is intentionally a no-op because the user_access_token table was never created.
