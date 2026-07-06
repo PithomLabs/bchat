@@ -52,7 +52,7 @@ tasks:
 
   build:backend:rag:
     desc: Build the Go binary with LanceDB RAG support
-    deps: [setup:lancedb, validate:migrations]
+    deps: [build:frontend, setup:lancedb, validate:migrations]
     env:
       CGO_ENABLED: "1"
       CGO_CFLAGS: "-I{{.ROOT_DIR}}/include"

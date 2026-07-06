@@ -89,7 +89,7 @@ ENV LANCEDB_STORAGE_PROVIDER="s3"
 ENV LANCEDB_S3_ENDPOINT="fly.storage.tigris.dev"
 ENV LANCEDB_S3_REGION="auto"
 ENV EMBEDDING_PROVIDER="openrouter"
-ENV EMBEDDING_MODEL="sentence-transformers/all-minilm-l12-v2"
+ENV EMBEDDING_MODEL="openai/text-embedding-3-small"
 
 # Optional LLM verifier (disabled by default)
 ENV LLM_VERIFIER_ENABLED="false"
