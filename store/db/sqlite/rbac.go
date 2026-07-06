@@ -164,7 +164,7 @@ func (d *DB) GetTenantConfig(ctx context.Context, find *store.FindTenantConfig) 
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, tenant_id, llm_model, simulation_human_model, reasoning_model, openrouter_api_key_encrypted, openrouter_api_key_nonce, features, retrieval_mode, content_tokens, record_transcripts, admin_mutation_rate_limit_rpm, updated_at, updated_by
+		SELECT id, tenant_id, llm_model, simulation_human_model, reasoning_model, openrouter_api_key_encrypted, openrouter_api_key_nonce, features, retrieval_mode, content_tokens, record_transcripts, admin_mutation_rate_limit_rpm, vector_db_s3_override, updated_at, updated_by
 		FROM tenant_config
 		WHERE %s
 		LIMIT 1
@@ -180,6 +180,7 @@ func (d *DB) GetTenantConfig(ctx context.Context, find *store.FindTenantConfig) 
 	var contentTokens sql.NullInt32
 	var recordTranscripts sql.NullInt64
 	var adminMutationRateLimit sql.NullInt32
+	var vectorDBS3Override sql.NullString
 	var updatedAtUnix int64
 	var updatedBy sql.NullInt32
 
@@ -187,7 +188,7 @@ func (d *DB) GetTenantConfig(ctx context.Context, find *store.FindTenantConfig) 
 		&config.ID, &config.TenantID, &llmModel, &simulationHumanModel, &reasoningModel,
 		&apiKeyEncrypted, &apiKeyNonce, &featuresJSON,
 		&retrievalMode, &contentTokens, &recordTranscripts, &adminMutationRateLimit,
-		&updatedAtUnix, &updatedBy,
+		&vectorDBS3Override, &updatedAtUnix, &updatedBy,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -226,6 +227,9 @@ func (d *DB) GetTenantConfig(ctx context.Context, find *store.FindTenantConfig) 
 	} else {
 		config.AdminMutationRateLimitRPM = 30
 	}
+	if vectorDBS3Override.Valid {
+		config.VectorDBS3Override = vectorDBS3Override.String
+	}
 	config.UpdatedAt = time.Unix(updatedAtUnix, 0)
 	if updatedBy.Valid {
 		config.UpdatedBy = &updatedBy.Int32
@@ -258,8 +262,8 @@ func (d *DB) UpsertTenantConfig(ctx context.Context, config *store.TenantConfig)
 	}
 
 	stmt := `
-		INSERT INTO tenant_config (tenant_id, llm_model, simulation_human_model, reasoning_model, openrouter_api_key_encrypted, openrouter_api_key_nonce, features, retrieval_mode, content_tokens, record_transcripts, admin_mutation_rate_limit_rpm, updated_at, updated_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO tenant_config (tenant_id, llm_model, simulation_human_model, reasoning_model, openrouter_api_key_encrypted, openrouter_api_key_nonce, features, retrieval_mode, content_tokens, record_transcripts, admin_mutation_rate_limit_rpm, vector_db_s3_override, updated_at, updated_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(tenant_id) DO UPDATE SET
 			llm_model = excluded.llm_model,
 			simulation_human_model = excluded.simulation_human_model,
@@ -271,13 +275,14 @@ func (d *DB) UpsertTenantConfig(ctx context.Context, config *store.TenantConfig)
 			content_tokens = excluded.content_tokens,
 			record_transcripts = excluded.record_transcripts,
 			admin_mutation_rate_limit_rpm = excluded.admin_mutation_rate_limit_rpm,
+			vector_db_s3_override = excluded.vector_db_s3_override,
 			updated_at = excluded.updated_at,
 			updated_by = excluded.updated_by
 		RETURNING id
 	`
 	if err := d.db.QueryRowContext(ctx, stmt,
 		config.TenantID, config.LLMModel, config.SimulationHumanModel, config.ReasoningModel, config.OpenRouterAPIKeyEncrypted, config.OpenRouterAPIKeyNonce,
-		string(featuresJSON), config.RetrievalMode, config.ContentTokens, recordTranscriptsInt, config.AdminMutationRateLimitRPM, now.Unix(), config.UpdatedBy,
+		string(featuresJSON), config.RetrievalMode, config.ContentTokens, recordTranscriptsInt, config.AdminMutationRateLimitRPM, config.VectorDBS3Override, now.Unix(), config.UpdatedBy,
 	).Scan(&config.ID); err != nil {
 		return nil, err
 	}

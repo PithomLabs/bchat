@@ -12,7 +12,8 @@ type AgentTenant struct {
 	ID                int32
 	Slug              string
 	CompanyName       string
-	GUID              string // Unique identifier for security (used in widget embed)
+	GUID              string // Unique identifier for widget identity (display/iframe)
+	WidgetKey         string // Per-tenant static key for edge gate (rotatable, private)
 	Vertical          string
 	IsActive          bool
 	ProcessingOptions string // JSON-encoded ProcessingOptions for Format for RAG
@@ -1003,6 +1004,14 @@ func (s *Store) IncrementAgentRateLimit(ctx context.Context, tenantID int32, aud
 
 func (s *Store) ResetAgentRateLimit(ctx context.Context, tenantID int32, audienceType, clientIP string) error {
 	return s.driver.ResetAgentRateLimit(ctx, tenantID, audienceType, clientIP)
+}
+
+func (s *Store) CheckAndIncrementAgentRateLimit(ctx context.Context, tenantID int32, audienceType, clientIP string, rpm int) (bool, error) {
+	return s.driver.CheckAndIncrementAgentRateLimit(ctx, tenantID, audienceType, clientIP, rpm)
+}
+
+func (s *Store) CheckAndIncrementTenantGlobalRateLimit(ctx context.Context, tenantID int32, audienceType string, rpm int) (bool, error) {
+	return s.driver.CheckAndIncrementTenantGlobalRateLimit(ctx, tenantID, audienceType, rpm)
 }
 
 func (s *Store) CreateAgentSimulationTranscript(ctx context.Context, transcript *AgentSimulationTranscript) (*AgentSimulationTranscript, error) {

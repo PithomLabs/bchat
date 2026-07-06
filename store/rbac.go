@@ -38,6 +38,7 @@ type TenantConfig struct {
 	ContentTokens             int32  // Estimated token count of KB + Policy content
 	RecordTranscripts         bool   // Whether to record chat conversation transcripts (default: true)
 	AdminMutationRateLimitRPM int    // Rate limit for admin mutation endpoints
+	VectorDBS3Override        string // JSON-encoded TenantS3Override for per-tenant S3 storage
 	UpdatedAt                 time.Time
 	UpdatedBy                 *int32
 }

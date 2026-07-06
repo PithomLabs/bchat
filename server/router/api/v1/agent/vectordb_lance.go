@@ -55,15 +55,21 @@ func newLanceVectorDB(config *VectorDBConfig, embedSvc EmbeddingService) (Vector
 		if config.S3Bucket == "" {
 			return nil, fmt.Errorf("LANCEDB_S3_BUCKET is required for S3 storage")
 		}
-		uri = fmt.Sprintf("s3://%s/lancedb", config.S3Bucket)
+		// Use pre-built URI if set (pool passes per-tenant URI), otherwise build from bucket
+		if config.URI != "" {
+			uri = config.URI
+		} else {
+			uri = fmt.Sprintf("s3://%s/lancedb", config.S3Bucket)
+		}
 		connOpts = &contracts.ConnectionOptions{
 			StorageOptions: &contracts.StorageOptions{
+				AllowHTTP: ptr(config.S3AllowHTTP),
 				S3Config: &contracts.S3Config{
 					Endpoint:        ptr(config.S3Endpoint),
 					Region:          ptr(config.S3Region),
 					AccessKeyID:     ptr(config.S3AccessKey),
 					SecretAccessKey: ptr(config.S3SecretKey),
-					ForcePathStyle:  ptr(true),
+					ForcePathStyle:  ptr(config.S3ForcePathStyle),
 				},
 			},
 		}

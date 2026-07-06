@@ -3,6 +3,7 @@ package mysql
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/usememos/memos/store"
@@ -218,6 +219,19 @@ func (d *DB) IncrementAgentRateLimit(ctx context.Context, tenantID int32, audien
 
 func (d *DB) ResetAgentRateLimit(ctx context.Context, tenantID int32, audienceType, clientIP string) error {
 	return errNotImplemented
+}
+
+func (d *DB) CheckAndIncrementAgentRateLimit(ctx context.Context, tenantID int32, audienceType, clientIP string, rpm int) (bool, error) {
+	// MySQL not supported for agent rate limiting — fail-open with warning.
+	slog.Warn("agent rate limit check not implemented for MySQL, allowing request",
+		"tenantID", tenantID, "clientIP", clientIP, "audienceType", audienceType)
+	return true, nil
+}
+
+func (d *DB) CheckAndIncrementTenantGlobalRateLimit(ctx context.Context, tenantID int32, audienceType string, rpm int) (bool, error) {
+	slog.Warn("tenant global rate limit check not implemented for MySQL, allowing request",
+		"tenantID", tenantID, "audienceType", audienceType)
+	return true, nil
 }
 
 // Agent Simulation Transcript methods

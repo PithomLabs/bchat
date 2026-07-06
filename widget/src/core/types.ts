@@ -8,6 +8,8 @@ export interface WidgetConfig {
   tenant: string;
   /** Company name to display in header */
   companyName?: string;
+  /** Per-tenant widget key for edge authentication */
+  widgetKey?: string;
   /** Primary color for branding (hex) */
   color: string;
   /** Widget position on screen */

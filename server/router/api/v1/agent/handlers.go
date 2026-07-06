@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -411,6 +412,20 @@ func (h *Handler) HandleChatExternal(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
 	}
 
+	// Edge gate: validate widget key (fail-closed)
+	if tenant.WidgetKey == "" {
+		slog.Error("chat external: tenant has no widget key", "slug", slug)
+		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
+	}
+	widgetKey := c.Request().Header.Get("X-Widget-Key")
+	if widgetKey == "" {
+		widgetKey = c.QueryParam("widget_key")
+	}
+	if widgetKey == "" || subtle.ConstantTimeCompare([]byte(widgetKey), []byte(tenant.WidgetKey)) != 1 {
+		slog.Info("chat external: invalid widget key", "slug", slug)
+		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
+	}
+
 	// Check domain allowlist if enabled
 	if tenant.AllowedDomains != "" {
 		origin := c.Request().Header.Get("Origin")
@@ -503,8 +518,16 @@ func (h *Handler) HandleGetExternalTranscript(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
 	}
 
-	// Verify HMAC session token
-	expiry, err := verifySessionToken(token, sessionID, expiryStr, tenant.GUID)
+	// Verify HMAC session token (uses WidgetKey, with GUID fallback for pre-migration tokens)
+	// Grace period: only attempt GUID fallback within 1 hour of tenant creation.
+	// Token TTL is 30min, so 1 hour covers all in-flight pre-migration sessions.
+	// After grace, only WidgetKey is accepted (GUID fallback dropped).
+	const guidGracePeriod = 1 * time.Hour
+	expiry, err := verifySessionToken(token, sessionID, expiryStr, tenant.WidgetKey)
+	if err != nil && tenant.GUID != "" && time.Since(tenant.CreatedAt) < guidGracePeriod {
+		// Grace: try old GUID key for tokens minted before widget_key rekey
+		expiry, err = verifySessionToken(token, sessionID, expiryStr, tenant.GUID)
+	}
 	if err != nil || time.Now().After(expiry) {
 		return echo.NewHTTPError(http.StatusForbidden, "Invalid or expired token")
 	}
@@ -1690,7 +1713,7 @@ func (h *Handler) HandleWidget(c echo.Context) error {
 	if tenant.GUID != "" {
 		combinedName = fmt.Sprintf("%s-%s", tenant.CompanyName, tenant.GUID)
 	}
-	script := generateWidgetLoaderScript(baseURL, slug, combinedName)
+	script := generateWidgetLoaderScript(baseURL, slug, combinedName, tenant.WidgetKey)
 
 	c.Response().Header().Set("Content-Type", "application/javascript")
 	c.Response().Header().Set("Cache-Control", "public, max-age=3600")
@@ -1699,13 +1722,14 @@ func (h *Handler) HandleWidget(c echo.Context) error {
 
 // generateWidgetLoaderScript preserves the legacy widget URL while delegating
 // rendering and behavior to the modern bundled widget.
-func generateWidgetLoaderScript(baseURL, tenantSlug, companyName string) string {
+func generateWidgetLoaderScript(baseURL, tenantSlug, companyName, widgetKey string) string {
 	return fmt.Sprintf(`(function() {
   'use strict';
   window.AgentChatConfig = Object.assign({
     baseUrl: %q,
     tenant: %q,
     companyName: %q,
+    widgetKey: %q,
     color: '#0d9488',
     position: 'bottom-right',
     welcomeMessage: 'How can we help you today?'
@@ -1714,7 +1738,7 @@ func generateWidgetLoaderScript(baseURL, tenantSlug, companyName string) string 
   script.src = %q;
   script.async = true;
   document.head.appendChild(script);
-})();`, baseURL, tenantSlug, companyName, baseURL+"/widget/"+url.PathEscape(tenantSlug)+"/embed.js")
+})();`, baseURL, tenantSlug, companyName, widgetKey, baseURL+"/widget/"+url.PathEscape(tenantSlug)+"/embed.js")
 }
 
 // generateWidgetScript generates the embeddable widget JavaScript.
@@ -2033,7 +2057,8 @@ func (h *Handler) HandleWidgetEmbed(c echo.Context) error {
 window.AgentChatConfig.baseUrl=window.AgentChatConfig.baseUrl||%q;
 window.AgentChatConfig.tenant=window.AgentChatConfig.tenant||%q;
 window.AgentChatConfig.companyName=window.AgentChatConfig.companyName||%q;
-`, baseURL, tenant.Slug, tenant.CompanyName)
+window.AgentChatConfig.widgetKey=window.AgentChatConfig.widgetKey||%q;
+`, baseURL, tenant.Slug, tenant.CompanyName, tenant.WidgetKey)
 
 	finalScript := configScript + string(content)
 
@@ -2088,7 +2113,7 @@ func (h *Handler) HandleWidgetIframe(c echo.Context) error {
 	}
 
 	// Generate the iframe HTML with embedded widget
-	html := generateIframeHTML(baseURL, tenant.Slug, companyName, color, welcome)
+	html := generateIframeHTML(baseURL, tenant.Slug, companyName, color, welcome, tenant.WidgetKey)
 
 	c.Response().Header().Set("Content-Type", "text/html; charset=utf-8")
 	c.Response().Header().Set("Cache-Control", "public, max-age=3600")
@@ -2096,7 +2121,7 @@ func (h *Handler) HandleWidgetIframe(c echo.Context) error {
 }
 
 // generateIframeHTML generates a standalone HTML page for the widget iframe.
-func generateIframeHTML(baseURL, slug, companyName, color, welcomeMessage string) string {
+func generateIframeHTML(baseURL, slug, companyName, color, welcomeMessage, widgetKey string) string {
 	// Escape values for use in JavaScript
 	escapeJS := func(s string) string {
 		s = strings.ReplaceAll(s, "\\", "\\\\")
@@ -2143,7 +2168,8 @@ func generateIframeHTML(baseURL, slug, companyName, color, welcomeMessage string
       tenant: '%s',
       companyName: '%s',
       color: '%s',
-      welcomeMessage: '%s'
+      welcomeMessage: '%s',
+      widgetKey: '%s'
     };
   </script>
   <script src="%s/widget/%s/embed.js"></script>
@@ -2161,6 +2187,7 @@ func generateIframeHTML(baseURL, slug, companyName, color, welcomeMessage string
 		escapeJS(companyName),
 		escapeJS(color),
 		escapeJS(welcomeMessage),
+		escapeJS(widgetKey),
 		escapeJS(baseURL),
 		escapeJS(slug),
 	)
@@ -2321,6 +2348,7 @@ type LLMConfigResponse struct {
 	SimulationHumanModel string `json:"simulation_human_model"`
 	ReasoningModel       string `json:"reasoning_model"`
 	HasAPIKey            bool   `json:"has_api_key"`
+	VectorDBS3Override   string `json:"vector_db_s3_override,omitempty"`
 	UpdatedAt            string `json:"updated_at,omitempty"`
 }
 
@@ -2330,6 +2358,7 @@ type SetLLMConfigRequest struct {
 	SimulationHumanModel string `json:"simulation_human_model"`
 	ReasoningModel       string `json:"reasoning_model"`
 	OpenRouterAPIKey     string `json:"openrouter_api_key,omitempty"`
+	VectorDBS3Override   string `json:"vector_db_s3_override,omitempty"`
 }
 
 // HandleGetLLMConfig returns the LLM configuration for a tenant.
@@ -2368,6 +2397,7 @@ func (h *Handler) HandleGetLLMConfig(c echo.Context) error {
 		response.SimulationHumanModel = config.SimulationHumanModel
 		response.ReasoningModel = config.ReasoningModel
 		response.HasAPIKey = len(config.OpenRouterAPIKeyEncrypted) > 0
+		response.VectorDBS3Override = config.VectorDBS3Override
 		response.UpdatedAt = config.UpdatedAt.Format(time.RFC3339)
 	}
 
@@ -2411,6 +2441,7 @@ func (h *Handler) HandleSetLLMConfig(c echo.Context) error {
 		LLMModel:             req.LLMModel,
 		SimulationHumanModel: req.SimulationHumanModel,
 		ReasoningModel:       req.ReasoningModel,
+		VectorDBS3Override:   req.VectorDBS3Override,
 		UpdatedBy:            &userID,
 	}
 
@@ -2442,11 +2473,17 @@ func (h *Handler) HandleSetLLMConfig(c echo.Context) error {
 	// Invalidate cache
 	h.service.configCache.Invalidate(tenant.Slug)
 
+	// Evict cached pool connection so next access uses updated override
+	if pool, ok := h.service.vectorDB.(*TenantVectorDBPool); ok {
+		pool.Evict(tenant.ID)
+	}
+
 	return c.JSON(http.StatusOK, LLMConfigResponse{
 		TenantSlug:           slug,
 		LLMModel:             config.LLMModel,
 		SimulationHumanModel: config.SimulationHumanModel,
 		HasAPIKey:            len(config.OpenRouterAPIKeyEncrypted) > 0,
+		VectorDBS3Override:   config.VectorDBS3Override,
 		UpdatedAt:            config.UpdatedAt.Format(time.RFC3339),
 	})
 }

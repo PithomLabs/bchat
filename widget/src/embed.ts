@@ -101,6 +101,7 @@ function mergeConfig(scriptConfig: Partial<WidgetConfig>): WidgetConfig {
     buttonSize: scriptConfig.buttonSize || globalConfig.buttonSize || DEFAULT_CONFIG.buttonSize,
     panelWidth: scriptConfig.panelWidth || globalConfig.panelWidth || DEFAULT_CONFIG.panelWidth,
     panelHeight: scriptConfig.panelHeight || globalConfig.panelHeight || DEFAULT_CONFIG.panelHeight,
+    widgetKey: scriptConfig.widgetKey || globalConfig.widgetKey,
   };
 
   return merged;
@@ -131,6 +132,7 @@ function initWithConfig(userConfig: Partial<WidgetConfig>): void {
     buttonSize: userConfig.buttonSize || scriptConfig.buttonSize || DEFAULT_CONFIG.buttonSize,
     panelWidth: userConfig.panelWidth || scriptConfig.panelWidth || DEFAULT_CONFIG.panelWidth,
     panelHeight: userConfig.panelHeight || scriptConfig.panelHeight || DEFAULT_CONFIG.panelHeight,
+    widgetKey: userConfig.widgetKey || scriptConfig.widgetKey,
   };
 
   if (!config.baseUrl || !config.tenant) {
