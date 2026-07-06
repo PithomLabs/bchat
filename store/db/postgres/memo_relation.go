@@ -14,10 +14,12 @@ func (d *DB) UpsertMemoRelation(ctx context.Context, create *store.MemoRelation)
 		INSERT INTO memo_relation (
 			memo_id,
 			related_memo_id,
-			type
+			type,
+			tenant_id
 		)
-		VALUES (` + placeholders(3) + `)
-		RETURNING memo_id, related_memo_id, type
+		VALUES (` + placeholders(4) + `)
+		ON CONFLICT (memo_id, related_memo_id, type) DO UPDATE SET tenant_id = EXCLUDED.tenant_id
+		RETURNING memo_id, related_memo_id, type, tenant_id
 	`
 	memoRelation := &store.MemoRelation{}
 	if err := d.db.QueryRowContext(
@@ -26,10 +28,12 @@ func (d *DB) UpsertMemoRelation(ctx context.Context, create *store.MemoRelation)
 		create.MemoID,
 		create.RelatedMemoID,
 		create.Type,
+		create.TenantID,
 	).Scan(
 		&memoRelation.MemoID,
 		&memoRelation.RelatedMemoID,
 		&memoRelation.Type,
+		&memoRelation.TenantID,
 	); err != nil {
 		return nil, err
 	}
@@ -47,6 +51,9 @@ func (d *DB) ListMemoRelations(ctx context.Context, find *store.FindMemoRelation
 	}
 	if find.Type != nil {
 		where, args = append(where, "type = "+placeholder(len(args)+1)), append(args, find.Type)
+	}
+	if find.TenantID != nil {
+		where, args = append(where, "tenant_id = "+placeholder(len(args)+1)), append(args, find.TenantID)
 	}
 	if find.MemoFilter != nil {
 		// Parse filter string and return the parsed expression.
@@ -73,7 +80,8 @@ func (d *DB) ListMemoRelations(ctx context.Context, find *store.FindMemoRelation
 		SELECT
 			memo_id,
 			related_memo_id,
-			type
+			type,
+			tenant_id
 		FROM memo_relation
 		WHERE `+strings.Join(where, " AND "), args...)
 	if err != nil {
@@ -88,6 +96,7 @@ func (d *DB) ListMemoRelations(ctx context.Context, find *store.FindMemoRelation
 			&memoRelation.MemoID,
 			&memoRelation.RelatedMemoID,
 			&memoRelation.Type,
+			&memoRelation.TenantID,
 		); err != nil {
 			return nil, err
 		}
@@ -111,6 +120,9 @@ func (d *DB) DeleteMemoRelation(ctx context.Context, delete *store.DeleteMemoRel
 	}
 	if delete.Type != nil {
 		where, args = append(where, "type = "+placeholder(len(args)+1)), append(args, delete.Type)
+	}
+	if delete.TenantID != nil {
+		where, args = append(where, "tenant_id = "+placeholder(len(args)+1)), append(args, delete.TenantID)
 	}
 	stmt := `DELETE FROM memo_relation WHERE ` + strings.Join(where, " AND ")
 	result, err := d.db.ExecContext(ctx, stmt, args...)

@@ -2,6 +2,8 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -9,9 +11,17 @@ import (
 )
 
 func (d *DB) CreateUser(ctx context.Context, create *store.User) (*store.User, error) {
-	fields := []string{"`username`", "`role`", "`email`", "`nickname`", "`password_hash`, `avatar_url`"}
-	placeholder := []string{"?", "?", "?", "?", "?", "?"}
-	args := []any{create.Username, create.Role, create.Email, create.Nickname, create.PasswordHash, create.AvatarURL}
+	var allowedJSON []byte
+	if create.AllowedTenantIDs != nil {
+		var err error
+		allowedJSON, err = json.Marshal(create.AllowedTenantIDs)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal allowed_tenant_ids: %w", err)
+		}
+	}
+	fields := []string{"`username`", "`role`", "`email`", "`nickname`", "`password_hash`", "`avatar_url`", "`allowed_tenant_ids`"}
+	placeholder := []string{"?", "?", "?", "?", "?", "?", "?"}
+	args := []any{create.Username, create.Role, create.Email, create.Nickname, create.PasswordHash, create.AvatarURL, allowedJSON}
 	stmt := "INSERT INTO user (" + strings.Join(fields, ", ") + ") VALUES (" + strings.Join(placeholder, ", ") + ") RETURNING id, description, created_ts, updated_ts, row_status"
 	if err := d.db.QueryRowContext(ctx, stmt, args...).Scan(
 		&create.ID,
@@ -55,15 +65,19 @@ func (d *DB) UpdateUser(ctx context.Context, update *store.UpdateUser) (*store.U
 	if v := update.Role; v != nil {
 		set, args = append(set, "role = ?"), append(args, *v)
 	}
+	if v := update.AllowedTenantIDs; v != nil {
+		set, args = append(set, "allowed_tenant_ids = ?"), append(args, *v)
+	}
 	args = append(args, update.ID)
 
 	query := `
 		UPDATE user
 		SET ` + strings.Join(set, ", ") + `
 		WHERE id = ?
-		RETURNING id, username, role, email, nickname, password_hash, avatar_url, description, created_ts, updated_ts, row_status
+		RETURNING id, username, role, email, nickname, password_hash, avatar_url, description, created_ts, updated_ts, row_status, allowed_tenant_ids
 	`
 	user := &store.User{}
+	var allowedNull sql.NullString
 	if err := d.db.QueryRowContext(ctx, query, args...).Scan(
 		&user.ID,
 		&user.Username,
@@ -76,8 +90,15 @@ func (d *DB) UpdateUser(ctx context.Context, update *store.UpdateUser) (*store.U
 		&user.CreatedTs,
 		&user.UpdatedTs,
 		&user.RowStatus,
+		&allowedNull,
 	); err != nil {
 		return nil, err
+	}
+	if allowedNull.Valid && allowedNull.String != "" {
+		var ids []string
+		if err := json.Unmarshal([]byte(allowedNull.String), &ids); err == nil {
+			user.AllowedTenantIDs = ids
+		}
 	}
 
 	return user, nil
@@ -115,7 +136,8 @@ func (d *DB) ListUsers(ctx context.Context, find *store.FindUser) ([]*store.User
 			description,
 			created_ts,
 			updated_ts,
-			row_status
+			row_status,
+			allowed_tenant_ids
 		FROM user
 		WHERE ` + strings.Join(where, " AND ") + ` ORDER BY ` + strings.Join(orderBy, ", ")
 	if v := find.Limit; v != nil {
@@ -131,6 +153,7 @@ func (d *DB) ListUsers(ctx context.Context, find *store.FindUser) ([]*store.User
 	list := make([]*store.User, 0)
 	for rows.Next() {
 		var user store.User
+		var allowedNull sql.NullString
 		if err := rows.Scan(
 			&user.ID,
 			&user.Username,
@@ -143,8 +166,15 @@ func (d *DB) ListUsers(ctx context.Context, find *store.FindUser) ([]*store.User
 			&user.CreatedTs,
 			&user.UpdatedTs,
 			&user.RowStatus,
+			&allowedNull,
 		); err != nil {
 			return nil, err
+		}
+		if allowedNull.Valid && allowedNull.String != "" {
+			var ids []string
+			if err := json.Unmarshal([]byte(allowedNull.String), &ids); err == nil {
+				user.AllowedTenantIDs = ids
+			}
 		}
 		list = append(list, &user)
 	}

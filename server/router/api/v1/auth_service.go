@@ -160,9 +160,8 @@ func (s *APIV1Service) SignIn(ctx context.Context, request *v1pb.SignInRequest) 
 
 	expireTime := time.Now().Add(AccessTokenDuration)
 	if request.NeverExpire {
-		// Cap "never expire" tokens at MaxNeverExpireDuration (30 days).
-		// Previously this was 100 years, which posed a security risk.
-		expireTime = time.Now().Add(MaxNeverExpireDuration)
+		// never_expire is deprecated; all tokens use standard 7-day expiry.
+		slog.Warn("never_expire is deprecated, using standard 7-day expiry", "user", existingUser.Username)
 	}
 	if err := s.doSignIn(ctx, existingUser, nil, expireTime); err != nil {
 		return nil, err
@@ -361,6 +360,15 @@ type SelectTenantRequest struct {
 // HandleAuthTenants handles POST /api/v1/auth/tenants.
 // Validates credentials and returns available tenants + selection token.
 func (s *APIV1Service) HandleAuthTenants(c echo.Context) error {
+	// Rate limit: 5 attempts per IP per minute
+	clientIP := c.RealIP()
+	if clientIP == "" {
+		clientIP = c.Request().RemoteAddr
+	}
+	if !s.loginRateLimiter.Allow(clientIP) {
+		return echo.NewHTTPError(http.StatusTooManyRequests, "Too many login attempts. Please try again in 60 seconds.")
+	}
+
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -437,6 +445,15 @@ func (s *APIV1Service) HandleAuthTenants(c echo.Context) error {
 // HandleSelectTenant handles POST /api/v1/auth/select-tenant.
 // Validates selection token and returns full JWT with tenant_id.
 func (s *APIV1Service) HandleSelectTenant(c echo.Context) error {
+	// Rate limit: 5 attempts per IP per minute
+	clientIP := c.RealIP()
+	if clientIP == "" {
+		clientIP = c.Request().RemoteAddr
+	}
+	if !s.loginRateLimiter.Allow(clientIP) {
+		return echo.NewHTTPError(http.StatusTooManyRequests, "Too many attempts. Please try again in 60 seconds.")
+	}
+
 	var req SelectTenantRequest
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
@@ -466,8 +483,9 @@ func (s *APIV1Service) HandleSelectTenant(c echo.Context) error {
 			if token.AccessToken == "selection:"+req.SelectionToken {
 				matchedUser = user
 				// Parse timestamp from description
-				if _, err := fmt.Sscanf(token.Description, "tenant-selection-token:%d", &tokenCreatedAt); err == nil {
-					tokenCreatedAt = time.Unix(tokenCreatedAt.Unix(), 0)
+				var tsRaw int64
+				if _, err := fmt.Sscanf(token.Description, "tenant-selection-token:%d", &tsRaw); err == nil {
+					tokenCreatedAt = time.Unix(tsRaw, 0)
 				}
 				break
 			}
@@ -513,21 +531,23 @@ func (s *APIV1Service) HandleSelectTenant(c echo.Context) error {
 	}
 
 	// Set cookie
-	cookie, err := s.buildAccessTokenCookie(ctx, accessToken, expireTime)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to build cookie")
-	}
-	c.SetCookie(&http.Cookie{
+	isHTTPS := strings.HasPrefix(c.Request().Header.Get("Origin"), "https://")
+	cookie := &http.Cookie{
 		Name:     AccessTokenCookieName,
 		Value:    accessToken,
 		Path:     "/",
 		HttpOnly: true,
 		Expires:  expireTime,
-	})
+	}
+	if isHTTPS {
+		cookie.SameSite = http.SameSiteNoneMode
+		cookie.Secure = true
+	} else {
+		cookie.SameSite = http.SameSiteStrictMode
+	}
+	c.SetCookie(cookie)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"access_token": accessToken,
-		"cookie":       cookie,
-		"tenant_id":    req.TenantID,
+		"tenant_id": req.TenantID,
 	})
 }

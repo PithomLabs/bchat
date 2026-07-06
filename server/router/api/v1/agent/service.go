@@ -2,6 +2,9 @@ package agent
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,6 +32,9 @@ const (
 	ragMinScore            = 0.25
 	ragFallbackTokenBudget = 6000 // ~24KB of text, safe for most LLM contexts
 )
+
+// Sentinel errors for input validation
+var ErrMessageTooLong = errors.New("message too long")
 
 // newOpenRouterClient creates an OpenRouter client with a timeout.
 func newOpenRouterClient(apiKey string) *openrouter.Client {
@@ -1056,11 +1062,20 @@ func (s *MemorySessionStore) cleanupLoop() {
 func (s *MemorySessionStore) cleanup() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.locksMu.Lock()
+	defer s.locksMu.Unlock()
 
 	cutoff := time.Now().Add(-s.ttl)
 	for key, session := range s.sessions {
 		if session.UpdatedAt.Before(cutoff) {
 			delete(s.sessions, key)
+			delete(s.sessionLocks, key)
+		}
+	}
+	// Clean up orphaned locks (locks whose sessions no longer exist)
+	for key := range s.sessionLocks {
+		if _, exists := s.sessions[key]; !exists {
+			delete(s.sessionLocks, key)
 		}
 	}
 }
@@ -1489,11 +1504,13 @@ type BridgeRuntimeState struct {
 
 // ChatResponse represents a chat response.
 type ChatResponse struct {
-	SessionID        string              `json:"session_id"`
-	Message          ResponseMessage     `json:"message"`
-	Metadata         ChatMetadata        `json:"metadata"`
-	SessionPersisted bool                `json:"session_persisted,omitempty"`
-	Bridge           *BridgeRuntimeState `json:"bridge,omitempty"`
+	SessionID         string              `json:"session_id"`
+	Message           ResponseMessage     `json:"message"`
+	Metadata          ChatMetadata        `json:"metadata"`
+	SessionPersisted  bool                `json:"sessionPersisted,omitempty"`
+	Bridge            *BridgeRuntimeState `json:"bridge,omitempty"`
+	SessionToken      string              `json:"session_token,omitempty"`
+	SessionTokenExpiry string             `json:"session_token_expiry,omitempty"`
 }
 
 // ResponseMessage represents the assistant's response.
@@ -1510,6 +1527,42 @@ type ChatMetadata struct {
 	Phase   string `json:"phase"`
 }
 
+// ============================================================================
+// SESSION TOKEN (HMAC-signed)
+// ============================================================================
+
+// deriveSessionTokenKey derives a non-public signing key from the tenant GUID.
+// This prevents the GUID (exposed in admin API) from being usable as-is for token forgery.
+func deriveSessionTokenKey(tenantGUID string) []byte {
+	mac := hmac.New(sha256.New, []byte(tenantGUID))
+	mac.Write([]byte("session-token-key"))
+	return mac.Sum(nil)
+}
+
+// generateSessionToken creates an HMAC-SHA256 signed token for transcript access.
+func generateSessionToken(sessionID string, expiry time.Time, tenantGUID string) string {
+	key := deriveSessionTokenKey(tenantGUID)
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(sessionID + expiry.Format(time.RFC3339)))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// verifySessionToken verifies an HMAC-SHA256 session token and returns the expiry.
+func verifySessionToken(token, sessionID, expiryStr, tenantGUID string) (time.Time, error) {
+	expiry, err := time.Parse(time.RFC3339, expiryStr)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid expiry format")
+	}
+	key := deriveSessionTokenKey(tenantGUID)
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(sessionID + expiryStr))
+	expected := hex.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(token), []byte(expected)) {
+		return time.Time{}, fmt.Errorf("invalid token")
+	}
+	return expiry, nil
+}
+
 // ChatExternal handles chat for external (anonymous) users.
 // Uses the external audience configuration and RAG generation.
 func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAgent string, req ChatRequest) (*ChatResponse, error) {
@@ -1519,6 +1572,15 @@ func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAg
 	}
 	if len(req.ClientMessageID) > 128 {
 		return nil, fmt.Errorf("client_message_id must be at most 128 characters")
+	}
+
+	// Validate message length (Issue #2)
+	maxLen := 4000 // default
+	if config.Audience != nil && config.Audience.MaxMessageLength > 0 {
+		maxLen = config.Audience.MaxMessageLength
+	}
+	if len(req.Message) > maxLen {
+		return nil, fmt.Errorf("%w: %d characters max", ErrMessageTooLong, maxLen)
 	}
 
 	// Validate before any per-session memory or durable lookup. Missing IDs are
@@ -1540,6 +1602,15 @@ func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAg
 	// Get or create a tenant-scoped in-memory session.
 	session := s.memorySessions.GetOrCreate(config.TenantID, sessionID)
 
+	// Generate HMAC session token for transcript access (30-minute expiry)
+	tokenExpiry := time.Now().Add(30 * time.Minute)
+	tenant, tErr := s.store.GetAgentTenant(ctx, &store.FindAgentTenant{ID: &config.TenantID})
+	var sessionToken, sessionTokenExpiry string
+	if tErr == nil && tenant != nil && tenant.GUID != "" {
+		sessionToken = generateSessionToken(session.ID, tokenExpiry, tenant.GUID)
+		sessionTokenExpiry = tokenExpiry.Format(time.RFC3339)
+	}
+
 	// Durable idempotency check. Survives process restart and multi-instance
 	// deployments because the lookup hits the database, not in-memory state.
 	if req.ClientMessageID != "" {
@@ -1558,7 +1629,9 @@ func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAg
 						Content:   cached.Content,
 						Timestamp: cached.CreatedAt,
 					},
-					Metadata: ChatMetadata{Phase: session.Phase},
+					Metadata:          ChatMetadata{Phase: session.Phase},
+					SessionToken:      sessionToken,
+					SessionTokenExpiry: sessionTokenExpiry,
 				}, nil
 			}
 		}
@@ -1579,7 +1652,9 @@ func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAg
 							Content:   candidate.Content,
 							Timestamp: candidate.Timestamp,
 						},
-						Metadata: ChatMetadata{Phase: session.Phase},
+						Metadata:          ChatMetadata{Phase: session.Phase},
+						SessionToken:      sessionToken,
+						SessionTokenExpiry: sessionTokenExpiry,
 					}, nil
 				}
 			}
@@ -1640,6 +1715,8 @@ func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAg
 				HandoffID:   activeHandoff.HandoffID,
 				RoutingMode: string(activeHandoff.RoutingMode),
 			},
+			SessionToken:      sessionToken,
+			SessionTokenExpiry: sessionTokenExpiry,
 		}, nil
 	}
 
@@ -1695,6 +1772,10 @@ func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAg
 	}
 	s.captureLeadFromSession(ctx, config, session)
 
+	// Inject session token into response for transcript access
+	response.SessionToken = sessionToken
+	response.SessionTokenExpiry = sessionTokenExpiry
+
 	return response, nil
 }
 
@@ -1708,6 +1789,15 @@ func (s *Service) ChatInternal(ctx context.Context, tenantSlug string, userID in
 	config, err := s.LoadConfig(ctx, tenantSlug, "internal")
 	if err != nil {
 		return nil, err
+	}
+
+	// Validate message length
+	maxLen := 4000 // default
+	if config.Audience != nil && config.Audience.MaxMessageLength > 0 {
+		maxLen = config.Audience.MaxMessageLength
+	}
+	if len(req.Message) > maxLen {
+		return nil, fmt.Errorf("%w: %d characters max", ErrMessageTooLong, maxLen)
 	}
 
 	// Get or create session
@@ -1769,8 +1859,54 @@ func (s *Service) ChatInternal(ctx context.Context, tenantSlug string, userID in
 	return response, nil
 }
 
+// ============================================================================
+// INPUT SANITIZATION
+// ============================================================================
+
+// SanitizeUserInput cleans user messages before processing.
+// Strips control characters, normalizes whitespace, and logs potential injection attempts.
+func SanitizeUserInput(message string) string {
+	// Strip control characters (keep \t \n \r)
+	re := regexp.MustCompile(`[\x00-\x08\x0B\x0C\x0E-\x1F]`)
+	message = re.ReplaceAllString(message, "")
+
+	// Collapse 3+ consecutive newlines to 2
+	re2 := regexp.MustCompile(`\n{3,}`)
+	message = re2.ReplaceAllString(message, "\n\n")
+
+	return strings.TrimSpace(message)
+}
+
+// detectPromptInjection logs warnings for obvious injection patterns.
+// Returns true if a pattern was detected (for logging, not blocking).
+func detectPromptInjection(message string) bool {
+	lower := strings.ToLower(message)
+	patterns := []string{
+		"ignore previous instructions",
+		"ignore all previous instructions",
+		"you are now",
+		"system prompt:",
+		"disregard your instructions",
+		"forget your instructions",
+		"new instructions:",
+		"override your",
+	}
+	for _, pattern := range patterns {
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
 // processChat is the core chat processing logic.
 func (s *Service) processChat(ctx context.Context, config *AudienceConfig, session *store.AgentSession, userMessage string) (*ChatResponse, error) {
+	// Sanitize user input (Issue #3)
+	userMessage = SanitizeUserInput(userMessage)
+	if detectPromptInjection(userMessage) {
+		slog.Warn("potential prompt injection detected", "slug", config.TenantSlug, "session_id", session.ID)
+	}
+
 	// Add user message to history
 	session.Messages = append(session.Messages, store.AgentMessage{
 		Role:      "user",

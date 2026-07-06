@@ -58,21 +58,25 @@ type User struct {
 	PasswordHash string
 	AvatarURL    string
 	Description  string
+
+	// Issue #12: Optional tenant binding for admin users (JSON array of tenant GUIDs, null = all tenants)
+	AllowedTenantIDs []string
 }
 
 type UpdateUser struct {
 	ID int32
 
-	UpdatedTs    *int64
-	RowStatus    *RowStatus
-	Username     *string
-	Role         *Role
-	Email        *string
-	Nickname     *string
-	Password     *string
-	AvatarURL    *string
-	PasswordHash *string
-	Description  *string
+	UpdatedTs       *int64
+	RowStatus       *RowStatus
+	Username        *string
+	Role            *Role
+	Email           *string
+	Nickname        *string
+	Password        *string
+	AvatarURL       *string
+	PasswordHash    *string
+	Description     *string
+	AllowedTenantIDs *string // JSON-encoded array of tenant GUIDs, null = all tenants
 }
 
 type FindUser struct {

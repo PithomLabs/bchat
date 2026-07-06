@@ -138,8 +138,8 @@ func (d *DB) CreateAgentAudience(ctx context.Context, audience *store.AgentAudie
 			tenant_id, audience_type, role, tone, brand_voice, guidelines,
 			emergency_phone, secondary_phones, email, address,
 			emergency_urgency_threshold, escalation_confidence_threshold, rate_limit_rpm,
-			require_contact_on_fallback, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			require_contact_on_fallback, max_message_length, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		RETURNING id
 	`
 	now := time.Now()
@@ -148,7 +148,7 @@ func (d *DB) CreateAgentAudience(ctx context.Context, audience *store.AgentAudie
 		string(guidelinesJSON), audience.EmergencyPhone, string(secondaryPhonesJSON),
 		audience.Email, audience.Address, audience.EmergencyUrgencyThreshold,
 		audience.EscalationConfidenceThreshold, audience.RateLimitRPM,
-		audience.RequireContactOnFallback, now,
+		audience.RequireContactOnFallback, audience.MaxMessageLength, now,
 	).Scan(&audience.ID); err != nil {
 		return nil, err
 	}
@@ -182,7 +182,7 @@ func (d *DB) ListAgentAudiences(ctx context.Context, find *store.FindAgentAudien
 		SELECT id, tenant_id, audience_type, role, tone, brand_voice, guidelines,
 			emergency_phone, secondary_phones, email, address,
 			emergency_urgency_threshold, escalation_confidence_threshold, rate_limit_rpm,
-			require_contact_on_fallback, updated_at
+			require_contact_on_fallback, max_message_length, updated_at
 		FROM agent_audiences
 		WHERE %s
 	`, strings.Join(where, " AND "))
@@ -201,7 +201,7 @@ func (d *DB) ListAgentAudiences(ctx context.Context, find *store.FindAgentAudien
 			&a.ID, &a.TenantID, &a.AudienceType, &a.Role, &a.Tone, &brandVoice, &guidelinesJSON,
 			&a.EmergencyPhone, &secondaryPhonesJSON, &email, &address,
 			&a.EmergencyUrgencyThreshold, &a.EscalationConfidenceThreshold, &a.RateLimitRPM,
-			&a.RequireContactOnFallback, &a.UpdatedAt,
+			&a.RequireContactOnFallback, &a.MaxMessageLength, &a.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -234,7 +234,7 @@ func (d *DB) UpdateAgentAudience(ctx context.Context, audience *store.AgentAudie
 		SET role = ?, tone = ?, brand_voice = ?, guidelines = ?,
 			emergency_phone = ?, secondary_phones = ?, email = ?, address = ?,
 			emergency_urgency_threshold = ?, escalation_confidence_threshold = ?,
-			rate_limit_rpm = ?, require_contact_on_fallback = ?, updated_at = ?
+			rate_limit_rpm = ?, require_contact_on_fallback = ?, max_message_length = ?, updated_at = ?
 		WHERE tenant_id = ? AND audience_type = ?
 	`
 	now := time.Now()
@@ -242,7 +242,7 @@ func (d *DB) UpdateAgentAudience(ctx context.Context, audience *store.AgentAudie
 		audience.Role, audience.Tone, audience.BrandVoice, string(guidelinesJSON),
 		audience.EmergencyPhone, string(secondaryPhonesJSON), audience.Email, audience.Address,
 		audience.EmergencyUrgencyThreshold, audience.EscalationConfidenceThreshold,
-		audience.RateLimitRPM, audience.RequireContactOnFallback, now, audience.TenantID, audience.AudienceType,
+		audience.RateLimitRPM, audience.RequireContactOnFallback, audience.MaxMessageLength, now, audience.TenantID, audience.AudienceType,
 	)
 	if err != nil {
 		return nil, err

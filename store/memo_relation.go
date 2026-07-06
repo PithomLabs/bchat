@@ -17,6 +17,7 @@ type MemoRelation struct {
 	MemoID        int32
 	RelatedMemoID int32
 	Type          MemoRelationType
+	TenantID      *int32
 }
 
 type FindMemoRelation struct {
@@ -24,12 +25,14 @@ type FindMemoRelation struct {
 	RelatedMemoID *int32
 	Type          *MemoRelationType
 	MemoFilter    *string
+	TenantID      *int32
 }
 
 type DeleteMemoRelation struct {
 	MemoID        *int32
 	RelatedMemoID *int32
 	Type          *MemoRelationType
+	TenantID      *int32
 }
 
 func (s *Store) UpsertMemoRelation(ctx context.Context, create *MemoRelation) (*MemoRelation, error) {

@@ -102,6 +102,9 @@ func NewServer(ctx context.Context, profile *profile.Profile, store *store.Store
 		return nil, errors.Wrap(err, "failed to register gRPC gateway")
 	}
 
+	// Issue #7: Seed playground demos at startup instead of on every catalog GET
+	apiV1Service.SeedPlaygroundDemos()
+
 	return s, nil
 }
 

@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
@@ -46,6 +48,8 @@ type APIV1Service struct {
 
 	grpcServer   *grpc.Server
 	agentHandler *agent.Handler
+
+	loginRateLimiter *loginRateLimiter
 }
 
 func NewAPIV1Service(secret string, profile *profile.Profile, store *store.Store, grpcServer *grpc.Server) *APIV1Service {
@@ -56,11 +60,12 @@ func NewAPIV1Service(secret string, profile *profile.Profile, store *store.Store
 	agentHandler := agent.NewHandler(agentService, store)
 
 	apiv1Service := &APIV1Service{
-		Secret:       secret,
-		Profile:      profile,
-		Store:        store,
-		grpcServer:   grpcServer,
-		agentHandler: agentHandler,
+		Secret:           secret,
+		Profile:          profile,
+		Store:            store,
+		grpcServer:       grpcServer,
+		agentHandler:     agentHandler,
+		loginRateLimiter: newLoginRateLimiter(5, time.Minute), // 5 attempts per IP per minute
 	}
 	grpc_health_v1.RegisterHealthServer(grpcServer, apiv1Service)
 	v1pb.RegisterWorkspaceServiceServer(grpcServer, apiv1Service)
@@ -79,6 +84,30 @@ func NewAPIV1Service(secret string, profile *profile.Profile, store *store.Store
 	return apiv1Service
 }
 
+// getEnvSlice reads an environment variable and splits it by comma.
+func getEnvSlice(key string, defaultVal []string) []string {
+	val := os.Getenv(key)
+	if val == "" {
+		return defaultVal
+	}
+	parts := strings.Split(val, ",")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
+// SeedPlaygroundDemos seeds playground demo tenants at startup (Issue #7).
+func (s *APIV1Service) SeedPlaygroundDemos() {
+	if s.agentHandler != nil {
+		s.agentHandler.StartupSeedPlaygroundDemos()
+	}
+}
+
 // RegisterGateway registers the gRPC-Gateway with the given Echo instance.
 func (s *APIV1Service) RegisterGateway(ctx context.Context, echoServer *echo.Echo) error {
 	var target string
@@ -87,6 +116,11 @@ func (s *APIV1Service) RegisterGateway(ctx context.Context, echoServer *echo.Ech
 	} else {
 		target = fmt.Sprintf("unix:%s", s.Profile.UNIXSock)
 	}
+	// SECURITY NOTE (Issue #5): Using insecure credentials for the internal gRPC connection.
+	// This is acceptable because:
+	// - Deployment is always single-container (gRPC traffic never leaves process boundary)
+	// - The connection is loopback only (127.0.0.1)
+	// - If multi-container deployment is needed in the future, add TLS here
 	conn, err := grpc.NewClient(
 		target,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -136,25 +170,28 @@ func (s *APIV1Service) RegisterGateway(ctx context.Context, echoServer *echo.Ech
 	gwGroup := echoServer.Group("")
 	gwGroup.Use(middleware.CORS())
 
-	// Global CORS middleware for all routes - handles OPTIONS preflight before auth
-	echoServer.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: []string{"*"},
+	// Route-level CORS: permissive for public endpoints, restrictive for admin/auth
+	adminOrigins := getEnvSlice("ADMIN_CORS_ORIGINS", []string{})
+	adminCORS := middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: adminOrigins,
 		AllowMethods: []string{echo.GET, echo.POST, echo.PUT, echo.DELETE, echo.OPTIONS},
 		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization},
-	}))
+	})
 
 	// Register ticket routes directly to Echo group with Auth middleware
 	// Register these BEFORE the gRPC-gateway Any wildcard to ensure they take precedence
 	ticketGroup := echoServer.Group("/api/v1")
 	ticketGroup.Use(s.AuthMiddleware)
+	ticketGroup.Use(adminCORS)
 	s.RegisterTicketRoutes(ticketGroup)
 	s.RegisterNotificationRoutes(ticketGroup)
 
 	// Register agent routes
 	s.RegisterAgentRoutes(echoServer)
 
-	// Register auth REST endpoints (unauthenticated)
+	// Register auth REST endpoints (unauthenticated) - restrictive CORS
 	authRESTGroup := echoServer.Group("/api/v1/auth")
+	authRESTGroup.Use(adminCORS)
 	authRESTGroup.POST("/tenants", s.HandleAuthTenants)
 	authRESTGroup.POST("/select-tenant", s.HandleSelectTenant)
 
@@ -165,8 +202,17 @@ func (s *APIV1Service) RegisterGateway(ctx context.Context, echoServer *echo.Ech
 	// GRPC web proxy.
 	options := []grpcweb.Option{
 		grpcweb.WithCorsForRegisteredEndpointsOnly(false),
-		grpcweb.WithOriginFunc(func(_ string) bool {
-			return true
+		grpcweb.WithOriginFunc(func(origin string) bool {
+			// If no admin origins configured, deny cross-origin gRPC-web
+			if len(adminOrigins) == 0 {
+				return false
+			}
+			for _, allowed := range adminOrigins {
+				if allowed == origin || allowed == "*" {
+					return true
+				}
+			}
+			return false
 		}),
 	}
 	wrappedGrpc := grpcweb.WrapServer(s.grpcServer, options...)
@@ -188,8 +234,23 @@ func (s *APIV1Service) RegisterGateway(ctx context.Context, echoServer *echo.Ech
 
 // RegisterAgentRoutes registers the agent chat API routes.
 func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
-	// Public routes (no auth required) - CORS handled globally
+	// Public CORS (permissive) for widget/chat from any origin
+	publicCORS := middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: []string{"*"},
+		AllowMethods: []string{echo.GET, echo.POST, echo.PUT, echo.DELETE, echo.OPTIONS},
+		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization},
+	})
+	// Admin CORS (restrictive) from ADMIN_CORS_ORIGINS env var
+	adminOrigins := getEnvSlice("ADMIN_CORS_ORIGINS", []string{})
+	adminCORS := middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: adminOrigins,
+		AllowMethods: []string{echo.GET, echo.POST, echo.PUT, echo.DELETE, echo.OPTIONS},
+		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization},
+	})
+
+	// Public routes (no auth required) - permissive CORS
 	publicGroup := echoServer.Group("/api/v1/agent")
+	publicGroup.Use(publicCORS)
 	publicGroup.GET("/playground/catalog", s.agentHandler.HandlePlaygroundCatalog)
 	publicGroup.POST("/:slug/chat/ext", s.agentHandler.HandleChatExternal)
 	publicGroup.GET("/:slug/chat/ext/transcript", s.agentHandler.HandleGetExternalTranscript)
@@ -203,14 +264,16 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	bridgeGroup.POST("/reply", s.agentHandler.HandleBridgeReply)
 	bridgeGroup.POST("/release", s.agentHandler.HandleBridgeRelease)
 
-	// Widget routes (public, no auth) - CORS handled globally
+	// Widget routes (public, no auth) - permissive CORS
 	widgetGroup := echoServer.Group("/widget")
+	widgetGroup.Use(publicCORS)
 	widgetGroup.GET("/:slug/embed.js", s.agentHandler.HandleWidgetEmbed) // Built bundle
 	widgetGroup.GET("/:slug/iframe", s.agentHandler.HandleWidgetIframe)  // iframe HTML
 
-	// Authenticated routes (Memos user auth required)
+	// Authenticated routes (Memos user auth required) - restrictive CORS
 	authGroup := echoServer.Group("/api/v1/agent")
 	authGroup.Use(s.AuthMiddleware)
+	authGroup.Use(adminCORS)
 	authGroup.GET("/:slug/validate", s.agentHandler.HandleValidateTenant)
 	authGroup.POST("/:slug/chat/int", s.agentHandler.HandleChatInternal)
 
@@ -257,15 +320,18 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	authGroup.POST("/:slug/learning/behaviors/:behaviorId/toggle", s.agentHandler.HandleToggleLearnedBehavior)
 	authGroup.DELETE("/:slug/learning", s.agentHandler.HandleClearLearning)
 
-	// User tenants route
+	// User tenants route - restrictive CORS
 	userGroup := echoServer.Group("/api/v1/user")
 	userGroup.Use(s.AuthMiddleware)
+	userGroup.Use(adminCORS)
 	userGroup.GET("/tenants", s.agentHandler.HandleGetUserTenants)
 	userGroup.GET("/:id/tenants", s.agentHandler.HandleGetSpecificUserTenants)
 
-	// Admin routes (Memos admin role required)
+	// Admin routes (Memos admin role required) - restrictive CORS + tenant binding
 	adminGroup := echoServer.Group("/api/v1/agent")
 	adminGroup.Use(s.AuthMiddleware)
+	adminGroup.Use(adminCORS)
+	adminGroup.Use(TenantBindingMiddleware(s.Store))
 	adminGroup.GET("/tenants", s.agentHandler.HandleListTenants)
 	adminGroup.POST("/onboard", s.agentHandler.HandleOnboard)
 	adminGroup.POST("/playground/seed", s.agentHandler.HandleSeedPlaygroundDemos)
@@ -320,9 +386,10 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	adminGroup.POST("/:slug/role-templates/:id/assign", s.agentHandler.HandleAssignRoleTemplate)
 	adminGroup.GET("/:slug/users/:userId/roles", s.agentHandler.HandleListUserRoles)
 
-	// RAG Stats routes (admin only)
+	// RAG Stats routes (admin only) - restrictive CORS
 	ragGroup := echoServer.Group("/api/v1/admin/rag")
 	ragGroup.Use(s.AuthMiddleware)
+	ragGroup.Use(adminCORS)
 	ragGroup.GET("/stats", s.agentHandler.HandleGetRAGStats)
 	ragGroup.GET("/tenants/:tenantId", s.agentHandler.HandleGetTenantRAGDetails)
 	ragGroup.POST("/search", s.agentHandler.HandleTestRAGSearch)
