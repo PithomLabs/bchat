@@ -24,7 +24,8 @@ CREATE TABLE user (
   nickname TEXT NOT NULL DEFAULT '',
   password_hash TEXT NOT NULL,
   avatar_url TEXT NOT NULL DEFAULT '',
-  description TEXT NOT NULL DEFAULT ''
+  description TEXT NOT NULL DEFAULT '',
+  allowed_tenant_ids TEXT DEFAULT NULL
 );
 
 CREATE INDEX idx_user_username ON user (username);
@@ -68,8 +69,11 @@ CREATE TABLE memo_relation (
   memo_id INTEGER NOT NULL,
   related_memo_id INTEGER NOT NULL,
   type TEXT NOT NULL,
+  tenant_id INTEGER DEFAULT NULL,
   UNIQUE(memo_id, related_memo_id, type)
 );
+
+CREATE INDEX IF NOT EXISTS idx_memo_relation_tenant ON memo_relation(tenant_id);
 
 -- resource
 CREATE TABLE resource (
@@ -226,6 +230,7 @@ CREATE TABLE agent_audiences (
     escalation_confidence_threshold REAL DEFAULT 0.85,
     rate_limit_rpm INTEGER DEFAULT 60,
     require_contact_on_fallback INTEGER DEFAULT 1,
+    max_message_length INTEGER DEFAULT 4000,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(tenant_id, audience_type)
 );

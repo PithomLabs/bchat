@@ -12,7 +12,7 @@
 # Required volume:
 #   fly volumes create memos_data --size 1 --region ord
 
-app = "bchat"
+app = "bchat0534"
 primary_region = "sjc"
 
 [build]

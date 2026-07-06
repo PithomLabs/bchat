@@ -49,6 +49,17 @@ var (
 				LLMModel:            viper.GetString("llm-model"),
 				EncryptionMasterKey: viper.GetString("encryption-master-key"),
 			}
+
+			// Issue #10: Validate encryption key strength
+			if key := instanceProfile.EncryptionMasterKey; key != "" {
+				if len(key) < 16 {
+					slog.Warn("ENCRYPTION_MASTER_KEY is too short (< 16 chars). Encrypted tenant API keys may be insecure.",
+						"key_length", len(key))
+				}
+			} else {
+				slog.Warn("ENCRYPTION_MASTER_KEY is not set. Tenant API key encryption is disabled.")
+			}
+
 			if err := instanceProfile.Validate(); err != nil {
 				panic(err)
 			}

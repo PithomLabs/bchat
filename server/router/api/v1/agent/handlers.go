@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,8 +27,9 @@ import (
 
 // Handler handles HTTP requests for the agent API.
 type Handler struct {
-	service *Service
-	store   *store.Store
+	service       *Service
+	store         *store.Store
+	playgroundMu  sync.Mutex // guards ensurePlaygroundDemo
 }
 
 // NewHandler creates a new agent handler.
@@ -405,14 +407,16 @@ func (h *Handler) HandleChatExternal(c echo.Context) error {
 	// Get tenant to check domain allowlist
 	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
 	if err != nil || tenant == nil || !tenant.IsActive {
-		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
+		slog.Info("chat external: tenant not found or inactive", "slug", slug)
+		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
 	}
 
 	// Check domain allowlist if enabled
 	if tenant.AllowedDomains != "" {
 		origin := c.Request().Header.Get("Origin")
 		if !h.isDomainAllowed(tenant.AllowedDomains, origin, "") {
-			return echo.NewHTTPError(http.StatusForbidden, "Domain not allowed")
+			slog.Info("chat external: domain not allowed", "slug", slug, "origin", origin)
+			return echo.NewHTTPError(http.StatusForbidden, "Access denied")
 		}
 	}
 
@@ -441,6 +445,9 @@ func (h *Handler) HandleChatExternal(c echo.Context) error {
 		if errors.Is(err, store.ErrInvalidExternalSessionID) {
 			return echo.NewHTTPError(http.StatusBadRequest, "Invalid session_id")
 		}
+		if errors.Is(err, ErrMessageTooLong) {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
 		if strings.Contains(err.Error(), "rate limit") {
 			return echo.NewHTTPError(http.StatusTooManyRequests, map[string]interface{}{
 				"error":       "rate_limit_exceeded",
@@ -449,7 +456,7 @@ func (h *Handler) HandleChatExternal(c echo.Context) error {
 			})
 		}
 		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "not active") {
-			return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
+			return echo.NewHTTPError(http.StatusForbidden, "Access denied")
 		}
 		slog.Error("chat external failed", "slug", slug, "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Chat service unavailable")
@@ -471,14 +478,19 @@ type VisitorBridgeState struct {
 }
 
 // HandleGetExternalTranscript retrieves the transcript for a visitor chat session.
-// GET /api/v1/agent/:slug/chat/ext/transcript?session_id=...
+// GET /api/v1/agent/:slug/chat/ext/transcript?session_id=...&token=...&expiry=...
 func (h *Handler) HandleGetExternalTranscript(c echo.Context) error {
 	ctx := c.Request().Context()
 	slug := c.Param("slug")
 	sessionID := c.QueryParam("session_id")
+	token := c.QueryParam("token")
+	expiryStr := c.QueryParam("expiry")
 
 	if sessionID == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "session_id is required")
+	}
+	if token == "" || expiryStr == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "token and expiry are required")
 	}
 
 	sessionID, _, err := NormalizeExternalSessionID(sessionID)
@@ -488,7 +500,13 @@ func (h *Handler) HandleGetExternalTranscript(c echo.Context) error {
 
 	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
 	if err != nil || tenant == nil || !tenant.IsActive {
-		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
+		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
+	}
+
+	// Verify HMAC session token
+	expiry, err := verifySessionToken(token, sessionID, expiryStr, tenant.GUID)
+	if err != nil || time.Now().After(expiry) {
+		return echo.NewHTTPError(http.StatusForbidden, "Invalid or expired token")
 	}
 
 	session := h.service.memorySessions.Get(tenant.ID, sessionID)
@@ -568,6 +586,19 @@ func (h *Handler) HandleChatInternal(c echo.Context) error {
 	// Check admin role OR chat:test permission
 	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermChatTest) {
 		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or chat:test permission")
+	}
+
+	// Rate limit: 30 RPM per user for internal chat
+	clientIP := c.RealIP()
+	if clientIP == "" {
+		clientIP = c.Request().RemoteAddr
+	}
+	allowed, rlErr := h.service.CheckRateLimit(ctx, tenant.ID, "internal", clientIP, 30)
+	if rlErr != nil {
+		slog.Error("internal chat rate limit check failed", "error", rlErr)
+	}
+	if !allowed {
+		return echo.NewHTTPError(http.StatusTooManyRequests, "Rate limit exceeded. Please try again in 60 seconds.")
 	}
 
 	// Bind request
@@ -1915,7 +1946,7 @@ func (h *Handler) findTenantBySlug(ctx context.Context, slug string) (*store.Age
 // isDomainAllowed checks if the request origin/referer matches allowed domains.
 func (h *Handler) isDomainAllowed(allowedDomainsJSON, origin, referer string) bool {
 	if allowedDomainsJSON == "" {
-		return true // No restrictions
+		return true // No restrictions configured
 	}
 
 	var domains []string
@@ -1925,7 +1956,7 @@ func (h *Handler) isDomainAllowed(allowedDomainsJSON, origin, referer string) bo
 		return false // Invalid JSON, deny (fail-closed)
 	}
 	if len(domains) == 0 {
-		return true // Empty list, allow all (backward compatible)
+		return false // Empty list means deny all (not allow all)
 	}
 
 	// Extract hostname from origin/referer
@@ -2072,6 +2103,8 @@ func generateIframeHTML(baseURL, slug, companyName, color, welcomeMessage string
 		s = strings.ReplaceAll(s, "'", "\\'")
 		s = strings.ReplaceAll(s, "\n", "\\n")
 		s = strings.ReplaceAll(s, "\r", "")
+		s = strings.ReplaceAll(s, "</script>", "<\\/script>")
+		s = strings.ReplaceAll(s, "</", "<\\/")
 		return s
 	}
 

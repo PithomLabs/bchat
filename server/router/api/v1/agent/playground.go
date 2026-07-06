@@ -352,6 +352,9 @@ Create a support handoff when business impact or security risk is high.
 }
 
 func (h *Handler) ensurePlaygroundDemo(ctx context.Context, demo PlaygroundDemoTenant, force bool) (PlaygroundDemoTenant, PlaygroundSeedResult, error) {
+	h.playgroundMu.Lock()
+	defer h.playgroundMu.Unlock()
+
 	result := PlaygroundSeedResult{Slug: demo.Slug}
 	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &demo.Slug})
 	if err != nil {
@@ -444,11 +447,12 @@ func (h *Handler) playgroundDemoFilesMissing(ctx context.Context, tenantID int32
 func (h *Handler) HandlePlaygroundCatalog(c echo.Context) error {
 	ctx := c.Request().Context()
 	demos := playgroundDemoDefinitions()
+	// Demos should already be seeded at startup. If not found, return what we have.
 	for i := range demos {
 		demo, _, err := h.ensurePlaygroundDemo(ctx, demos[i], false)
 		if err != nil {
-			slog.Error("failed to provision playground demo", "slug", demos[i].Slug, "error", err)
-			return echo.NewHTTPError(http.StatusInternalServerError, "Playground demo is preparing. Please refresh in a moment.")
+			slog.Warn("playground demo not yet available", "slug", demos[i].Slug, "error", err)
+			continue
 		}
 		demos[i] = demo
 	}
@@ -471,6 +475,19 @@ func (h *Handler) HandlePlaygroundCatalog(c echo.Context) error {
 			},
 		},
 	})
+}
+
+// StartupSeedPlaygroundDemos seeds playground demos at server startup.
+// Should be called once during initialization to avoid auto-provisioning on every catalog GET.
+func (h *Handler) StartupSeedPlaygroundDemos() {
+	ctx := context.Background()
+	for _, demo := range playgroundDemoDefinitions() {
+		if _, _, err := h.ensurePlaygroundDemo(ctx, demo, false); err != nil {
+			slog.Error("failed to seed playground demo at startup", "slug", demo.Slug, "error", err)
+		} else {
+			slog.Info("playground demo seeded", "slug", demo.Slug)
+		}
+	}
 }
 
 // HandleSeedPlaygroundDemos creates or refreshes the built-in demo tenants.
@@ -509,10 +526,10 @@ func (h *Handler) HandlePlaygroundRun(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "Playground demo not found")
 	}
 
-	demo, seedResult, err := h.ensurePlaygroundDemo(ctx, demo, false)
-	if err != nil {
-		slog.Error("failed to provision playground demo for run", "slug", slug, "error", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Playground demo is preparing. Please try again in a moment.")
+	// Issue #7: Demos are seeded at startup; just look up the existing tenant
+	existingTenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || existingTenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Playground demo not available. Try again later.")
 	}
 
 	var req PlaygroundRunRequest
@@ -554,7 +571,7 @@ func (h *Handler) HandlePlaygroundRun(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Playground chat service unavailable")
 	}
 
-	artifacts := h.buildPlaygroundArtifacts(ctx, seedResult.TenantID, chatResp.SessionID, req.Message, chatResp, demo.Capabilities)
+	artifacts := h.buildPlaygroundArtifacts(ctx, existingTenant.ID, chatResp.SessionID, req.Message, chatResp, demo.Capabilities)
 	return c.JSON(http.StatusOK, PlaygroundRunResponse{
 		Demo:      demo,
 		Chat:      chatResp,

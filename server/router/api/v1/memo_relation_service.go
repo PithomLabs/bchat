@@ -18,15 +18,20 @@ func (s *APIV1Service) SetMemoRelations(ctx context.Context, request *v1pb.SetMe
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid memo name: %v", err)
 	}
-	memo, err := s.Store.GetMemo(ctx, &store.FindMemo{UID: &memoUID})
+	findMemo := &store.FindMemo{UID: &memoUID}
+	if tenantID := GetTenantIDFromContext(ctx); tenantID != nil {
+		findMemo.TenantID = tenantID
+	}
+	memo, err := s.Store.GetMemo(ctx, findMemo)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to get memo")
 	}
 	referenceType := store.MemoRelationReference
 	// Delete all reference relations first.
 	if err := s.Store.DeleteMemoRelation(ctx, &store.DeleteMemoRelation{
-		MemoID: &memo.ID,
-		Type:   &referenceType,
+		MemoID:   &memo.ID,
+		Type:     &referenceType,
+		TenantID: memo.TenantID,
 	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to delete memo relation")
 	}
@@ -45,7 +50,11 @@ func (s *APIV1Service) SetMemoRelations(ctx context.Context, request *v1pb.SetMe
 		if err != nil {
 			return nil, status.Errorf(codes.InvalidArgument, "invalid related memo name: %v", err)
 		}
-		relatedMemo, err := s.Store.GetMemo(ctx, &store.FindMemo{UID: &relatedMemoUID})
+		findRelated := &store.FindMemo{UID: &relatedMemoUID}
+		if tenantID := GetTenantIDFromContext(ctx); tenantID != nil {
+			findRelated.TenantID = tenantID
+		}
+		relatedMemo, err := s.Store.GetMemo(ctx, findRelated)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to get related memo")
 		}
@@ -53,6 +62,7 @@ func (s *APIV1Service) SetMemoRelations(ctx context.Context, request *v1pb.SetMe
 			MemoID:        memo.ID,
 			RelatedMemoID: relatedMemo.ID,
 			Type:          convertMemoRelationTypeToStore(relation.Type),
+			TenantID:      memo.TenantID,
 		}); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to upsert memo relation")
 		}
@@ -66,7 +76,11 @@ func (s *APIV1Service) ListMemoRelations(ctx context.Context, request *v1pb.List
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid memo name: %v", err)
 	}
-	memo, err := s.Store.GetMemo(ctx, &store.FindMemo{UID: &memoUID})
+	findMemo := &store.FindMemo{UID: &memoUID}
+	if tenantID := GetTenantIDFromContext(ctx); tenantID != nil {
+		findMemo.TenantID = tenantID
+	}
+	memo, err := s.Store.GetMemo(ctx, findMemo)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to get memo")
 	}
@@ -87,6 +101,7 @@ func (s *APIV1Service) ListMemoRelations(ctx context.Context, request *v1pb.List
 	tempList, err := s.Store.ListMemoRelations(ctx, &store.FindMemoRelation{
 		MemoID:     &memo.ID,
 		MemoFilter: memoFilter,
+		TenantID:   memo.TenantID,
 	})
 	if err != nil {
 		return nil, err
@@ -101,6 +116,7 @@ func (s *APIV1Service) ListMemoRelations(ctx context.Context, request *v1pb.List
 	tempList, err = s.Store.ListMemoRelations(ctx, &store.FindMemoRelation{
 		RelatedMemoID: &memo.ID,
 		MemoFilter:    memoFilter,
+		TenantID:      memo.TenantID,
 	})
 	if err != nil {
 		return nil, err
@@ -120,7 +136,11 @@ func (s *APIV1Service) ListMemoRelations(ctx context.Context, request *v1pb.List
 }
 
 func (s *APIV1Service) convertMemoRelationFromStore(ctx context.Context, memoRelation *store.MemoRelation) (*v1pb.MemoRelation, error) {
-	memo, err := s.Store.GetMemo(ctx, &store.FindMemo{ID: &memoRelation.MemoID})
+	findMemo := &store.FindMemo{ID: &memoRelation.MemoID}
+	if memoRelation.TenantID != nil {
+		findMemo.TenantID = memoRelation.TenantID
+	}
+	memo, err := s.Store.GetMemo(ctx, findMemo)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +148,11 @@ func (s *APIV1Service) convertMemoRelationFromStore(ctx context.Context, memoRel
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to get memo content snippet")
 	}
-	relatedMemo, err := s.Store.GetMemo(ctx, &store.FindMemo{ID: &memoRelation.RelatedMemoID})
+	findRelated := &store.FindMemo{ID: &memoRelation.RelatedMemoID}
+	if memoRelation.TenantID != nil {
+		findRelated.TenantID = memoRelation.TenantID
+	}
+	relatedMemo, err := s.Store.GetMemo(ctx, findRelated)
 	if err != nil {
 		return nil, err
 	}

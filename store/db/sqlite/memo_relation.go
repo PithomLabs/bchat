@@ -14,10 +14,12 @@ func (d *DB) UpsertMemoRelation(ctx context.Context, create *store.MemoRelation)
 		INSERT INTO memo_relation (
 			memo_id,
 			related_memo_id,
-			type
+			type,
+			tenant_id
 		)
-		VALUES (?, ?, ?)
-		RETURNING memo_id, related_memo_id, type
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT (memo_id, related_memo_id, type) DO UPDATE SET tenant_id = excluded.tenant_id
+		RETURNING memo_id, related_memo_id, type, tenant_id
 	`
 	memoRelation := &store.MemoRelation{}
 	if err := d.db.QueryRowContext(
@@ -26,10 +28,12 @@ func (d *DB) UpsertMemoRelation(ctx context.Context, create *store.MemoRelation)
 		create.MemoID,
 		create.RelatedMemoID,
 		create.Type,
+		create.TenantID,
 	).Scan(
 		&memoRelation.MemoID,
 		&memoRelation.RelatedMemoID,
 		&memoRelation.Type,
+		&memoRelation.TenantID,
 	); err != nil {
 		return nil, err
 	}
@@ -40,13 +44,16 @@ func (d *DB) UpsertMemoRelation(ctx context.Context, create *store.MemoRelation)
 func (d *DB) ListMemoRelations(ctx context.Context, find *store.FindMemoRelation) ([]*store.MemoRelation, error) {
 	where, args := []string{"TRUE"}, []any{}
 	if find.MemoID != nil {
-		where, args = append(where, "memo_id = ?"), append(args, find.MemoID)
+		where, args = append(where, "mr.memo_id = ?"), append(args, find.MemoID)
 	}
 	if find.RelatedMemoID != nil {
-		where, args = append(where, "related_memo_id = ?"), append(args, find.RelatedMemoID)
+		where, args = append(where, "mr.related_memo_id = ?"), append(args, find.RelatedMemoID)
 	}
 	if find.Type != nil {
-		where, args = append(where, "type = ?"), append(args, find.Type)
+		where, args = append(where, "mr.type = ?"), append(args, find.Type)
+	}
+	if find.TenantID != nil {
+		where, args = append(where, "mr.tenant_id = ?"), append(args, find.TenantID)
 	}
 	if find.MemoFilter != nil {
 		// Parse filter string and return the parsed expression.
@@ -62,18 +69,19 @@ func (d *DB) ListMemoRelations(ctx context.Context, find *store.FindMemoRelation
 		}
 		condition := convertCtx.Buffer.String()
 		if condition != "" {
-			where = append(where, fmt.Sprintf("memo_id IN (SELECT id FROM memo WHERE %s)", condition))
-			where = append(where, fmt.Sprintf("related_memo_id IN (SELECT id FROM memo WHERE %s)", condition))
+			where = append(where, fmt.Sprintf("mr.memo_id IN (SELECT id FROM memo WHERE %s)", condition))
+			where = append(where, fmt.Sprintf("mr.related_memo_id IN (SELECT id FROM memo WHERE %s)", condition))
 			args = append(args, append(convertCtx.Args, convertCtx.Args...)...)
 		}
 	}
 
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT
-			memo_id,
-			related_memo_id,
-			type
-		FROM memo_relation
+			mr.memo_id,
+			mr.related_memo_id,
+			mr.type,
+			mr.tenant_id
+		FROM memo_relation mr
 		WHERE `+strings.Join(where, " AND "), args...)
 	if err != nil {
 		return nil, err
@@ -87,6 +95,7 @@ func (d *DB) ListMemoRelations(ctx context.Context, find *store.FindMemoRelation
 			&memoRelation.MemoID,
 			&memoRelation.RelatedMemoID,
 			&memoRelation.Type,
+			&memoRelation.TenantID,
 		); err != nil {
 			return nil, err
 		}
@@ -110,6 +119,9 @@ func (d *DB) DeleteMemoRelation(ctx context.Context, delete *store.DeleteMemoRel
 	}
 	if delete.Type != nil {
 		where, args = append(where, "type = ?"), append(args, delete.Type)
+	}
+	if delete.TenantID != nil {
+		where, args = append(where, "tenant_id = ?"), append(args, delete.TenantID)
 	}
 	stmt := `
 		DELETE FROM memo_relation

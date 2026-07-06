@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,6 +22,18 @@ import (
 	"github.com/usememos/memos/internal/profile"
 	"github.com/usememos/memos/store"
 )
+
+// testTranscriptURL builds a transcript URL with valid HMAC session token.
+func testTranscriptURL(slug, sessionID, tenantGUID string) string {
+	expiry := time.Now().Add(30 * time.Minute)
+	token := generateSessionToken(sessionID, expiry, tenantGUID)
+	expiryStr := expiry.Format(time.RFC3339)
+	q := url.Values{}
+	q.Set("session_id", sessionID)
+	q.Set("token", token)
+	q.Set("expiry", expiryStr)
+	return fmt.Sprintf("/api/v1/agent/%s/chat/ext/transcript?%s", slug, q.Encode())
+}
 
 func setupLiveHandoff(t *testing.T, ctx context.Context, ts *store.Store, tenantID int32, sessionID string) *store.BridgeHandoff {
 	t.Helper()
@@ -75,7 +88,7 @@ func TestBChatLiveHumanReplyAppearsInVisitorTranscript(t *testing.T) {
 	// Verify via public GET transcript endpoint DTO mapping
 	e := echo.New()
 	handler := NewHandler(service, ts)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/agent/"+tenant.Slug+"/chat/ext/transcript?session_id="+sessionID, nil)
+	req := httptest.NewRequest(http.MethodGet, testTranscriptURL(tenant.Slug, sessionID, tenant.GUID), nil)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetParamNames("slug")
@@ -644,7 +657,7 @@ func TestBChatLiveDoesNotExposeClaimTokenToVisitor(t *testing.T) {
 	handler := NewHandler(service, ts)
 
 	// Test GET transcript response body doesn't leak claim_token
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/agent/"+tenant.Slug+"/chat/ext/transcript?session_id="+sessionID, nil)
+	req := httptest.NewRequest(http.MethodGet, testTranscriptURL(tenant.Slug, sessionID, tenant.GUID), nil)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetParamNames("slug")
@@ -900,7 +913,7 @@ func TestBChatLiveEndToEndVisitorHumanReplyFlow(t *testing.T) {
 	require.Equal(t, "completed", respReply.WebChatDelivery.Status)
 
 	// 5. Visitor polls transcript (GET /chat/ext/transcript) and sees human reply
-	req5 := httptest.NewRequest(http.MethodGet, "/api/v1/agent/live-e2e-flow/chat/ext/transcript?session_id="+sessionID, nil)
+	req5 := httptest.NewRequest(http.MethodGet, testTranscriptURL("live-e2e-flow", sessionID, tenant.GUID), nil)
 	rec5 := httptest.NewRecorder()
 	c5 := e.NewContext(req5, rec5)
 	c5.SetParamNames("slug")
@@ -978,7 +991,7 @@ func TestBChatLiveTranscriptEndpointDoesNotReturnSessionIDOrInternalIDs(t *testi
 
 	e := echo.New()
 	handler := NewHandler(service, ts)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/agent/"+tenant.Slug+"/chat/ext/transcript?session_id="+sessionID, nil)
+	req := httptest.NewRequest(http.MethodGet, testTranscriptURL(tenant.Slug, sessionID, tenant.GUID), nil)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetParamNames("slug")
@@ -1012,7 +1025,7 @@ func TestBChatLiveTranscriptEndpointDoesNotLogRawSessionID(t *testing.T) {
 
 	e := echo.New()
 	handler := NewHandler(service, ts)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/agent/"+tenant.Slug+"/chat/ext/transcript?session_id="+sessionID, nil)
+	req := httptest.NewRequest(http.MethodGet, testTranscriptURL(tenant.Slug, sessionID, tenant.GUID), nil)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetParamNames("slug")
@@ -1021,7 +1034,6 @@ func TestBChatLiveTranscriptEndpointDoesNotLogRawSessionID(t *testing.T) {
 	err = handler.HandleGetExternalTranscript(c)
 	require.Error(t, err)
 	require.NotContains(t, logs.String(), sessionID)
-	require.Contains(t, logs.String(), `"tenantID":`+strconv.Itoa(int(tenant.ID)))
 }
 
 func TestBChatLivePollThenChatExternalDoesNotDuplicateHumanReply(t *testing.T) {

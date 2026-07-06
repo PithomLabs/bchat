@@ -263,8 +263,14 @@ func (s *APIV1Service) GetMemo(ctx context.Context, request *v1pb.GetMemoRequest
 		return nil, status.Errorf(codes.Internal, "failed to get user")
 	}
 	tenantID := GetTenantIDFromContext(ctx)
-	if tenantID != nil && memo.TenantID != nil && *memo.TenantID != *tenantID && !isSuperUser(user) {
-		return nil, status.Errorf(codes.PermissionDenied, "permission denied")
+	// Tenant-scoped memos: caller must belong to the same tenant (or be superuser).
+	// Legacy memos with TenantID=nil remain globally accessible.
+	if memo.TenantID != nil {
+		if tenantID == nil || *memo.TenantID != *tenantID {
+			if !isSuperUser(user) {
+				return nil, status.Errorf(codes.PermissionDenied, "permission denied")
+			}
+		}
 	}
 
 	if memo.Visibility != store.Public {
@@ -307,8 +313,12 @@ func (s *APIV1Service) UpdateMemo(ctx context.Context, request *v1pb.UpdateMemoR
 
 	// Check tenant ownership (superusers bypass this check)
 	tenantID := GetTenantIDFromContext(ctx)
-	if tenantID != nil && memo.TenantID != nil && *memo.TenantID != *tenantID && !isSuperUser(user) {
-		return nil, status.Errorf(codes.PermissionDenied, "permission denied")
+	if memo.TenantID != nil {
+		if tenantID == nil || *memo.TenantID != *tenantID {
+			if !isSuperUser(user) {
+				return nil, status.Errorf(codes.PermissionDenied, "permission denied")
+			}
+		}
 	}
 
 	// Only the creator or admin can update the memo.
@@ -436,8 +446,12 @@ func (s *APIV1Service) DeleteMemo(ctx context.Context, request *v1pb.DeleteMemoR
 
 	// Check tenant ownership (superusers bypass this check)
 	tenantID := GetTenantIDFromContext(ctx)
-	if tenantID != nil && memo.TenantID != nil && *memo.TenantID != *tenantID && !isSuperUser(user) {
-		return nil, status.Errorf(codes.PermissionDenied, "permission denied")
+	if memo.TenantID != nil {
+		if tenantID == nil || *memo.TenantID != *tenantID {
+			if !isSuperUser(user) {
+				return nil, status.Errorf(codes.PermissionDenied, "permission denied")
+			}
+		}
 	}
 
 	// Only the creator or admin can delete the memo.
@@ -457,7 +471,7 @@ func (s *APIV1Service) DeleteMemo(ctx context.Context, request *v1pb.DeleteMemoR
 	}
 
 	// Delete memo relation
-	if err := s.Store.DeleteMemoRelation(ctx, &store.DeleteMemoRelation{MemoID: &memo.ID}); err != nil {
+	if err := s.Store.DeleteMemoRelation(ctx, &store.DeleteMemoRelation{MemoID: &memo.ID, TenantID: memo.TenantID}); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to delete memo relations")
 	}
 
@@ -474,7 +488,11 @@ func (s *APIV1Service) DeleteMemo(ctx context.Context, request *v1pb.DeleteMemoR
 
 	// Delete memo comments
 	commentType := store.MemoRelationComment
-	relations, err := s.Store.ListMemoRelations(ctx, &store.FindMemoRelation{RelatedMemoID: &memo.ID, Type: &commentType})
+	findComments := &store.FindMemoRelation{RelatedMemoID: &memo.ID, Type: &commentType}
+	if tenantID != nil {
+		findComments.TenantID = tenantID
+	}
+	relations, err := s.Store.ListMemoRelations(ctx, findComments)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list memo comments")
 	}
@@ -486,7 +504,7 @@ func (s *APIV1Service) DeleteMemo(ctx context.Context, request *v1pb.DeleteMemoR
 
 	// Delete memo references
 	referenceType := store.MemoRelationReference
-	if err := s.Store.DeleteMemoRelation(ctx, &store.DeleteMemoRelation{RelatedMemoID: &memo.ID, Type: &referenceType}); err != nil {
+	if err := s.Store.DeleteMemoRelation(ctx, &store.DeleteMemoRelation{RelatedMemoID: &memo.ID, Type: &referenceType, TenantID: memo.TenantID}); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to delete memo references")
 	}
 
@@ -498,7 +516,11 @@ func (s *APIV1Service) CreateMemoComment(ctx context.Context, request *v1pb.Crea
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid memo name: %v", err)
 	}
-	relatedMemo, err := s.Store.GetMemo(ctx, &store.FindMemo{UID: &memoUID})
+	findMemo := &store.FindMemo{UID: &memoUID}
+	if tenantID := GetTenantIDFromContext(ctx); tenantID != nil {
+		findMemo.TenantID = tenantID
+	}
+	relatedMemo, err := s.Store.GetMemo(ctx, findMemo)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to get memo")
 	}
@@ -518,16 +540,22 @@ func (s *APIV1Service) CreateMemoComment(ctx context.Context, request *v1pb.Crea
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid memo name: %v", err)
 	}
-	memo, err := s.Store.GetMemo(ctx, &store.FindMemo{UID: &memoUID})
+	findMemo2 := &store.FindMemo{UID: &memoUID}
+	if tenantID := GetTenantIDFromContext(ctx); tenantID != nil {
+		findMemo2.TenantID = tenantID
+	}
+	memo, err := s.Store.GetMemo(ctx, findMemo2)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to get memo")
 	}
 
 	// Build the relation between the comment memo and the original memo.
+	tenantID := GetTenantIDFromContext(ctx)
 	_, err = s.Store.UpsertMemoRelation(ctx, &store.MemoRelation{
 		MemoID:        memo.ID,
 		RelatedMemoID: relatedMemo.ID,
 		Type:          store.MemoRelationComment,
+		TenantID:      tenantID,
 	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create memo relation")
@@ -577,7 +605,11 @@ func (s *APIV1Service) ListMemoComments(ctx context.Context, request *v1pb.ListM
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid memo name: %v", err)
 	}
-	memo, err := s.Store.GetMemo(ctx, &store.FindMemo{UID: &memoUID})
+	findMemo := &store.FindMemo{UID: &memoUID}
+	if tenantID := GetTenantIDFromContext(ctx); tenantID != nil {
+		findMemo.TenantID = tenantID
+	}
+	memo, err := s.Store.GetMemo(ctx, findMemo)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to get memo")
 	}
@@ -595,20 +627,28 @@ func (s *APIV1Service) ListMemoComments(ctx context.Context, request *v1pb.ListM
 		memoFilter = &filterStr
 	}
 	memoRelationComment := store.MemoRelationComment
-	memoRelations, err := s.Store.ListMemoRelations(ctx, &store.FindMemoRelation{
+	findRelation := &store.FindMemoRelation{
 		RelatedMemoID: &memo.ID,
 		Type:          &memoRelationComment,
 		MemoFilter:    memoFilter,
-	})
+	}
+	if tenantID := GetTenantIDFromContext(ctx); tenantID != nil {
+		findRelation.TenantID = tenantID
+	}
+	memoRelations, err := s.Store.ListMemoRelations(ctx, findRelation)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list memo relations")
 	}
 
 	var memos []*v1pb.Memo
 	for _, memoRelation := range memoRelations {
-		memo, err := s.Store.GetMemo(ctx, &store.FindMemo{
+		findComment := &store.FindMemo{
 			ID: &memoRelation.MemoID,
-		})
+		}
+		if tenantID := GetTenantIDFromContext(ctx); tenantID != nil {
+			findComment.TenantID = tenantID
+		}
+		memo, err := s.Store.GetMemo(ctx, findComment)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to get memo")
 		}
@@ -812,8 +852,9 @@ func (s *APIV1Service) dispatchMemoMentions(ctx context.Context, memo *store.Mem
 	// Check if this memo is a comment (has a parent relation)
 	relationType := store.MemoRelationComment
 	relations, err := s.Store.ListMemoRelations(ctx, &store.FindMemoRelation{
-		MemoID: &memo.ID,
-		Type:   &relationType,
+		MemoID:   &memo.ID,
+		Type:     &relationType,
+		TenantID: memo.TenantID,
 	})
 	if err == nil && len(relations) > 0 {
 		// It is a comment, point to the parent.
@@ -1013,7 +1054,10 @@ func (s *APIV1Service) handleTicketAIResponse(ctx context.Context, memoUID strin
 	}
 
 	// 2. Fetch the target memo
-	memo, err := s.Store.GetMemo(ctx, &store.FindMemo{UID: &memoUID})
+	findTargetMemo := &store.FindMemo{UID: &memoUID}
+	// Note: we don't have tenant context in this goroutine, so we rely on
+	// the memo's own tenant_id for subsequent operations.
+	memo, err := s.Store.GetMemo(ctx, findTargetMemo)
 	if err != nil || memo == nil {
 		return
 	}
@@ -1024,11 +1068,12 @@ func (s *APIV1Service) handleTicketAIResponse(ctx context.Context, memoUID strin
 	relations, err := s.Store.ListMemoRelations(ctx, &store.FindMemoRelation{
 		MemoID: &memo.ID,
 		Type:   &commentType,
+		TenantID: memo.TenantID,
 	})
 	if err == nil && len(relations) > 0 {
 		// It is a comment, load parent memo
 		pID := relations[0].RelatedMemoID
-		pMemo, err := s.Store.GetMemo(ctx, &store.FindMemo{ID: &pID})
+		pMemo, err := s.Store.GetMemo(ctx, &store.FindMemo{ID: &pID, TenantID: memo.TenantID})
 		if err == nil && pMemo != nil {
 			parentMemo = pMemo
 		}
@@ -1097,6 +1142,7 @@ func (s *APIV1Service) handleTicketAIResponse(ctx context.Context, memoUID strin
 	commentsRelations, err := s.Store.ListMemoRelations(ctx, &store.FindMemoRelation{
 		RelatedMemoID: &parentMemo.ID,
 		Type:          &commentType,
+		TenantID:      parentMemo.TenantID,
 	})
 	if err == nil {
 		type commentWithTime struct {
@@ -1107,7 +1153,7 @@ func (s *APIV1Service) handleTicketAIResponse(ctx context.Context, memoUID strin
 		}
 		var list []commentWithTime
 		for _, r := range commentsRelations {
-			cMemo, err := s.Store.GetMemo(ctx, &store.FindMemo{ID: &r.MemoID})
+			cMemo, err := s.Store.GetMemo(ctx, &store.FindMemo{ID: &r.MemoID, TenantID: parentMemo.TenantID})
 			if err == nil && cMemo != nil {
 				list = append(list, commentWithTime{
 					content:   cMemo.Content,
@@ -1174,6 +1220,7 @@ func (s *APIV1Service) handleTicketAIResponse(ctx context.Context, memoUID strin
 		MemoID:        createdReply.ID,
 		RelatedMemoID: parentMemo.ID,
 		Type:          store.MemoRelationComment,
+		TenantID:      &tenantID,
 	})
 	if err != nil {
 		slog.Error("AI support: failed to create comment relation", "error", err)

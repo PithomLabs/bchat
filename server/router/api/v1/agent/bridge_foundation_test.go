@@ -134,11 +134,13 @@ func TestNoHandoffRowCreatedByChatExternal(t *testing.T) {
 
 func TestChatExternalNormalAIBehaviorUnchanged(t *testing.T) {
 	responseType := reflect.TypeOf(ChatResponse{})
-	require.Equal(t, 5, responseType.NumField())
+	require.Equal(t, 7, responseType.NumField())
 	require.Equal(t, "session_id", responseType.Field(0).Tag.Get("json"))
 	require.Equal(t, "message", responseType.Field(1).Tag.Get("json"))
 	require.Equal(t, "metadata", responseType.Field(2).Tag.Get("json"))
 	require.Equal(t, "bridge,omitempty", responseType.Field(4).Tag.Get("json"))
+	require.Equal(t, "session_token,omitempty", responseType.Field(5).Tag.Get("json"))
+	require.Equal(t, "session_token_expiry,omitempty", responseType.Field(6).Tag.Get("json"))
 }
 
 func TestChatExternalRequiresExternalAudience(t *testing.T) {
