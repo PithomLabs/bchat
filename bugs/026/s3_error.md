@@ -1,0 +1,25 @@
+
+2026/07/07 02:14:34 INFO Creating per-tenant S3 LanceDB connection tenantID=4 uri=s3://bchat/lancedb/4 endpoint=t3.storage.dev
+02:14:38
+2026/07/07 02:14:38 WARN Legacy table migration warning error="failed to list tables: failed to get table names: lance error: LanceError(IO): Generic S3 error: Error performing list request: Error performing GET https://s3.auto.amazonaws.com/bchat?delimiter=%2F&list-type=2&prefix=lancedb%2F4%2F in 4.186059144s, after 10 retries, max_retries: 10, retry_timeout: 180s  - HTTP error: error sending request, /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lance-io-0.37.0/src/object_store.rs:511:22"
+02:14:41
+2026/07/07 02:14:41 WARN failed to list chunks for tenant tenantID=4 error="failed to create VectorDB for tenant 4: failed to ensure table: failed to list tables: failed to get table names: lance error: LanceError(IO): Generic S3 error: Error performing list request: Error performing GET https://s3.auto.amazonaws.com/bchat?delimiter=%2F&list-type=2&prefix=lancedb%2F4%2F in 2.509717807s, after 10 retries, max_retries: 10, retry_timeout: 180s  - HTTP error: error sending request, /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lance-io-0.37.0/src/object_store.rs:511:22"
+02:14:41
+2026/07/07 02:14:41 INFO Creating per-tenant S3 LanceDB connection tenantID=3 uri=s3://bchat/lancedb/3 endpoint=t3.storage.dev
+02:14:42
+2026/07/07 02:14:42 INFO memory stats heapAlloc="8.8 MiB" heapSys="83.4 MiB" heapObjects=36994 heapGrowth="466.2 KiB" numGoroutine=31 numGC=4 gcSince=0 nextGC="12.0 MiB" gcPause=44.06µs
+02:14:44
+2026/07/07 02:14:44 WARN Legacy table migration warning error="failed to list tables: failed to get table names: lance error: LanceError(IO): Generic S3 error: Error performing list request: Error performing GET https://s3.auto.amazonaws.com/bchat?delimiter=%2F&list-type=2&prefix=lancedb%2F3%2F in 3.532014514s, after 10 retries, max_retries: 10, retry_timeout: 180s  - HTTP error: error sending request, /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lance-io-0.37.0/src/object_store.rs:511:22"
+02:14:59
+2026/07/07 02:14:59 WARN failed to list chunks for tenant tenantID=3 error="failed to create VectorDB for tenant 3: failed to ensure table: failed to list tables: failed to get table names: lance error: LanceError(IO): Generic S3 error: Error performing list request: Error performing GET https://s3.auto.amazonaws.com/bchat?delimiter=%2F&list-type=2&prefix=lancedb%2F3%2F in 14.877705723s, after 10 retries, max_retries: 10, retry_timeout: 180s  - HTTP error: error sending request, /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lance-io-0.37.0/src/object_store.rs:511:22"
+02:14:59
+2026/07/07 02:14:59 INFO Creating per-tenant S3 LanceDB connection tenantID=2 uri=s3://bchat/lancedb/2 endpoint=t3.storage.dev
+02:15:02
+2026/07/07 02:15:02 WARN Legacy table migration warning error="failed to list tables: failed to get table names: lance error: LanceError(IO): Generic S3 error: Error performing list request: Error performing GET https://s3.auto.amazonaws.com/bchat?delimiter=%2F&list-type=2&prefix=lancedb%2F2%2F in 2.346055338s, after 10 retries, max_retries: 10, retry_timeout: 180s  - HTTP error: error sending request, /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lance-io-0.37.0/src/object_store.rs:511:22"
+02:15:04
+2026/07/07 02:15:04 WARN failed to list chunks for tenant tenantID=2 error="failed to create VectorDB for tenant 2: failed to ensure table: failed to list tables: failed to get table names: lance error: LanceError(IO): Generic S3 error: Error performing list request: Error performing GET https://s3.auto.amazonaws.com/bchat?delimiter=%2F&list-type=2&prefix=lancedb%2F2%2F in 2.336546095s, after 10 retries, max_retries: 10, retry_timeout: 180s  - HTTP error: error sending request, /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lance-io-0.37.0/src/object_store.rs:511:22"
+02:15:42
+2026/07/07 02:15:42 INFO memory stats heapAlloc="5.5 MiB" heapSys="83.4 MiB" heapObjects=15741 heapGrowth="16.0 EiB" numGoroutine=29 numGC=5 gcSince=1 nextGC="11.4 MiB" gcPause=114.03µs
+
+
+2026/07/07 03:32:28 ERROR reindex failed tenantID=5 audience=external resume=false error="failed to create VectorDB for tenant 5: failed to ensure table: failed to list tables: failed to get table names: lance error: LanceError(IO): Generic S3 error: Error performing list request: Error performing GET https://t3.storage.dev/bchat?delimiter=%2F&list-type=2&prefix=lancedb%2F5%2F in 1.412781ms - Server returned non-2xx status code: 403 Forbidden: <?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>AccessDenied</Code><Message>Access Denied.</Message><Resource>/bchat</Resource><RequestId>1783395148281407694</RequestId><BucketName>bchat</BucketName></Error>, /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lance-io-0.37.0/src/object_store.rs:511:22"

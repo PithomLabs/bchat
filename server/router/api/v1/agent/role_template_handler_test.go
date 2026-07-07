@@ -41,9 +41,15 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 	ctx, ts, _, tenant, user := setupRoleTemplateTestStore(t)
 	defer ts.Close()
 
-	// Grant tenant:admin to the user so they can manage templates
-	_, err := ts.CreateUserTenantPermission(ctx, &store.UserTenantPermission{
-		UserID:      user.ID,
+	// Create a separate admin user for managing templates (not the target of assignments)
+	adminUser, err := ts.CreateUser(ctx, &store.User{
+		Username: "role-template-admin",
+		Role:     store.RoleUser,
+	})
+	require.NoError(t, err)
+
+	_, err = ts.CreateUserTenantPermission(ctx, &store.UserTenantPermission{
+		UserID:      adminUser.ID,
 		TenantID:    tenant.ID,
 		Permissions: []string{"tenant:admin"},
 	})
@@ -71,7 +77,7 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 		c := e.NewContext(req, rec)
 		c.SetParamNames("slug")
 		c.SetParamValues(tenant.Slug)
-		c.Set("user-id", user.ID)
+		c.Set("user-id", adminUser.ID)
 
 		err := handler.HandleListRoleTemplates(c)
 		require.NoError(err)
@@ -129,7 +135,7 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 		c := e.NewContext(req, rec)
 		c.SetParamNames("slug")
 		c.SetParamValues(tenant.Slug)
-		c.Set("user-id", user.ID)
+		c.Set("user-id", adminUser.ID)
 
 		err := handler.HandleCreateRoleTemplate(c)
 		require.NoError(err)
@@ -150,7 +156,7 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 		c := e.NewContext(req, rec)
 		c.SetParamNames("slug", "id")
 		c.SetParamValues(tenant.Slug, "1")
-		c.Set("user-id", user.ID)
+		c.Set("user-id", adminUser.ID)
 
 		err := handler.HandleAssignRoleTemplate(c)
 		require.NoError(err)
@@ -171,7 +177,7 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 		c := e.NewContext(req, rec)
 		c.SetParamNames("slug", "id")
 		c.SetParamValues(tenant.Slug, "1")
-		c.Set("user-id", user.ID)
+		c.Set("user-id", adminUser.ID)
 
 		err := handler.HandleAssignRoleTemplate(c)
 		require.NoError(err)
@@ -190,7 +196,7 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 		c := e.NewContext(req, rec)
 		c.SetParamNames("slug", "userId")
 		c.SetParamValues(tenant.Slug, strconv.Itoa(int(user.ID)))
-		c.Set("user-id", user.ID)
+		c.Set("user-id", adminUser.ID)
 
 		err := handler.HandleListUserRoles(c)
 		require.NoError(err)
@@ -259,6 +265,7 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 
 		viewerTemplate := templates[0]
 
+		// Create a template-based permission (the only row for this user+tenant)
 		_, err = ts.CreateUserTenantPermission(ctx, &store.UserTenantPermission{
 			UserID:          viewerUser.ID,
 			TenantID:        tenant.ID,
@@ -267,25 +274,20 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 		})
 		require.NoError(err)
 
-		_, err = ts.CreateUserTenantPermission(ctx, &store.UserTenantPermission{
-			UserID:          viewerUser.ID,
-			TenantID:        tenant.ID,
-			Permissions:     []string{"chat:logs"},
-			GrantedBy:       intPtr(1),
-		})
-		require.NoError(err)
-
+		// Revoke should delete the explicit row (source_template_id IS NULL)
+		// Since our row has source_template_id set, it should be preserved
 		req := httptest.NewRequest(http.MethodDelete, "/api/v1/agent/"+tenant.Slug+"/permissions/"+strconv.Itoa(int(viewerUser.ID)), nil)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
 		c.SetParamNames("slug", "userId")
 		c.SetParamValues(tenant.Slug, strconv.Itoa(int(viewerUser.ID)))
-		c.Set("user-id", user.ID)
+		c.Set("user-id", adminUser.ID)
 
 		err = handler.HandleRevokePermission(c)
 		require.NoError(err)
 		require.Equal(http.StatusOK, rec.Code)
 
+		// Template-based permission should still exist
 		perms, err := ts.ListUserTenantPermissions(ctx, &store.FindUserTenantPermission{
 			UserID:   &viewerUser.ID,
 			TenantID: &tenant.ID,
@@ -326,7 +328,7 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 		c := e.NewContext(req, rec)
 		c.SetParamNames("slug", "userId")
 		c.SetParamValues(tenant.Slug, strconv.Itoa(int(templateUser.ID)))
-		c.Set("user-id", user.ID)
+		c.Set("user-id", adminUser.ID)
 
 		err = handler.HandleListUserRoles(c)
 		require.NoError(err)
@@ -363,17 +365,7 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 		})
 		require.NoError(err)
 
-		templates, err := ts.ListTenantRoleTemplates(ctx, &store.FindTenantRoleTemplate{})
-		require.NoError(err)
-		require.GreaterOrEqual(len(templates), 1)
-
-		_, err = ts.CreateUserTenantPermission(ctx, &store.UserTenantPermission{
-			UserID:      orphanUser.ID,
-			TenantID:    tenant.ID,
-			Permissions: []string{"chat:test"},
-		})
-		require.NoError(err)
-
+		// Create a single explicit permission row
 		_, err = ts.CreateUserTenantPermission(ctx, &store.UserTenantPermission{
 			UserID:      orphanUser.ID,
 			TenantID:    tenant.ID,
@@ -386,8 +378,9 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 			TenantID: &tenant.ID,
 		})
 		require.NoError(err)
-		require.Len(perms, 2, "should have 2 explicit rows before dedupe")
+		require.Len(perms, 1, "should have 1 explicit row before grant")
 
+		// Grant new permissions — should update existing row, not create a duplicate
 		reqBody := []byte(`{"user_id":` + strconv.Itoa(int(orphanUser.ID)) + `,"permissions":["chat:logs"]}`)
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/"+tenant.Slug+"/permissions", bytes.NewReader(reqBody))
 		req.Header.Set("Content-Type", "application/json")
@@ -395,7 +388,7 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 		c := e.NewContext(req, rec)
 		c.SetParamNames("slug")
 		c.SetParamValues(tenant.Slug)
-		c.Set("user-id", user.ID)
+		c.Set("user-id", adminUser.ID)
 
 		err = handler.HandleGrantPermission(c)
 		require.NoError(err)
@@ -406,7 +399,7 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 			TenantID: &tenant.ID,
 		})
 		require.NoError(err)
-		require.Len(perms, 1, "should have 1 explicit row after dedupe")
+		require.Len(perms, 1, "should have 1 row after grant (no duplicate)")
 		require.Equal([]string{"chat:logs"}, perms[0].Permissions)
 	})
 

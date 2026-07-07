@@ -202,14 +202,14 @@ CREATE TABLE agent_tenants (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     slug TEXT UNIQUE NOT NULL,
     company_name TEXT NOT NULL,
-    guid TEXT,
+    guid TEXT NOT NULL UNIQUE,
     widget_key TEXT,
     vertical TEXT,
     is_active INTEGER NOT NULL DEFAULT 1,
     processing_options TEXT,
     allowed_domains TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_tenants_guid ON agent_tenants(guid);
@@ -218,29 +218,29 @@ CREATE INDEX IF NOT EXISTS idx_agent_tenants_widget_key ON agent_tenants(widget_
 -- agent_audiences
 CREATE TABLE agent_audiences (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER NOT NULL,
-    audience_type TEXT NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    audience_type TEXT NOT NULL CHECK (audience_type IN ('internal', 'external')),
     role TEXT NOT NULL,
     tone TEXT NOT NULL,
     brand_voice TEXT,
-    guidelines TEXT,
-    emergency_phone TEXT NOT NULL,
-    secondary_phones TEXT,
+    guidelines TEXT NOT NULL DEFAULT '[]',
+    emergency_phone TEXT NOT NULL DEFAULT '',
+    secondary_phones TEXT NOT NULL DEFAULT '[]',
     email TEXT,
     address TEXT,
-    emergency_urgency_threshold INTEGER DEFAULT 4,
-    escalation_confidence_threshold REAL DEFAULT 0.85,
-    rate_limit_rpm INTEGER DEFAULT 60,
-    require_contact_on_fallback INTEGER DEFAULT 1,
-    max_message_length INTEGER DEFAULT 2000,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    emergency_urgency_threshold INTEGER NOT NULL DEFAULT 4,
+    escalation_confidence_threshold REAL NOT NULL DEFAULT 0.85,
+    rate_limit_rpm INTEGER NOT NULL DEFAULT 60,
+    require_contact_on_fallback INTEGER NOT NULL DEFAULT 1,
+    max_message_length INTEGER NOT NULL DEFAULT 2000,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(tenant_id, audience_type)
 );
 
 -- agent_services
 CREATE TABLE agent_services (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
     audience_type TEXT NOT NULL,
     code TEXT NOT NULL,
     name TEXT NOT NULL,
@@ -254,7 +254,7 @@ CREATE TABLE agent_services (
 -- agent_exclusions
 CREATE TABLE agent_exclusions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
     audience_type TEXT NOT NULL,
     code TEXT NOT NULL,
     name TEXT NOT NULL,
@@ -268,7 +268,7 @@ CREATE TABLE agent_exclusions (
 -- agent_coverage
 CREATE TABLE agent_coverage (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
     area_type TEXT NOT NULL,
     area_name TEXT NOT NULL,
     state_code TEXT,
@@ -279,7 +279,7 @@ CREATE TABLE agent_coverage (
 -- agent_faqs
 CREATE TABLE agent_faqs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
     audience_type TEXT NOT NULL,
     code TEXT NOT NULL,
     question TEXT NOT NULL,
@@ -291,7 +291,7 @@ CREATE TABLE agent_faqs (
 -- agent_safety_protocols
 CREATE TABLE agent_safety_protocols (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
     audience_type TEXT NOT NULL,
     code TEXT NOT NULL,
     name TEXT NOT NULL,
@@ -304,7 +304,7 @@ CREATE TABLE agent_safety_protocols (
 -- agent_kb_sections
 CREATE TABLE agent_kb_sections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
     audience_type TEXT NOT NULL,
     code TEXT NOT NULL,
     title TEXT NOT NULL,
@@ -334,7 +334,7 @@ CREATE TABLE agent_intents (
 -- agent_rules
 CREATE TABLE agent_rules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
     audience_type TEXT NOT NULL,
     code TEXT NOT NULL,
     name TEXT NOT NULL,
@@ -348,7 +348,7 @@ CREATE TABLE agent_rules (
 -- agent_sessions
 CREATE TABLE agent_sessions (
     id TEXT PRIMARY KEY,
-    tenant_id INTEGER NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
     user_id INTEGER REFERENCES user(id),
     audience_type TEXT NOT NULL DEFAULT 'internal',
     phase TEXT DEFAULT 'triage',
@@ -361,8 +361,8 @@ CREATE TABLE agent_sessions (
     detected_service TEXT,
     message_count INTEGER DEFAULT 0,
     messages TEXT DEFAULT '[]',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP,
     is_completed INTEGER DEFAULT 0,
     completion_reason TEXT
@@ -371,7 +371,7 @@ CREATE TABLE agent_sessions (
 -- agent_source_files (supports versioning - no unique constraint)
 CREATE TABLE agent_source_files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
     audience_type TEXT NOT NULL,
     file_type TEXT NOT NULL,
     content TEXT NOT NULL,
@@ -386,7 +386,7 @@ CREATE INDEX idx_source_files_version ON agent_source_files(tenant_id, audience_
 -- agent_rate_limits
 CREATE TABLE agent_rate_limits (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
     audience_type TEXT NOT NULL,
     client_ip TEXT NOT NULL,
     request_count INTEGER DEFAULT 0,
@@ -433,11 +433,12 @@ VALUES
 CREATE TABLE user_tenant_permission (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
-    tenant_id INTEGER NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
     permissions TEXT NOT NULL DEFAULT '',
     granted_by INTEGER REFERENCES user(id) ON DELETE SET NULL,
     granted_at BIGINT NOT NULL DEFAULT (strftime('%s', 'now')),
-    source_template_id INTEGER REFERENCES tenant_role_templates(id) ON DELETE SET NULL
+    source_template_id INTEGER REFERENCES tenant_role_templates(id) ON DELETE SET NULL,
+    UNIQUE(user_id, tenant_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_tenant_permission_user ON user_tenant_permission(user_id);
@@ -452,11 +453,11 @@ CREATE TABLE tenant_config (
     openrouter_api_key_encrypted BLOB,
     openrouter_api_key_nonce BLOB,
     features TEXT NOT NULL DEFAULT '{}',
-    simulation_human_model TEXT DEFAULT '',
-    retrieval_mode TEXT DEFAULT 'long_context',
-    content_tokens INTEGER DEFAULT 0,
-    record_transcripts INTEGER DEFAULT 1,
-    reasoning_model TEXT DEFAULT '',
+    simulation_human_model TEXT NOT NULL DEFAULT '',
+    retrieval_mode TEXT NOT NULL DEFAULT 'long_context',
+    content_tokens INTEGER NOT NULL DEFAULT 0,
+    record_transcripts INTEGER NOT NULL DEFAULT 1,
+    reasoning_model TEXT NOT NULL DEFAULT '',
     admin_mutation_rate_limit_rpm INTEGER NOT NULL DEFAULT 30,
     vector_db_s3_override TEXT DEFAULT '',
     updated_at BIGINT NOT NULL DEFAULT (strftime('%s', 'now')),
@@ -739,7 +740,7 @@ ON agent_reindex_checkpoints(tenant_id, audience);
 
 CREATE TABLE agent_observations (
     session_id TEXT PRIMARY KEY REFERENCES agent_sessions(id) ON DELETE CASCADE,
-    tenant_id INTEGER NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
     
     -- The Observation State
     observation_log TEXT DEFAULT '',
@@ -769,7 +770,7 @@ CREATE INDEX idx_agent_observations_resource ON agent_observations(resource_id);
 
 CREATE TABLE bridge_external_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
     session_id TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'closed', 'expired')),
     created_at INTEGER NOT NULL,
@@ -787,7 +788,7 @@ CREATE TABLE bridge_handoffs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     external_session_id INTEGER NOT NULL REFERENCES bridge_external_sessions(id) ON DELETE CASCADE,
     handoff_id TEXT NOT NULL,
-    tenant_id INTEGER NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
     session_id TEXT NOT NULL,
     generation INTEGER NOT NULL CHECK(generation > 0),
     routing_mode TEXT NOT NULL DEFAULT 'handoff_queued' CHECK(routing_mode IN ('handoff_queued', 'human_active', 'closed')),
@@ -815,7 +816,7 @@ CREATE UNIQUE INDEX idx_bridge_handoffs_one_active ON bridge_handoffs(external_s
 
 CREATE TABLE bridge_auth_keys (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
     key_id TEXT NOT NULL,
     label TEXT,
     secret_key_encrypted BLOB NOT NULL,
@@ -838,7 +839,7 @@ CREATE INDEX idx_bridge_auth_keys_tenant_status ON bridge_auth_keys(tenant_id, s
 
 CREATE TABLE bridge_auth_nonces (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
     key_id TEXT NOT NULL,
     nonce TEXT NOT NULL,
     timestamp INTEGER NOT NULL,
@@ -984,7 +985,7 @@ CREATE TABLE IF NOT EXISTS agent_messages (
     source_id TEXT NOT NULL,
     role TEXT NOT NULL,
     content TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (tenant_id) REFERENCES agent_tenants(id) ON DELETE CASCADE
 );
 
@@ -1004,9 +1005,9 @@ CREATE TABLE IF NOT EXISTS agent_leads (
     location TEXT,
     detected_intent TEXT,
     status TEXT NOT NULL DEFAULT 'new',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_message_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_message_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     converted_at TIMESTAMP,
     FOREIGN KEY (tenant_id) REFERENCES agent_tenants(id) ON DELETE CASCADE,
     FOREIGN KEY (transcript_id) REFERENCES agent_transcripts(id) ON DELETE SET NULL,

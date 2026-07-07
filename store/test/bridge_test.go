@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -21,6 +22,9 @@ func createBridgeTenant(t *testing.T, ctx context.Context, ts *store.Store, slug
 }
 
 func TestBridgeExternalSessionMigrationAppliesWithForeignKeysEnabled(t *testing.T) {
+	if os.Getenv("DRIVER") != "" && os.Getenv("DRIVER") != "sqlite" {
+		t.Skip("SQLite-specific test")
+	}
 	ctx := context.Background()
 	ts := NewTestingStore(ctx, t)
 	defer ts.Close()
