@@ -61,18 +61,31 @@ func newLanceVectorDB(config *VectorDBConfig, embedSvc EmbeddingService) (Vector
 		} else {
 			uri = fmt.Sprintf("s3://%s/lancedb", config.S3Bucket)
 		}
+		// Ensure endpoint has URL scheme — LanceDB's Rust S3 client ignores bare hostnames
+		s3Endpoint := config.S3Endpoint
+		if s3Endpoint != "" && !strings.HasPrefix(s3Endpoint, "http://") && !strings.HasPrefix(s3Endpoint, "https://") {
+			s3Endpoint = "https://" + s3Endpoint
+		}
+		s3Config := &contracts.S3Config{
+			Endpoint:       ptr(s3Endpoint),
+			Region:         ptr(config.S3Region),
+			ForcePathStyle: ptr(config.S3ForcePathStyle),
+		}
+		// Only pass credentials if set — on Fly.io with Tigris, IAM role auth is used
+		// instead of explicit keys. Setting empty credentials overrides the IAM role chain.
+		if config.S3AccessKey != "" {
+			s3Config.AccessKeyID = ptr(config.S3AccessKey)
+			s3Config.SecretAccessKey = ptr(config.S3SecretKey)
+		}
 		connOpts = &contracts.ConnectionOptions{
 			StorageOptions: &contracts.StorageOptions{
 				AllowHTTP: ptr(config.S3AllowHTTP),
-				S3Config: &contracts.S3Config{
-					Endpoint:        ptr(config.S3Endpoint),
-					Region:          ptr(config.S3Region),
-					AccessKeyID:     ptr(config.S3AccessKey),
-					SecretAccessKey: ptr(config.S3SecretKey),
-					ForcePathStyle:  ptr(config.S3ForcePathStyle),
-				},
+				S3Config:  s3Config,
 			},
 		}
+		// LanceDB Go bindings silently drop S3Config.Endpoint — set env var for Rust object_store
+		os.Setenv("AWS_ENDPOINT_URL_S3", s3Endpoint)
+		os.Setenv("AWS_ENDPOINT_URL", s3Endpoint)
 	default: // "local"
 		uri = config.LocalPath
 		// Ensure directory exists

@@ -2,6 +2,7 @@ package teststore
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -11,7 +12,11 @@ import (
 // TestSchemaValidation verifies that all migrations apply cleanly and produce
 // a schema that matches what the Go code expects. This test helps catch issues
 // like migration 12's missing version column bug before deployment.
+// SQLite-only: uses PRAGMA-based schema validation.
 func TestSchemaValidation(t *testing.T) {
+	if os.Getenv("DRIVER") != "" && os.Getenv("DRIVER") != "sqlite" {
+		t.Skip("SQLite-specific schema validation test")
+	}
 	ctx := context.Background()
 	ts := NewTestingStore(ctx, t)
 	db := ts.GetDriver().GetDB()
@@ -68,7 +73,11 @@ func TestSchemaValidation(t *testing.T) {
 // exists and works correctly in agent_source_files table. This is a regression
 // test for the bug where migration 12 created an index on 'version' without
 // adding the column first.
+// SQLite-only: uses PRAGMA-based column detection.
 func TestAgentSourceFilesVersionColumn(t *testing.T) {
+	if os.Getenv("DRIVER") != "" && os.Getenv("DRIVER") != "sqlite" {
+		t.Skip("SQLite-specific schema validation test")
+	}
 	ctx := context.Background()
 	ts := NewTestingStore(ctx, t)
 	db := ts.GetDriver().GetDB()

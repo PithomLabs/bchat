@@ -2,6 +2,7 @@ package teststore
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -75,6 +76,9 @@ func TestTicketStore(t *testing.T) {
 }
 
 func TestTicketForeignKeyConstraints(t *testing.T) {
+	if os.Getenv("DRIVER") != "" && os.Getenv("DRIVER") != "sqlite" {
+		t.Skip("SQLite-specific test")
+	}
 	ctx := context.Background()
 	ts := NewTestingStore(ctx, t)
 	user, err := createTestingHostUser(ctx, ts)

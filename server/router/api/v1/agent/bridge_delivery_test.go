@@ -274,6 +274,9 @@ func TestBChatLiveClaimedOutboxCompletesAfterTranscriptAppend(t *testing.T) {
 }
 
 func TestBChatLiveClaimedOutboxFailsWhenReplyMissing(t *testing.T) {
+	if os.Getenv("DRIVER") != "" && os.Getenv("DRIVER") != "sqlite" {
+		t.Skip("SQLite-specific test")
+	}
 	ctx, ts, service, tenant := newBridgeChatTestService(t, "live-outbox-fail-reply")
 	defer ts.Close()
 

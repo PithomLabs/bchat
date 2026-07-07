@@ -17,6 +17,9 @@ import (
 )
 
 func TestBridgeAuthSQLiteMigrationApplies(t *testing.T) {
+	if os.Getenv("DRIVER") != "" && os.Getenv("DRIVER") != "sqlite" {
+		t.Skip("SQLite-specific test")
+	}
 	ctx := context.Background()
 	ts := NewTestingStore(ctx, t)
 	defer ts.Close()

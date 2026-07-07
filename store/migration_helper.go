@@ -7,8 +7,13 @@ import (
 	"log/slog"
 )
 
-// AddColumnIfNotExists adds a column to a table if it doesn't already exist
-// This is a helper for SQLite migrations since ALTER TABLE ADD COLUMN IF NOT EXISTS is not supported
+// WARNING: This file contains SQLite-only helper functions.
+// They use PRAGMA table_info() which is not portable to Postgres.
+// These are only called from SQLite migration codepaths (migrator.go:44-53 gates on driver).
+// For Postgres, schema is created from LATEST.sql — do not call these functions on Postgres.
+
+// AddColumnIfNotExists adds a column to a table if it doesn't already exist.
+// SQLite-only: uses PRAGMA table_info(). Do not call on Postgres.
 func AddColumnIfNotExists(ctx context.Context, db *sql.DB, tableName, columnName, columnDef string) error {
 	// Check if column exists
 	query := fmt.Sprintf("PRAGMA table_info(%s)", tableName)
@@ -134,7 +139,8 @@ func ValidateTicketReferences(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-// GetTableColumns returns all column names for a table (SQLite only)
+// GetTableColumns returns all column names for a table (SQLite only).
+// Uses PRAGMA table_info() — do not call on Postgres.
 // This is used for schema validation to ensure migrations create expected columns.
 func GetTableColumns(ctx context.Context, db *sql.DB, tableName string) ([]string, error) {
 	query := fmt.Sprintf("PRAGMA table_info(%s)", tableName)
@@ -162,7 +168,8 @@ func GetTableColumns(ctx context.Context, db *sql.DB, tableName string) ([]strin
 	return columns, nil
 }
 
-// ValidateTableSchema checks if a table has all required columns (SQLite only)
+// ValidateTableSchema checks if a table has all required columns (SQLite only).
+// Uses PRAGMA table_info() — do not call on Postgres.
 // Returns an error listing any missing columns. Used for pre-deployment schema validation.
 func ValidateTableSchema(ctx context.Context, db *sql.DB, tableName string, requiredColumns []string) error {
 	columns, err := GetTableColumns(ctx, db, tableName)

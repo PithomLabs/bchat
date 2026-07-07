@@ -522,6 +522,9 @@ func TestBridgeAuthRejectsNonNumericTimestamp(t *testing.T) {
 }
 
 func TestBridgeAuthLastUsedAtUpdateFailureDoesNotFailRequest(t *testing.T) {
+	if os.Getenv("DRIVER") != "" && os.Getenv("DRIVER") != "sqlite" {
+		t.Skip("SQLite-specific test")
+	}
 	ctx := context.Background()
 	ts, _, _, enc := setupMiddlewareTestStore(t, ctx, "last-used-fail", true)
 	defer ts.Close()

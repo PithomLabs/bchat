@@ -612,6 +612,9 @@ func TestBridgeReleaseNoActiveHandoffSemantics(t *testing.T) {
 }
 
 func TestBridgeReplySuccessPersisted(t *testing.T) {
+	if os.Getenv("DRIVER") != "" && os.Getenv("DRIVER") != "sqlite" {
+		t.Skip("SQLite-specific test")
+	}
 	ctx := context.Background()
 	ts, tenant, _, enc := setupMiddlewareTestStore(t, ctx, "reply-success", true)
 	defer ts.Close()

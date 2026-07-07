@@ -2458,6 +2458,7 @@ func (h *Handler) HandleSetLLMConfig(c echo.Context) error {
 
 		ciphertext, nonce, err := h.service.encryptionService.Encrypt(req.OpenRouterAPIKey)
 		if err != nil {
+			slog.Error("failed to encrypt tenant API key", "tenant", slug, "error", err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to encrypt API key")
 		}
 		config.OpenRouterAPIKeyEncrypted = ciphertext
@@ -2467,6 +2468,7 @@ func (h *Handler) HandleSetLLMConfig(c echo.Context) error {
 	// Upsert config
 	config, err = h.store.UpsertTenantConfig(ctx, config)
 	if err != nil {
+		slog.Error("failed to save tenant config", "tenant", slug, "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to save config")
 	}
 
@@ -2961,28 +2963,39 @@ func (h *Handler) HandleAssignRoleTemplate(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "Role template not found")
 	}
 
-	// Idempotency: check if this assignment already exists
-	existingAssignments, err := h.store.ListUserTenantPermissions(ctx, &store.FindUserTenantPermission{
-		UserID:           &req.UserID,
-		TenantID:         &tenant.ID,
-		SourceTemplateID: intPtr(int32(templateID)),
+	// Check for any existing permission for this user+tenant
+	existingPerm, err := h.store.GetUserTenantPermission(ctx, &store.FindUserTenantPermission{
+		UserID:   &req.UserID,
+		TenantID: &tenant.ID,
 	})
-	alreadyAssigned := len(existingAssignments) > 0
-	if alreadyAssigned {
-		return c.JSON(http.StatusOK, map[string]interface{}{"success": true, "created": false})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check existing permissions")
 	}
 
-	created, err := h.store.CreateUserTenantPermission(ctx, &store.UserTenantPermission{
+	if existingPerm != nil {
+		// Already assigned with this template → idempotent
+		if existingPerm.SourceTemplateID != nil && *existingPerm.SourceTemplateID == int32(templateID) {
+			return c.JSON(http.StatusOK, map[string]interface{}{"success": true, "created": false})
+		}
+		// Different assignment exists → update it
+		existingPerm.Permissions = template.Permissions
+		existingPerm.SourceTemplateID = intPtr(int32(templateID))
+		if _, err := h.store.UpdateUserTenantPermission(ctx, existingPerm); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update role template assignment")
+		}
+		h.service.InvalidateConfigCache(tenant.Slug)
+		return c.JSON(http.StatusCreated, map[string]interface{}{"success": true, "created": true})
+	}
+
+	// No existing permission → create new
+	if _, err := h.store.CreateUserTenantPermission(ctx, &store.UserTenantPermission{
 		UserID:           req.UserID,
 		TenantID:         tenant.ID,
 		Permissions:      template.Permissions,
 		SourceTemplateID: intPtr(int32(templateID)),
-	})
-	if err != nil {
+	}); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to assign role template")
 	}
-
-	_ = created
 
 	h.service.InvalidateConfigCache(tenant.Slug)
 

@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS migration_history (
 CREATE TABLE system_setting (
   name TEXT NOT NULL PRIMARY KEY,
   value TEXT NOT NULL,
-  description TEXT NOT NULL
+  description TEXT NOT NULL DEFAULT ''
 );
 
 -- user
@@ -16,14 +16,15 @@ CREATE TABLE "user" (
   id SERIAL PRIMARY KEY,
   created_ts BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()),
   updated_ts BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()),
-  row_status TEXT NOT NULL DEFAULT 'NORMAL',
+  row_status TEXT NOT NULL CHECK (row_status IN ('NORMAL', 'ARCHIVED')) DEFAULT 'NORMAL',
   username TEXT NOT NULL UNIQUE,
-  role TEXT NOT NULL DEFAULT 'USER',
+  role TEXT NOT NULL CHECK (role IN ('HOST', 'ADMIN', 'USER')) DEFAULT 'USER',
   email TEXT NOT NULL DEFAULT '',
   nickname TEXT NOT NULL DEFAULT '',
   password_hash TEXT NOT NULL,
-  avatar_url TEXT NOT NULL,
-  description TEXT NOT NULL DEFAULT ''
+  avatar_url TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  allowed_tenant_ids TEXT DEFAULT NULL
 );
 
 -- user_setting
@@ -41,21 +42,23 @@ CREATE TABLE memo (
   creator_id INTEGER NOT NULL,
   created_ts BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()),
   updated_ts BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()),
-  row_status TEXT NOT NULL DEFAULT 'NORMAL',
-  content TEXT NOT NULL,
-  visibility TEXT NOT NULL DEFAULT 'PRIVATE',
+  row_status TEXT NOT NULL CHECK (row_status IN ('NORMAL', 'ARCHIVED')) DEFAULT 'NORMAL',
+  content TEXT NOT NULL DEFAULT '',
+  visibility TEXT NOT NULL CHECK (visibility IN ('PUBLIC', 'PROTECTED', 'PRIVATE')) DEFAULT 'PRIVATE',
   pinned BOOLEAN NOT NULL DEFAULT FALSE,
   payload JSONB NOT NULL DEFAULT '{}',
   tenant_id INTEGER DEFAULT NULL
 );
 
 CREATE INDEX idx_memo_tenant ON memo(tenant_id);
+CREATE INDEX idx_memo_creator_id ON memo(creator_id);
+CREATE INDEX IF NOT EXISTS idx_memo_relation_tenant ON memo_relation(tenant_id);
 
 -- memo_organizer
 CREATE TABLE memo_organizer (
   memo_id INTEGER NOT NULL,
   user_id INTEGER NOT NULL,
-  pinned INTEGER NOT NULL DEFAULT 0,
+  pinned INTEGER NOT NULL CHECK (pinned IN (0, 1)) DEFAULT 0,
   UNIQUE(memo_id, user_id)
 );
 
@@ -64,6 +67,7 @@ CREATE TABLE memo_relation (
   memo_id INTEGER NOT NULL,
   related_memo_id INTEGER NOT NULL,
   type TEXT NOT NULL,
+  tenant_id INTEGER DEFAULT NULL,
   UNIQUE(memo_id, related_memo_id, type)
 );
 
@@ -74,7 +78,7 @@ CREATE TABLE resource (
   creator_id INTEGER NOT NULL,
   created_ts BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()),
   updated_ts BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()),
-  filename TEXT NOT NULL,
+  filename TEXT NOT NULL DEFAULT '',
   blob BYTEA,
   type TEXT NOT NULL DEFAULT '',
   size INTEGER NOT NULL DEFAULT 0,
@@ -83,6 +87,8 @@ CREATE TABLE resource (
   reference TEXT NOT NULL DEFAULT '',
   payload TEXT NOT NULL DEFAULT '{}'
 );
+CREATE INDEX idx_resource_creator_id ON resource(creator_id);
+CREATE INDEX idx_resource_memo_id ON resource(memo_id);
 
 -- activity
 CREATE TABLE activity (
@@ -90,7 +96,7 @@ CREATE TABLE activity (
   creator_id INTEGER NOT NULL,
   created_ts BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()),
   type TEXT NOT NULL DEFAULT '',
-  level TEXT NOT NULL DEFAULT 'INFO',
+  level TEXT NOT NULL CHECK (level IN ('INFO', 'WARN', 'ERROR')) DEFAULT 'INFO',
   payload JSONB NOT NULL DEFAULT '{}'
 );
 
@@ -110,7 +116,7 @@ CREATE TABLE inbox (
   sender_id INTEGER NOT NULL,
   receiver_id INTEGER NOT NULL,
   status TEXT NOT NULL,
-  message TEXT NOT NULL
+  message TEXT NOT NULL DEFAULT '{}'
 );
 
 -- webhook
@@ -118,11 +124,12 @@ CREATE TABLE webhook (
   id SERIAL PRIMARY KEY,
   created_ts BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()),
   updated_ts BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()),
-  row_status TEXT NOT NULL DEFAULT 'NORMAL',
+  row_status TEXT NOT NULL CHECK (row_status IN ('NORMAL', 'ARCHIVED')) DEFAULT 'NORMAL',
   creator_id INTEGER NOT NULL,
   name TEXT NOT NULL,
   url TEXT NOT NULL
 );
+CREATE INDEX idx_webhook_creator_id ON webhook(creator_id);
 
 -- reaction
 CREATE TABLE reaction (
@@ -179,6 +186,7 @@ CREATE TABLE user_tenant_permission (
   permissions TEXT NOT NULL DEFAULT '',
   granted_by INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
   granted_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()),
+  source_template_id INTEGER REFERENCES tenant_role_templates(id) ON DELETE SET NULL,
   UNIQUE(user_id, tenant_id)
 );
 
@@ -194,6 +202,8 @@ CREATE TABLE tenant_config (
   retrieval_mode TEXT NOT NULL DEFAULT 'long_context',
   content_tokens INTEGER NOT NULL DEFAULT 0,
   record_transcripts BOOLEAN NOT NULL DEFAULT TRUE,
+  admin_mutation_rate_limit_rpm INTEGER NOT NULL DEFAULT 30,
+  vector_db_s3_override TEXT DEFAULT '',
   updated_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()),
   updated_by INTEGER REFERENCES "user"(id) ON DELETE SET NULL
 );
@@ -202,6 +212,8 @@ CREATE INDEX idx_agent_tenants_guid ON agent_tenants(guid);
 CREATE INDEX idx_agent_audiences_tenant ON agent_audiences(tenant_id, audience_type);
 CREATE INDEX idx_user_tenant_permission_user ON user_tenant_permission(user_id);
 CREATE INDEX idx_user_tenant_permission_tenant ON user_tenant_permission(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_user_tenant_permission_template ON user_tenant_permission(source_template_id);
+CREATE INDEX IF NOT EXISTS idx_tenant_config_tenant ON tenant_config(tenant_id);
 
 CREATE TABLE IF NOT EXISTS agent_messages (
     id SERIAL PRIMARY KEY,
@@ -235,7 +247,8 @@ CREATE TABLE IF NOT EXISTS agent_leads (
     last_message_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     converted_at TIMESTAMPTZ,
     CHECK (email IS NOT NULL OR phone IS NOT NULL),
-    UNIQUE(tenant_id, session_id)
+    UNIQUE(tenant_id, session_id),
+    FOREIGN KEY (transcript_id) REFERENCES agent_transcripts(id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_leads_tenant_status
@@ -371,8 +384,8 @@ CREATE TABLE agent_sessions (
     detected_service TEXT,
     message_count INTEGER DEFAULT 0,
     messages TEXT DEFAULT '[]',
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     completed_at TIMESTAMPTZ,
     is_completed BOOLEAN DEFAULT FALSE,
     completion_reason TEXT
@@ -669,13 +682,14 @@ CREATE TABLE IF NOT EXISTS tenant_role_templates (
 CREATE INDEX IF NOT EXISTS idx_tenant_role_templates_tenant ON tenant_role_templates(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_tenant_role_templates_code ON tenant_role_templates(code);
 
-INSERT OR IGNORE INTO tenant_role_templates (tenant_id, name, code, permissions)
+INSERT INTO tenant_role_templates (tenant_id, name, code, permissions)
 VALUES
     (NULL, 'Viewer', 'viewer', '["tenant:read"]'),
     (NULL, 'Tester', 'tester', '["tenant:read","chat:test"]'),
     (NULL, 'Analyst', 'analyst', '["tenant:read","chat:logs"]'),
     (NULL, 'Editor', 'editor', '["tenant:read","tenant:write","files:upload"]'),
-    (NULL, 'Tenant Admin', 'tenant_admin', '["tenant:admin"]');
+    (NULL, 'Tenant Admin', 'tenant_admin', '["tenant:admin"]')
+ON CONFLICT (tenant_id, code) DO NOTHING;
 
 -- system_secret
 CREATE TABLE system_secret (
@@ -753,7 +767,7 @@ CREATE TABLE bridge_handoffs (
     id SERIAL PRIMARY KEY,
     external_session_id INTEGER NOT NULL REFERENCES bridge_external_sessions(id) ON DELETE CASCADE,
     handoff_id TEXT NOT NULL,
-    tenant_id INTEGER NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
     session_id TEXT NOT NULL,
     generation INTEGER NOT NULL CHECK(generation > 0),
     routing_mode TEXT NOT NULL DEFAULT 'handoff_queued' CHECK(routing_mode IN ('handoff_queued', 'human_active', 'closed')),
