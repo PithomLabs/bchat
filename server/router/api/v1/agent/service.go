@@ -129,9 +129,22 @@ func NewService(s *store.Store, p *profile.Profile) *Service {
 			"block_after_fraction", omConfig.BlockAfter)
 	}
 
-	// Check if we should reindex all content on startup
-	// Renamed from REINDEX_RAG to be more explicit and avoid confusion with enablement flags
-	if os.Getenv("FORCE_REINDEX_ON_STARTUP") == "true" {
+	// Startup RAG reindex control.
+	// RAG_STARTUP_REINDEX_DISABLED=true skips ALL automatic startup reindexing
+	// (the explicit FORCE_REINDEX_ON_STARTUP path AND the empty-DB auto-bootstrap).
+	// Manual admin reindex endpoints remain fully functional.
+	if os.Getenv("RAG_STARTUP_REINDEX_DISABLED") == "true" {
+		if svc.IsRAGEnabled() {
+			// Best-effort: warn operators that the vector store will stay empty
+			// until they trigger a manual reindex.
+			if stats, serr := svc.GetVectorDB().Stats(context.Background()); serr == nil && stats.TotalChunks == 0 {
+				if files, ferr := s.ListAgentSourceFiles(context.Background(), &store.FindAgentSourceFile{LatestOnly: true}); ferr == nil && len(files) > 0 {
+					slog.Warn("Startup RAG reindex disabled (RAG_STARTUP_REINDEX_DISABLED=true) and vector DB is empty; run manual admin reindex (POST /api/v1/agent/:slug/reindex) to populate it",
+						"sourceFilesCount", len(files))
+				}
+			}
+		}
+	} else if os.Getenv("FORCE_REINDEX_ON_STARTUP") == "true" {
 		go func() {
 			// Small delay to ensure everything is initialized
 			time.Sleep(2 * time.Second)
@@ -1495,13 +1508,13 @@ type BridgeRuntimeState struct {
 
 // ChatResponse represents a chat response.
 type ChatResponse struct {
-	SessionID         string              `json:"session_id"`
-	Message           ResponseMessage     `json:"message"`
-	Metadata          ChatMetadata        `json:"metadata"`
-	SessionPersisted  bool                `json:"sessionPersisted,omitempty"`
-	Bridge            *BridgeRuntimeState `json:"bridge,omitempty"`
-	SessionToken      string              `json:"session_token,omitempty"`
-	SessionTokenExpiry string             `json:"session_token_expiry,omitempty"`
+	SessionID          string              `json:"session_id"`
+	Message            ResponseMessage     `json:"message"`
+	Metadata           ChatMetadata        `json:"metadata"`
+	SessionPersisted   bool                `json:"sessionPersisted,omitempty"`
+	Bridge             *BridgeRuntimeState `json:"bridge,omitempty"`
+	SessionToken       string              `json:"session_token,omitempty"`
+	SessionTokenExpiry string              `json:"session_token_expiry,omitempty"`
 }
 
 // ResponseMessage represents the assistant's response.
@@ -1637,8 +1650,8 @@ func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAg
 						Content:   cached.Content,
 						Timestamp: cached.CreatedAt,
 					},
-					Metadata:          ChatMetadata{Phase: session.Phase},
-					SessionToken:      sessionToken,
+					Metadata:           ChatMetadata{Phase: session.Phase},
+					SessionToken:       sessionToken,
 					SessionTokenExpiry: sessionTokenExpiry,
 				}, nil
 			}
@@ -1660,8 +1673,8 @@ func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAg
 							Content:   candidate.Content,
 							Timestamp: candidate.Timestamp,
 						},
-						Metadata:          ChatMetadata{Phase: session.Phase},
-						SessionToken:      sessionToken,
+						Metadata:           ChatMetadata{Phase: session.Phase},
+						SessionToken:       sessionToken,
 						SessionTokenExpiry: sessionTokenExpiry,
 					}, nil
 				}
@@ -1723,7 +1736,7 @@ func (s *Service) ChatExternal(ctx context.Context, tenantSlug, clientIP, userAg
 				HandoffID:   activeHandoff.HandoffID,
 				RoutingMode: string(activeHandoff.RoutingMode),
 			},
-			SessionToken:      sessionToken,
+			SessionToken:       sessionToken,
 			SessionTokenExpiry: sessionTokenExpiry,
 		}, nil
 	}

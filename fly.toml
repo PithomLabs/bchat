@@ -7,7 +7,7 @@ app = 'bchat0534'
 primary_region = 'sjc'
 
 [build]
-  dockerfile = 'Dockerfile.local.fly'
+  dockerfile = 'Dockerfile.s3.fly'
 
 [env]
   EMBEDDING_BATCH_SIZE = '10'
@@ -15,8 +15,12 @@ primary_region = 'sjc'
   EMBEDDING_PROVIDER = 'openrouter'
   EMBEDDING_TIMEOUT = '10m'
   FORCE_REINDEX_ON_STARTUP = 'false'
+  RAG_STARTUP_REINDEX_DISABLED = 'true'
+  ## applicable for local setup only	
   LANCEDB_LOCAL_PATH = '/var/opt/memos/lancedb'
-  LANCEDB_STORAGE_PROVIDER = 'local'
+  
+LANCEDB_STORAGE_PROVIDER = 's3'
+  LANCEDB_S3_FORCE_PATH_STYLE = 'false'
   LLM_MODEL = "poolside/laguna-m.1:free"
   LLM_MODEL_REASONING = "nvidia/nemotron-3-ultra-550b-a55b:free"
   LLM_VERIFIER_ENABLED = 'false'

@@ -28,7 +28,6 @@ primary_region = "sjc"
   # RAG Pipeline Configuration (Tigrisdata S3)
   RAG_PIPELINE_ENABLED = "true"
   LANCEDB_STORAGE_PROVIDER = "s3"
-  LANCEDB_S3_ENDPOINT = "fly.storage.tigris.dev"
   LANCEDB_S3_REGION = "auto"
   EMBEDDING_PROVIDER = "openrouter"
   EMBEDDING_MODEL = "sentence-transformers/all-minilm-l12-v2"
