@@ -46,6 +46,7 @@ COPY . .
 COPY --from=frontend /server/router/frontend/dist ./server/router/frontend/dist
 
 # Build with LanceDB RAG support
+ENV RAG_STARTUP_REINDEX_DISABLED="true"
 ENV CGO_ENABLED=1
 ENV CGO_CFLAGS="-I/usr/local/include/lancedb"
 ENV CGO_LDFLAGS="-L/usr/local/lib/lancedb -llancedb_go -Wl,-rpath,/usr/local/lib/lancedb"

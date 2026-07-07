@@ -90,6 +90,7 @@ ENV MEMOS_MODE="prod"
 ENV MEMOS_PORT="5230"
 
 # RAG pipeline configuration (local storage - mirrors task run:rag:l12)
+ENV RAG_STARTUP_REINDEX_DISABLED="true"
 ENV RAG_PIPELINE_ENABLED="true"
 ENV LANCEDB_STORAGE_PROVIDER="local"
 ENV LANCEDB_LOCAL_PATH="/var/opt/memos/lancedb"
