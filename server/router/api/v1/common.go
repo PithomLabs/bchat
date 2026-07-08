@@ -63,6 +63,8 @@ func unmarshalPageToken(s string, pageToken *v1pb.PageToken) error {
 	return nil
 }
 
+// isSuperUser returns true for users who can access ALL tenants.
+// Delegates to store.IsSuperUser for single source of truth.
 func isSuperUser(user *store.User) bool {
-	return user.Role == store.RoleAdmin || user.Role == store.RoleHost
+	return store.IsSuperUser(user)
 }

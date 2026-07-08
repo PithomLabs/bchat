@@ -3,6 +3,7 @@ package v1
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -15,10 +16,36 @@ import (
 	"github.com/usememos/memos/store"
 )
 
+// validateWebhookURL performs UX pre-check on webhook URL format.
+// Security enforcement happens at dispatch time with IP-pinned dialer (N4).
+func validateWebhookURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+
+	// Scheme allowlist
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("only http/https schemes allowed, got: %s", parsed.Scheme)
+	}
+
+	// Hostname must not be empty
+	if parsed.Hostname() == "" {
+		return fmt.Errorf("missing hostname")
+	}
+
+	return nil
+}
+
 func (s *APIV1Service) CreateWebhook(ctx context.Context, request *v1pb.CreateWebhookRequest) (*v1pb.Webhook, error) {
 	currentUser, err := s.GetCurrentUser(ctx)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to get user: %v", err)
+	}
+
+	// H6: Validate URL format (UX pre-check)
+	if err := validateWebhookURL(request.Url); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid webhook URL: %v", err)
 	}
 
 	webhook, err := s.Store.CreateWebhook(ctx, &store.Webhook{
@@ -84,6 +111,10 @@ func (s *APIV1Service) UpdateWebhook(ctx context.Context, request *v1pb.UpdateWe
 		case "name":
 			update.Name = &request.Webhook.Name
 		case "url":
+			// H6: Validate URL format on update (UX pre-check)
+			if err := validateWebhookURL(request.Webhook.Url); err != nil {
+				return nil, status.Errorf(codes.InvalidArgument, "invalid webhook URL: %v", err)
+			}
 			update.URL = &request.Webhook.Url
 		}
 	}

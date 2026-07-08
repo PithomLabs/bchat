@@ -81,6 +81,8 @@ type FindMemo struct {
 
 	// Tenant isolation
 	TenantID *int32
+	// TenantIDs is used for scoped-admin filtering (OR semantics: tenant_id IN (...))
+	TenantIDs []int32
 
 	// Pagination
 	Limit  *int

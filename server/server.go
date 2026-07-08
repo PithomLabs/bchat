@@ -7,6 +7,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"os"
 	"runtime"
 	"time"
 
@@ -47,16 +48,38 @@ func NewServer(ctx context.Context, profile *profile.Profile, store *store.Store
 	}
 
 	echoServer := echo.New()
-	echoServer.Debug = true
+	echoServer.Debug = profile.IsDev()
 	echoServer.HideBanner = true
 	echoServer.HidePort = true
 	echoServer.Use(middleware.Recover())
+
+	// C3: Custom error handler for production — return generic messages, log details server-side
+	if !profile.IsDev() {
+		echoServer.HTTPErrorHandler = func(err error, c echo.Context) {
+			slog.Error("request error",
+				"error", err,
+				"path", c.Request().URL.Path,
+				"method", c.Request().Method,
+				"remote", c.Request().RemoteAddr,
+			)
+			if he, ok := err.(*echo.HTTPError); ok {
+				_ = c.JSON(he.Code, map[string]string{"error": "Internal server error"})
+			} else {
+				_ = c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+			}
+		}
+	}
+
 	s.echoServer = echoServer
 
-	// Initialize profiler
+	// C2: Gate profiler behind dev mode or explicit MEMOS_ENABLE_PPROF flag.
+	// N6: Loopback binding dropped — pprof is a route group on the shared Echo listener;
+	//     the env flag (default off) is the correct and sufficient control.
 	s.profiler = profiler.NewProfiler()
-	s.profiler.RegisterRoutes(echoServer)
 	s.profiler.StartMemoryMonitor(ctx)
+	if profile.IsDev() || os.Getenv("MEMOS_ENABLE_PPROF") == "true" {
+		s.profiler.RegisterRoutes(echoServer)
+	}
 
 	workspaceBasicSetting, err := s.getOrUpsertWorkspaceBasicSetting(ctx)
 	if err != nil {

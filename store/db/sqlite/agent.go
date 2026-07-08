@@ -56,6 +56,10 @@ func (d *DB) ListAgentTenants(ctx context.Context, find *store.FindAgentTenant) 
 		where = append(where, "slug = ?")
 		args = append(args, *find.Slug)
 	}
+	if find.GUID != nil {
+		where = append(where, "guid = ?")
+		args = append(args, *find.GUID)
+	}
 	if find.IsActive != nil {
 		where = append(where, "is_active = ?")
 		args = append(args, *find.IsActive)

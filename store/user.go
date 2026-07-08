@@ -63,6 +63,14 @@ type User struct {
 	AllowedTenantIDs []string
 }
 
+// IsSuperUser returns true for users who can access ALL tenants.
+// RoleHost is the instance owner/super-admin — always super.
+// RoleAdmin is super only when not scoped to specific tenants (empty AllowedTenantIDs).
+// Scoped admins (RoleAdmin with non-empty AllowedTenantIDs) are NOT super users.
+func IsSuperUser(user *User) bool {
+	return user.Role == RoleHost || (user.Role == RoleAdmin && len(user.AllowedTenantIDs) == 0)
+}
+
 type UpdateUser struct {
 	ID int32
 

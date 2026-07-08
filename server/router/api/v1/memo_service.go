@@ -168,6 +168,14 @@ func (s *APIV1Service) ListMemos(ctx context.Context, request *v1pb.ListMemosReq
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to get user")
 	}
+	// H-001: For scoped admins, derive TenantIDs filter from AllowedTenantIDs
+	// This provides SQL-level tenant isolation when the gRPC context has no tenant_id.
+	if currentUser != nil && memoFind.TenantID == nil {
+		tenantIDs := deriveTenantIDsForScopedAdmin(ctx, s.Store, currentUser)
+		if tenantIDs != nil {
+			memoFind.TenantIDs = tenantIDs
+		}
+	}
 	if currentUser == nil {
 		memoFind.VisibilityList = []store.Visibility{store.Public}
 	} else {
@@ -268,6 +276,30 @@ func (s *APIV1Service) GetMemo(ctx context.Context, request *v1pb.GetMemoRequest
 	if memo.TenantID != nil {
 		if tenantID == nil || *memo.TenantID != *tenantID {
 			if !isSuperUser(user) {
+				return nil, status.Errorf(codes.PermissionDenied, "permission denied")
+			}
+		}
+	}
+
+	// #3: Scoped admin access check — deny access to memos outside allowed tenants.
+	// When TenantID is nil (legacy memo), scoped admins are denied unless they are super.
+	// When TenantID is set, verify it's in the user's allowed tenant list.
+	if user != nil && !isSuperUser(user) && tenantID == nil {
+		allowedTenantIDs := deriveTenantIDsForScopedAdmin(ctx, s.Store, user)
+		if allowedTenantIDs != nil {
+			if memo.TenantID == nil {
+				// Legacy memo with no tenant — scoped admins cannot access global memos
+				return nil, status.Errorf(codes.PermissionDenied, "permission denied")
+			}
+			// Check if memo's tenant is in the allowed list
+			allowed := false
+			for _, id := range allowedTenantIDs {
+				if id == *memo.TenantID {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
 				return nil, status.Errorf(codes.PermissionDenied, "permission denied")
 			}
 		}

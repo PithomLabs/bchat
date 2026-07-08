@@ -195,7 +195,7 @@ func (s *APIV1Service) ListTickets(c echo.Context) error {
 	}
 
 	// Apply tenant filter (defense-in-depth)
-	ApplyTicketTenantFilter(c, find)
+	ApplyTicketTenantFilter(c, s.Store, find)
 
 	list, err := s.Store.ListTickets(ctx, find)
 	if err != nil {

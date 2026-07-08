@@ -88,7 +88,7 @@ func TestApplyTenantFilter(t *testing.T) {
 			}
 
 			find := &store.FindMemo{}
-			ApplyTenantFilter(c, find)
+			ApplyTenantFilter(c, nil, find)
 
 			if tt.expectedFilter == nil {
 				assert.Nil(t, find.TenantID)
@@ -126,7 +126,7 @@ func TestApplyTicketTenantFilter(t *testing.T) {
 			}
 
 			find := &store.FindTicket{}
-			ApplyTicketTenantFilter(c, find)
+			ApplyTicketTenantFilter(c, nil, find)
 
 			if tt.expectedFilter == nil {
 				assert.Nil(t, find.TenantID)

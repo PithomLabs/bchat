@@ -169,6 +169,9 @@ func (s *APIV1Service) RegisterGateway(ctx context.Context, echoServer *echo.Ech
 	}
 	gwGroup := echoServer.Group("")
 	gwGroup.Use(middleware.CORS())
+	// H4: Add CSRF protection to gateway (gRPC-web endpoints use cookies)
+	allowedCSRFOrigins := getEnvSlice("CSRF_ALLOWED_ORIGINS", []string{})
+	gwGroup.Use(CSRFProtectionMiddleware(allowedCSRFOrigins))
 
 	// Route-level CORS: permissive for public endpoints, restrictive for admin/auth
 	adminOrigins := getEnvSlice("ADMIN_CORS_ORIGINS", []string{})
@@ -275,6 +278,7 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	authGroup := echoServer.Group("/api/v1/agent")
 	authGroup.Use(s.AuthMiddleware)
 	authGroup.Use(adminCORS)
+	authGroup.Use(TenantBindingMiddleware(s.Store))
 	authGroup.GET("/:slug/validate", s.agentHandler.HandleValidateTenant)
 	authGroup.POST("/:slug/chat/int", s.agentHandler.HandleChatInternal)
 
@@ -333,6 +337,9 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	adminGroup.Use(s.AuthMiddleware)
 	adminGroup.Use(adminCORS)
 	adminGroup.Use(TenantBindingMiddleware(s.Store))
+	// H4: Add CSRF protection to admin routes
+	allowedCSRFOrigins := getEnvSlice("CSRF_ALLOWED_ORIGINS", []string{})
+	adminGroup.Use(CSRFProtectionMiddleware(allowedCSRFOrigins))
 	adminGroup.GET("/tenants", s.agentHandler.HandleListTenants)
 	adminGroup.POST("/onboard", s.agentHandler.HandleOnboard)
 	adminGroup.POST("/playground/seed", s.agentHandler.HandleSeedPlaygroundDemos)

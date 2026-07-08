@@ -26,6 +26,7 @@ type AgentTenant struct {
 type FindAgentTenant struct {
 	ID       *int32
 	Slug     *string
+	GUID     *string
 	IsActive *bool
 }
 

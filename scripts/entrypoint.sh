@@ -15,6 +15,10 @@ file_env() {
    if [ -n "$val_var" ]; then
       val="$val_var"
    elif [ -n "$val_fileVar" ]; then
+      if [ ! -f "$val_fileVar" ]; then
+         echo "error: secret file $val_fileVar does not exist" >&2
+         exit 1
+      fi
       val="$(cat "$val_fileVar")"
    fi
 
@@ -41,4 +45,20 @@ file_env "ENCRYPTION_MASTER_KEY"
 file_env "AWS_ACCESS_KEY_ID"
 file_env "AWS_SECRET_ACCESS_KEY"
 
+# M3: H5 — Drop privileges to non-root user via gosu
+# Container enters as root to fix volume permissions, then drops to memos user
+if [ "$(id -u)" = '0' ]; then
+   # Fix ownership of data volume (may be root-owned from fresh mount)
+   chown -R memos:memos /var/opt/memos 2>/dev/null || true
+
+   # Drop to memos user and execute the main command
+   if command -v gosu >/dev/null 2>&1; then
+      exec gosu memos "$@"
+   else
+      echo "WARNING: gosu not found, running as root" >&2
+      exec "$@"
+   fi
+fi
+
+# Already running as non-root user
 exec "$@"

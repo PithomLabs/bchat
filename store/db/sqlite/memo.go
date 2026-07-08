@@ -85,6 +85,15 @@ func (d *DB) ListMemos(ctx context.Context, find *store.FindMemo) ([]*store.Memo
 	if v := find.TenantID; v != nil {
 		where, args = append(where, "`memo`.`tenant_id` = ?"), append(args, *v)
 	}
+	if len(find.TenantIDs) > 0 {
+		// M2: Scoped-admin filtering with OR semantics
+		placeholders := make([]string, len(find.TenantIDs))
+		for i, tid := range find.TenantIDs {
+			placeholders[i] = "?"
+			args = append(args, tid)
+		}
+		where = append(where, "`memo`.`tenant_id` IN ("+strings.Join(placeholders, ",")+")")
+	}
 	if v := find.PayloadFind; v != nil {
 		if v.Raw != nil {
 			where, args = append(where, "`memo`.`payload` = ?"), append(args, *v.Raw)

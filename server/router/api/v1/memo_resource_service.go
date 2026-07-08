@@ -257,6 +257,20 @@ func (s *APIV1Service) deleteBackingResourceFile(ctx context.Context, resource *
 				p = filepath.Join(s.Profile.Data, p)
 			}
 		}
+		// H3: Containment assertion — ensure resolved path stays within data directory
+		if s.Profile != nil {
+			cleanDataDir := filepath.Clean(s.Profile.Data) + string(os.PathSeparator)
+			if !strings.HasPrefix(filepath.Clean(p), cleanDataDir) {
+				slog.Warn("path traversal detected in delete", slog.String("path", p))
+				return
+			}
+		} else if filepath.IsAbs(p) {
+			// Refuse to delete absolute paths when profile data dir is unknown
+			slog.Warn("absolute path in resource.Reference with nil profile, refusing delete",
+				slog.String("path", p),
+			)
+			return
+		}
 		if err := os.Remove(p); err != nil {
 			slog.Warn("Failed to delete local file", slog.String("path", p), slog.Any("error", err))
 		}

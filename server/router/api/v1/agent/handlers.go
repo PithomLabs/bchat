@@ -656,9 +656,9 @@ func (h *Handler) HandleChatInternal(c echo.Context) error {
 func (h *Handler) HandleListTenants(c echo.Context) error {
 	ctx := c.Request().Context()
 
-	// Check admin role
-	if !h.isAdmin(c) {
-		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role")
+	// Check admin role — use isSuperAdmin to prevent scoped admin enumeration
+	if !h.isSuperAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires super admin role")
 	}
 
 	tenants, err := h.store.ListAgentTenants(ctx, &store.FindAgentTenant{})
@@ -1206,16 +1206,16 @@ func (h *Handler) HandleReindexTenant(c echo.Context) error {
 }
 
 func reindexHTTPError(err error) *echo.HTTPError {
-	message := "Reindex failed: " + err.Error()
+	slog.Error("reindex failed", "error", err)
 	switch {
 	case errors.Is(err, ErrEmbeddingProviderMisconfigured):
-		return echo.NewHTTPError(http.StatusBadRequest, message)
+		return echo.NewHTTPError(http.StatusBadRequest, "Reindex failed: embedding provider misconfigured")
 	case errors.Is(err, ErrEmbeddingProviderUnavailable):
-		return echo.NewHTTPError(http.StatusServiceUnavailable, message)
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "Reindex failed: embedding provider unavailable")
 	case errors.Is(err, ErrVectorStoreUnavailable):
-		return echo.NewHTTPError(http.StatusInternalServerError, message)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Reindex failed: vector store unavailable")
 	default:
-		return echo.NewHTTPError(http.StatusInternalServerError, message)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
 }
 
@@ -1246,7 +1246,8 @@ func (h *Handler) HandleReindexStatus(c echo.Context) error {
 	// Get reindex status
 	status, err := h.service.GetReindexStatus(ctx, tenant.ID, audienceType)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get reindex status: "+err.Error())
+		slog.Error("failed to get reindex status", "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Internal server error")
 	}
 
 	return c.JSON(http.StatusOK, status)
@@ -1294,9 +1295,9 @@ type AudienceInfo struct {
 func (h *Handler) HandleOnboard(c echo.Context) error {
 	ctx := c.Request().Context()
 
-	// Check admin role
-	if !h.isAdmin(c) {
-		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role")
+	// Check admin role — use isSuperAdmin for global tenant management
+	if !h.isSuperAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires super admin role")
 	}
 
 	// Global rate limit for onboarding (300/min) — no tenant yet so use 0 for global bucket.
@@ -1655,9 +1656,9 @@ func (h *Handler) HandleDeleteTenant(c echo.Context) error {
 	ctx := c.Request().Context()
 	slug := c.Param("slug")
 
-	// Check admin role
-	if !h.isAdmin(c) {
-		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role")
+	// Check admin role — use isSuperAdmin for global tenant management
+	if !h.isSuperAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires super admin role")
 	}
 
 	// Get tenant
@@ -2238,6 +2239,34 @@ func (h *Handler) isAdmin(c echo.Context) bool {
 	}
 
 	return isAdmin
+}
+
+// isSuperAdmin checks if the user is a true super admin (global access to all tenants).
+// B1: Scoped admins (RoleAdmin with non-empty AllowedTenantIDs) are NOT super admins.
+// This is used for per-handler guards where scoped admins should not automatically pass.
+// #7: Delegates to store.IsSuperUser for single source of truth.
+func (h *Handler) isSuperAdmin(c echo.Context) bool {
+	userID, ok := c.Get("user-id").(int32)
+	if !ok {
+		slog.Debug("isSuperAdmin: no user ID in context")
+		return false
+	}
+
+	user, err := h.store.GetUser(c.Request().Context(), &store.FindUser{ID: &userID})
+	if err != nil || user == nil {
+		slog.Warn("isSuperAdmin: user not found", "user_id", userID, "error", err)
+		return false
+	}
+
+	isSuper := store.IsSuperUser(user)
+	if !isSuper {
+		slog.Debug("isSuperAdmin: user is not super admin",
+			"user_id", userID,
+			"role", user.Role,
+			"allowed_tenants", len(user.AllowedTenantIDs),
+		)
+	}
+	return isSuper
 }
 
 // getUserID returns the current user's ID from the context, or 0 if not available.
@@ -5903,6 +5932,11 @@ func (h *Handler) HandleListTranscripts(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
 
+	// C1: Permission check — isSuperAdmin (B1) or chat:logs permission
+	if !h.isSuperAdmin(c) && !h.hasPermission(c, tenant.ID, PermChatLogs) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or chat:logs permission")
+	}
+
 	// List transcripts
 	transcripts, err := h.store.ListAgentTranscripts(ctx, &store.FindAgentTranscript{
 		TenantID: &tenant.ID,
@@ -5930,6 +5964,11 @@ func (h *Handler) HandleGetTranscript(c echo.Context) error {
 	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	// C1: Permission check — isSuperAdmin (B1) or chat:logs permission
+	if !h.isSuperAdmin(c) && !h.hasPermission(c, tenant.ID, PermChatLogs) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or chat:logs permission")
 	}
 
 	// Get transcript
@@ -5961,6 +6000,11 @@ func (h *Handler) HandleDeleteTranscript(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
 
+	// C1: Permission check — isSuperAdmin (B1) or chat:logs permission
+	if !h.isSuperAdmin(c) && !h.hasPermission(c, tenant.ID, PermChatLogs) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or chat:logs permission")
+	}
+
 	// Verify transcript belongs to tenant
 	transcript, err := h.store.GetAgentTranscript(ctx, &store.FindAgentTranscript{
 		ID:       &transcriptID,
@@ -5988,6 +6032,12 @@ func (h *Handler) HandleListLeads(c echo.Context) error {
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
+
+	// C1: Permission check — isSuperAdmin (B1) or tenant:read permission
+	if !h.isSuperAdmin(c) && !h.hasPermission(c, tenant.ID, PermTenantRead) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or tenant:read permission")
+	}
+
 	limit := parsePositiveInt(c.QueryParam("limit"), 100)
 	if limit > 500 {
 		limit = 500
@@ -6024,6 +6074,12 @@ func (h *Handler) HandleGetLead(c echo.Context) error {
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
+
+	// C1: Permission check — isSuperAdmin (B1) or tenant:read permission
+	if !h.isSuperAdmin(c) && !h.hasPermission(c, tenant.ID, PermTenantRead) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or tenant:read permission")
+	}
+
 	lead, err := h.store.GetAgentLead(ctx, &store.FindAgentLead{ID: &leadID, TenantID: &tenant.ID})
 	if err != nil {
 		slog.Error("Failed to get lead", "leadID", leadID, "error", err)
@@ -6055,6 +6111,12 @@ func (h *Handler) HandleUpdateLeadStatus(c echo.Context) error {
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
+
+	// C1: Permission check — isSuperAdmin (B1) or tenant:write permission
+	if !h.isSuperAdmin(c) && !h.hasPermission(c, tenant.ID, PermTenantWrite) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or tenant:write permission")
+	}
+
 	var convertedAt *time.Time
 	if req.Status == "converted" {
 		now := time.Now()
@@ -6080,6 +6142,12 @@ func (h *Handler) HandleExportLeads(c echo.Context) error {
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
+
+	// C1: Permission check — isSuperAdmin (B1) or tenant:read permission
+	if !h.isSuperAdmin(c) && !h.hasPermission(c, tenant.ID, PermTenantRead) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or tenant:read permission")
+	}
+
 	leads, err := h.store.ListAgentLeads(ctx, &store.FindAgentLead{TenantID: &tenant.ID, Limit: 10000})
 	if err != nil {
 		slog.Error("Failed to export leads", "tenantID", tenant.ID, "error", err)
@@ -6154,6 +6222,11 @@ func (h *Handler) HandleGetTenantSettings(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
 
+	// C1: Permission check — isSuperAdmin (B1) or tenant:read permission
+	if !h.isSuperAdmin(c) && !h.hasPermission(c, tenant.ID, PermTenantRead) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or tenant:read permission")
+	}
+
 	// Get tenant config
 	config, err := h.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &tenant.ID})
 	if err != nil {
@@ -6190,6 +6263,11 @@ func (h *Handler) HandleUpdateTenantSettings(c echo.Context) error {
 	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	// C1: Permission check — isSuperAdmin (B1) or tenant:write permission
+	if !h.isSuperAdmin(c) && !h.hasPermission(c, tenant.ID, PermTenantWrite) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or tenant:write permission")
 	}
 
 	// Get or create tenant config

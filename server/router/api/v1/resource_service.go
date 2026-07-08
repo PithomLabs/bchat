@@ -299,6 +299,20 @@ func (s *APIV1Service) convertResourceFromStore(ctx context.Context, resource *s
 	return resourceMessage
 }
 
+// sanitizeFilename strips directory components and null bytes from a filename.
+// H3: Prevents path traversal via malicious filenames.
+func sanitizeFilename(filename string) string {
+	// Strip null bytes first (before filepath.Base to avoid platform-specific truncation)
+	filename = strings.ReplaceAll(filename, "\x00", "")
+	// Strip directory components
+	filename = filepath.Base(filename)
+	// Reject empty filenames
+	if filename == "." || filename == ".." || filename == "" {
+		return "unnamed"
+	}
+	return filename
+}
+
 // SaveResourceBlob save the blob of resource based on the storage config.
 func SaveResourceBlob(ctx context.Context, profile *profile.Profile, stores *store.Store, create *store.Resource) error {
 	workspaceStorageSetting, err := stores.GetWorkspaceStorageSetting(ctx)
@@ -307,6 +321,9 @@ func SaveResourceBlob(ctx context.Context, profile *profile.Profile, stores *sto
 	}
 
 	if workspaceStorageSetting.StorageType == storepb.WorkspaceStorageSetting_LOCAL {
+		// H3: Sanitize filename to prevent path traversal
+		create.Filename = sanitizeFilename(create.Filename)
+
 		filepathTemplate := "assets/{timestamp}_{filename}"
 		if workspaceStorageSetting.FilepathTemplate != "" {
 			filepathTemplate = workspaceStorageSetting.FilepathTemplate
@@ -324,6 +341,13 @@ func SaveResourceBlob(ctx context.Context, profile *profile.Profile, stores *sto
 		if !filepath.IsAbs(osPath) {
 			osPath = filepath.Join(profile.Data, osPath)
 		}
+
+		// H3: Containment assertion — ensure resolved path stays within data directory
+		cleanDataDir := filepath.Clean(profile.Data) + string(os.PathSeparator)
+		if !strings.HasPrefix(filepath.Clean(osPath), cleanDataDir) {
+			return errors.Errorf("path traversal detected: %s", osPath)
+		}
+
 		dir := filepath.Dir(osPath)
 		if err = os.MkdirAll(dir, os.ModePerm); err != nil {
 			return errors.Wrap(err, "Failed to create directory")
@@ -388,6 +412,15 @@ func (s *APIV1Service) GetResourceBlob(resource *store.Resource) ([]byte, error)
 		resourcePath := filepath.FromSlash(resource.Reference)
 		if !filepath.IsAbs(resourcePath) {
 			resourcePath = filepath.Join(s.Profile.Data, resourcePath)
+		}
+
+		// H3: Sanitize filename for defense-in-depth (containment assertion is primary safety)
+		resourcePath = filepath.Join(filepath.Dir(resourcePath), sanitizeFilename(filepath.Base(resourcePath)))
+
+		// H3: Containment assertion — ensure resolved path stays within data directory
+		cleanDataDir := filepath.Clean(s.Profile.Data) + string(os.PathSeparator)
+		if !strings.HasPrefix(filepath.Clean(resourcePath), cleanDataDir) {
+			return nil, errors.Errorf("path traversal detected: %s", resourcePath)
 		}
 
 		file, err := os.Open(resourcePath)

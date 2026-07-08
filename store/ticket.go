@@ -42,6 +42,8 @@ type FindTicket struct {
 	Type        *string
 	Description *string
 	TenantID    *int32
+	// TenantIDs is used for scoped-admin filtering (OR semantics: tenant_id IN (...))
+	TenantIDs []int32
 }
 
 type UpdateTicket struct {

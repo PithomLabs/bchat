@@ -74,6 +74,15 @@ func (d *DB) ListTickets(ctx context.Context, find *store.FindTicket) ([]*store.
 		where = append(where, "tenant_id = ?")
 		args = append(args, *find.TenantID)
 	}
+	if len(find.TenantIDs) > 0 {
+		// M2: Scoped-admin filtering with OR semantics
+		placeholders := make([]string, len(find.TenantIDs))
+		for i, tid := range find.TenantIDs {
+			placeholders[i] = "?"
+			args = append(args, tid)
+		}
+		where = append(where, "tenant_id IN ("+strings.Join(placeholders, ",")+")")
+	}
 
 	query := fmt.Sprintf(`
 		SELECT

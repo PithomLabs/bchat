@@ -302,21 +302,22 @@ func (*APIV1Service) buildAccessTokenCookie(ctx context.Context, accessToken str
 		attrs = append(attrs, "Expires="+expireTime.Format(time.RFC1123))
 	}
 
+	// H4: Always use SameSite=Lax (not None) to prevent CSRF.
+	// SameSite=Lax prevents cross-site POST while allowing same-site navigation.
+	attrs = append(attrs, "SameSite=Lax")
+
+	// Only add Secure flag for HTTPS
 	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return "", errors.New("failed to get metadata from context")
+	if ok {
+		var origin string
+		for _, v := range md.Get("origin") {
+			origin = v
+		}
+		if strings.HasPrefix(origin, "https://") {
+			attrs = append(attrs, "Secure")
+		}
 	}
-	var origin string
-	for _, v := range md.Get("origin") {
-		origin = v
-	}
-	isHTTPS := strings.HasPrefix(origin, "https://")
-	if isHTTPS {
-		attrs = append(attrs, "SameSite=None")
-		attrs = append(attrs, "Secure")
-	} else {
-		attrs = append(attrs, "SameSite=Strict")
-	}
+
 	return strings.Join(attrs, "; "), nil
 }
 
@@ -539,11 +540,9 @@ func (s *APIV1Service) HandleSelectTenant(c echo.Context) error {
 		HttpOnly: true,
 		Expires:  expireTime,
 	}
+	cookie.SameSite = http.SameSiteLaxMode
 	if isHTTPS {
-		cookie.SameSite = http.SameSiteNoneMode
 		cookie.Secure = true
-	} else {
-		cookie.SameSite = http.SameSiteStrictMode
 	}
 	c.SetCookie(cookie)
 

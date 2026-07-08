@@ -58,6 +58,9 @@ func (d *DB) ListAgentTenants(ctx context.Context, find *store.FindAgentTenant) 
 	if find.Slug != nil {
 		add("slug = $%d", *find.Slug)
 	}
+	if find.GUID != nil {
+		add("guid = $%d", *find.GUID)
+	}
 	if find.IsActive != nil {
 		add("is_active = $%d", *find.IsActive)
 	}
