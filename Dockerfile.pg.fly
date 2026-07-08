@@ -1,0 +1,109 @@
+# =============================================================================
+# Multi-stage Dockerfile for fly.io deployment with Postgres (Neon) backend
+# Runtime: Ubuntu 24.04 LTS (Noble Numbat)
+# Storage: S3/Tigris for LanceDB, Postgres for application data
+# =============================================================================
+
+# Stage 1: Build frontend and widget
+FROM node:20-alpine AS frontend
+
+# Build main frontend
+WORKDIR /frontend-build
+COPY web/package*.json ./
+COPY web/vendor ./vendor
+RUN npm ci
+COPY web/ .
+RUN test -f node_modules/@usememos/mui/dist/index.css
+RUN npm run release
+
+# Build widget
+WORKDIR /widget-build
+COPY widget/package*.json ./
+RUN npm ci
+COPY widget/ .
+RUN npm run build
+
+# Stage 2: Build backend with LanceDB CGO support
+FROM golang:1.25 AS backend
+WORKDIR /backend-build
+
+# Install build dependencies for CGO
+RUN apt-get update && apt-get install -y \
+    gcc \
+    libc-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy LanceDB native libraries and headers
+COPY lib/linux_amd64/ /usr/local/lib/lancedb/
+COPY include/ /usr/local/include/lancedb/
+
+# Copy go modules first for better layer caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Copy frontend build from stage 1
+COPY --from=frontend /server/router/frontend/dist ./server/router/frontend/dist
+
+# Build with LanceDB RAG support
+ENV CGO_ENABLED=1
+ENV CGO_CFLAGS="-I/usr/local/include/lancedb"
+ENV CGO_LDFLAGS="-L/usr/local/lib/lancedb -llancedb_go -Wl,-rpath,/usr/local/lib/lancedb"
+
+RUN go build -tags rag -ldflags="-s -w" -o memos ./bin/memos/main.go
+
+# Stage 3: Ubuntu 24.04 LTS runtime image
+FROM ubuntu:24.04
+
+WORKDIR /usr/local/memos
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy LanceDB shared library for runtime
+COPY --from=backend /usr/local/lib/lancedb/liblancedb_go.so /usr/local/lib/
+RUN ldconfig
+
+# Copy application binary and scripts
+COPY --from=backend /backend-build/memos .
+COPY scripts/entrypoint.sh .
+RUN chmod +x entrypoint.sh
+
+# Copy widget bundle for external embeds
+COPY --from=frontend /widget-build/dist ./widget/dist
+
+# Create data directory (LanceDB local fallback, not primary storage)
+RUN mkdir -p /var/opt/memos
+
+# Environment defaults
+ENV TZ="UTC"
+ENV MEMOS_MODE="prod"
+ENV MEMOS_PORT="5230"
+
+# RAG pipeline configuration (S3/Tigris storage)
+ENV RAG_STARTUP_REINDEX_DISABLED="true"
+ENV RAG_PIPELINE_ENABLED="true"
+ENV LANCEDB_STORAGE_PROVIDER="s3"
+ENV LANCEDB_S3_ENDPOINT="t3.storage.dev"
+ENV LANCEDB_S3_REGION="auto"
+ENV LANCEDB_S3_FORCE_PATH_STYLE="false"
+ENV EMBEDDING_PROVIDER="openrouter"
+ENV EMBEDDING_MODEL="openai/text-embedding-3-small"
+ENV EMBEDDING_BATCH_SIZE="10"
+ENV EMBEDDING_TIMEOUT="10m"
+
+# LLM models
+ENV LLM_MODEL="poolside/laguna-m.1:free"
+ENV LLM_MODEL_REASONING="nvidia/nemotron-3-ultra-550b-a55b:free"
+
+# Optional LLM verifier (disabled by default)
+ENV LLM_VERIFIER_ENABLED="false"
+
+EXPOSE 5230
+
+ENTRYPOINT ["./entrypoint.sh", "./memos"]
