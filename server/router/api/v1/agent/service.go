@@ -4391,6 +4391,22 @@ func (s *Service) captureLeadFromSession(ctx context.Context, config *AudienceCo
 		slog.Warn("failed to upsert agent lead", "tenant_id", config.TenantID, "session_id", session.ID, "error", err)
 		return nil
 	}
+
+	// Dispatch webhook event for lead capture
+	if created != nil {
+		payload, _ := json.Marshal(map[string]interface{}{
+			"lead_id":   created.ID,
+			"name":      created.Name,
+			"email":     created.Email,
+			"phone":     created.Phone,
+			"topic":     created.Topic,
+			"location":  created.Location,
+			"intent":    created.DetectedIntent,
+			"session_id": session.ID,
+		})
+		s.dispatchEvent(ctx, config.TenantID, created.ID, "lead.captured", string(payload))
+	}
+
 	return created
 }
 
@@ -4496,4 +4512,148 @@ type BridgeReleaseRequest struct {
 
 type BridgeReleaseResponse struct {
 	Status string `json:"status"`
+}
+
+// ============================================================================
+// WEBHOOK EVENT DISPATCH
+// ============================================================================
+
+// dispatchEvent inserts a pre-claimed event and spawns immediate delivery.
+// On failure: leave row as 'processing' with original claimed_at (do NOT reset).
+// The poller reclaims after the 300s lease. Only success flips to 'delivered'.
+// NOTE: SQLite acquires write lock on entire agent_events table during claim.
+// Acceptable for v1 at expected scale. Consider per-tenant claim limit in v1.1.
+func (s *Service) dispatchEvent(ctx context.Context, tenantID int32, leadID string, eventType string, data string) {
+	// Get active webhook integrations for this tenant
+	integrations, err := s.store.ListAgentIntegrations(ctx, &store.FindAgentIntegration{
+		TenantID:        &tenantID,
+		IntegrationType: strPtr("webhook"),
+	})
+	if err != nil {
+		slog.Error("failed to list integrations", "tenant_id", tenantID, "error", err)
+		return
+	}
+	if len(integrations) == 0 {
+		return // No integrations configured
+	}
+
+	now := time.Now().Unix()
+	for _, ig := range integrations {
+		if !ig.IsActive {
+			continue
+		}
+
+		// Compute idempotency key (deterministic, includes all components)
+		idempotencyKey := computeIdempotencyKey(
+			fmt.Sprintf("%d", tenantID),
+			leadID,
+			eventType,
+			fmt.Sprintf("%d", ig.ID),
+		)
+
+		// Insert pre-claimed event
+		event := &store.AgentEvent{
+			TenantID:       tenantID,
+			IntegrationID:  ig.ID,
+			EventType:      eventType,
+			Payload:        data,
+			Status:         "processing",
+			ClaimedAt:      &now,
+			Attempts:       1, // Pre-claimed, so first attempt is already counted
+			IdempotencyKey: &idempotencyKey,
+		}
+		created, err := s.store.CreateAgentEvent(ctx, event)
+		if err != nil {
+			slog.Warn("failed to create event (possibly duplicate)", "tenant_id", tenantID, "error", err)
+			continue
+		}
+
+		// Spawn immediate delivery goroutine
+		go func(ig *store.AgentIntegration, evt *store.AgentEvent) {
+			var config store.WebhookConfig
+			if err := json.Unmarshal([]byte(ig.Config), &config); err != nil {
+				slog.Error("failed to unmarshal webhook config", "integration_id", ig.ID, "error", err)
+				return
+			}
+
+			deliveryCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+
+			if err := s.deliverWebhook(deliveryCtx, config, evt.EventType, []byte(evt.Payload)); err != nil {
+				slog.Warn("immediate webhook delivery failed, will be retried by poller",
+					"event_id", evt.ID, "error", err)
+				// Leave as 'processing' — poller will reclaim after 300s lease
+				return
+			}
+
+			// Success: mark as delivered
+			evt.Status = "delivered"
+			if err := s.store.UpdateAgentEvent(deliveryCtx, evt); err != nil {
+				slog.Error("failed to mark event as delivered", "event_id", evt.ID, "error", err)
+			}
+		}(ig, created)
+	}
+}
+
+// processEventPoller claims pending events and delivers webhooks.
+// Called by supercronic via trigger-cron endpoint.
+func (s *Service) processEventPoller(ctx context.Context) {
+	events, err := s.store.ClaimPendingEvents(ctx, 10)
+	if err != nil {
+		slog.Error("failed to claim pending events", "error", err)
+		return
+	}
+	if len(events) == 0 {
+		return
+	}
+
+	slog.Info("processing events from poller", "count", len(events))
+
+	for _, event := range events {
+		// Get the integration config
+		integration, err := s.store.GetAgentIntegration(ctx, &store.FindAgentIntegration{ID: &event.IntegrationID})
+		if err != nil || integration == nil {
+			slog.Warn("integration not found for event", "event_id", event.ID, "integration_id", event.IntegrationID)
+			event.Status = "failed"
+			errMsg := "integration not found"
+			event.LastError = &errMsg
+			s.store.UpdateAgentEvent(ctx, event)
+			continue
+		}
+
+		var config store.WebhookConfig
+		if err := json.Unmarshal([]byte(integration.Config), &config); err != nil {
+			slog.Error("failed to unmarshal webhook config", "integration_id", integration.ID, "error", err)
+			event.Status = "failed"
+			errMsg := "invalid config"
+			event.LastError = &errMsg
+			s.store.UpdateAgentEvent(ctx, event)
+			continue
+		}
+
+		// Attempt delivery
+		if err := s.deliverWebhook(ctx, config, event.EventType, []byte(event.Payload)); err != nil {
+			slog.Warn("webhook delivery failed",
+				"event_id", event.ID,
+				"attempts", event.Attempts,
+				"error", err,
+			)
+			errMsg := err.Error()
+			event.LastError = &errMsg
+			if event.Attempts >= 5 {
+				event.Status = "failed"
+			}
+			// Leave as 'processing' if not max attempts — poller will reclaim
+			s.store.UpdateAgentEvent(ctx, event)
+			continue
+		}
+
+		// Success
+		event.Status = "delivered"
+		s.store.UpdateAgentEvent(ctx, event)
+	}
+}
+
+func strPtr(s string) *string {
+	return &s
 }

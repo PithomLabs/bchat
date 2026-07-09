@@ -394,6 +394,17 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	adminGroup.POST("/:slug/role-templates/:id/assign", s.agentHandler.HandleAssignRoleTemplate)
 	adminGroup.GET("/:slug/users/:userId/roles", s.agentHandler.HandleListUserRoles)
 
+	// Integration routes (admin auth required)
+	adminGroup.GET("/:slug/integrations", s.agentHandler.HandleListIntegrations)
+	adminGroup.POST("/:slug/integrations", s.agentHandler.HandleCreateIntegration)
+	adminGroup.PUT("/:slug/integrations/:id", s.agentHandler.HandleUpdateIntegration)
+	adminGroup.DELETE("/:slug/integrations/:id", s.agentHandler.HandleDeleteIntegration)
+	adminGroup.POST("/:slug/integrations/:id/test", s.agentHandler.HandleTestIntegration)
+	adminGroup.GET("/:slug/events", s.agentHandler.HandleListEvents)
+
+	// System trigger-cron route (own auth via X-Cron-Token, outside tenant middleware)
+	echoServer.POST("/api/v1/system/trigger-cron", s.agentHandler.HandleTriggerCron)
+
 	// RAG Stats routes (admin only) - restrictive CORS
 	ragGroup := echoServer.Group("/api/v1/admin/rag")
 	ragGroup.Use(s.AuthMiddleware)

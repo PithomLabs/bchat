@@ -1,6 +1,8 @@
 lancedb-go-main/
 build/
 mastra-main/
+.opencode/
+.kilo/
 
 # Node template downloaded with gut
 

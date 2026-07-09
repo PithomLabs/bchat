@@ -1192,3 +1192,92 @@ func (s *Store) GetObservationLog(ctx context.Context, sessionID string) (*Obser
 func (s *Store) GetObservationLogByResource(ctx context.Context, resourceID string) (*ObservationLog, error) {
 	return s.driver.GetObservationLogByResource(ctx, resourceID)
 }
+
+// ============================================================================
+// AGENT INTEGRATIONS
+// ============================================================================
+
+// AgentIntegration represents a configured integration for a tenant.
+type AgentIntegration struct {
+	ID              int32
+	TenantID        int32
+	IntegrationType string // "webhook" | "twilio"
+	Label           string
+	Config          string // JSON-encoded config
+	IsActive        bool
+	CreatedAt       int64
+	UpdatedAt       int64
+}
+
+// AgentEvent represents an outbound event to be delivered via integration.
+type AgentEvent struct {
+	ID             int32
+	TenantID       int32
+	IntegrationID  int32
+	EventType      string
+	Payload        string // JSON payload
+	Status         string // "pending" | "processing" | "delivered" | "failed"
+	ClaimedAt      *int64
+	Attempts       int32
+	LastError      *string
+	IdempotencyKey *string
+	CreatedAt      int64
+}
+
+// WebhookConfig holds typed webhook configuration.
+type WebhookConfig struct {
+	URL     string            `json:"url"`
+	Secret  string            `json:"secret"`
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// FindAgentIntegration is the query filter for agent integrations.
+type FindAgentIntegration struct {
+	ID              *int32
+	TenantID        *int32
+	IntegrationType *string
+}
+
+// FindAgentEvent is the query filter for agent events.
+type FindAgentEvent struct {
+	ID       *int32
+	TenantID *int32
+	Status   *string
+	EventID  *int32
+}
+
+func (s *Store) CreateAgentIntegration(ctx context.Context, integration *AgentIntegration) (*AgentIntegration, error) {
+	return s.driver.CreateAgentIntegration(ctx, integration)
+}
+
+func (s *Store) GetAgentIntegration(ctx context.Context, find *FindAgentIntegration) (*AgentIntegration, error) {
+	return s.driver.GetAgentIntegration(ctx, find)
+}
+
+func (s *Store) ListAgentIntegrations(ctx context.Context, find *FindAgentIntegration) ([]*AgentIntegration, error) {
+	return s.driver.ListAgentIntegrations(ctx, find)
+}
+
+func (s *Store) UpdateAgentIntegration(ctx context.Context, update *AgentIntegration) error {
+	return s.driver.UpdateAgentIntegration(ctx, update)
+}
+
+func (s *Store) DeleteAgentIntegration(ctx context.Context, id int32) error {
+	return s.driver.DeleteAgentIntegration(ctx, id)
+}
+
+func (s *Store) CreateAgentEvent(ctx context.Context, event *AgentEvent) (*AgentEvent, error) {
+	return s.driver.CreateAgentEvent(ctx, event)
+}
+
+func (s *Store) ListAgentEvents(ctx context.Context, find *FindAgentEvent) ([]*AgentEvent, error) {
+	return s.driver.ListAgentEvents(ctx, find)
+}
+
+func (s *Store) ClaimPendingEvents(ctx context.Context, limit int32) ([]*AgentEvent, error) {
+	return s.driver.ClaimPendingEvents(ctx, limit)
+}
+
+func (s *Store) UpdateAgentEvent(ctx context.Context, update *AgentEvent) error {
+	return s.driver.UpdateAgentEvent(ctx, update)
+}

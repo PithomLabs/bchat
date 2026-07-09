@@ -1,0 +1,38 @@
+# Tasks for Native Webhook & SMS Integrations (Plan 4)
+
+- `[ ]` **Database Migrations**
+  - `[ ]` Create SQLite migrations under `store/migration/sqlite/0.31/`
+    - `00__agent_integrations.sql`
+    - `01__agent_events.sql` (Outbox, `idempotency_key`, `claimed_at`)
+    - `02__agent_sms.sql` (SMS tables, `idempotency_key`, `claimed_at`)
+  - `[ ]` Create PostgreSQL migrations under `store/migration/postgres/0.31/`
+    - `00__agent_integrations.sql`
+    - `01__agent_events.sql`
+    - `02__agent_sms.sql`
+- `[ ]` **Store Layer Development**
+  - `[ ]` Define new model structs & configuration structures in `store/agent.go`
+  - `[ ]` Add interface methods to `store/driver.go`
+  - `[ ]` Implement SQL operations in SQLite driver `store/db/sqlite/agent.go`
+  - `[ ]` Implement SQL operations with row-level locking (`FOR UPDATE SKIP LOCKED`) in PostgreSQL driver `store/db/postgres/agent.go`
+  - `[ ]` Add `store/db/postgres/resilience.go` with:
+    - `isTransientError` detecting `57P01`, `08006`, `08003` SQLSTATE codes
+    - `RunResiliently` exponential backoff + jitter retry wrapper (treating `23505` unique constraint as a successful operation)
+- `[ ]` **Agent Service Layer**
+  - `[ ]` Create `server/router/api/v1/agent/integrations.go` (webhook dispatching & SSRF protection)
+  - `[ ]` Create `server/router/api/v1/agent/sms.go` (stateless Twilio HTTP helper, SMS methods on `*Service`)
+  - `[ ]` Update `server/router/api/v1/agent/service.go` to handle:
+    - Background polling of outbox events and SMS messages using vendored `plugin/cron`
+    - Outbox event scheduling immediately after lead insertion (generating deterministic idempotency keys)
+    - Immediate best-effort webhook dispatch in a detached context
+    - Bounded `sync.WaitGroup` graceful shutdown logic
+  - `[ ]` Add graceful shutdown hook to `server/server.go` calling agent service shutdown
+  - `[ ]` Update `fly.toml` to specify `kill_timeout = 30`
+- `[ ]` **API Routing & Handlers**
+  - `[ ]` Implement CRUD, Test, Event Log, and `trigger-cron` endpoint (auth + mutex rate limit) in `server/router/api/v1/agent/handlers.go`
+  - `[ ]` Register integration routes in `server/router/api/v1/v1.go`
+- `[ ]` **Frontend Admin Panel**
+  - `[ ]` Implement MobX state & fetch/mutation actions in `web/src/store/v2/agentAdmin.ts`
+  - `[ ]` Build "Integrations" section with configuration panels & logs in `web/src/pages/AgentAdmin.tsx`
+- `[ ]` **Verification & Test Suite**
+  - `[ ]` Implement unit tests for webhook signature, SSRF safety, DB transient retries, idempotency key unique-violations, and stale lease reclaim.
+  - `[ ]` Run end-to-end local integration test (SQLite + manual test delivery).

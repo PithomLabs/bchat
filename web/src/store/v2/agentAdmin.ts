@@ -307,6 +307,30 @@ export interface TenantSettings {
   recordTranscripts: boolean;
 }
 
+export interface AgentIntegration {
+  id: number;
+  tenant_id: number;
+  integration_type: string;
+  label: string;
+  is_active: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AgentEvent {
+  id: number;
+  tenant_id: number;
+  integration_id: number;
+  event_type: string;
+  payload: string;
+  status: "pending" | "processing" | "delivered" | "failed";
+  claimed_at?: number;
+  attempts: number;
+  last_error?: string;
+  idempotency_key?: string;
+  created_at: number;
+}
+
 // Available LLM models (free tier)
 export const LLM_MODEL_OPTIONS = [
   { value: "openai/gpt-oss-120b:free", label: "GPT-OSS 120B (Default)" },
@@ -492,6 +516,13 @@ class LocalState {
   leads: AgentLead[] = [];
   isLoadingLeads: boolean = false;
   tenantSettings: TenantSettings | null = null;
+
+  // Integrations
+  integrations: AgentIntegration[] = [];
+  isLoadingIntegrations: boolean = false;
+  events: AgentEvent[] = [];
+  isLoadingEvents: boolean = false;
+
   reindexStatus: ReindexStatus | null = null;
   isPollingReindex: boolean = false;
 
@@ -1143,6 +1174,126 @@ const agentAdminStore = (() => {
     state.setPartial({ leads: [], isLoadingLeads: false });
   };
 
+  // ============================================================================
+  // INTEGRATION METHODS
+  // ============================================================================
+
+  const fetchIntegrations = async (slug: string): Promise<void> => {
+    state.setPartial({ isLoadingIntegrations: true });
+    try {
+      const response = await axios.get<{ integrations: AgentIntegration[] }>(
+        `/api/v1/agent/${slug}/integrations`
+      );
+      runInAction(() => {
+        state.integrations = response.data.integrations || [];
+        state.isLoadingIntegrations = false;
+      });
+    } catch (error) {
+      runInAction(() => {
+        state.isLoadingIntegrations = false;
+        state.integrations = [];
+      });
+    }
+  };
+
+  const createIntegration = async (
+    slug: string,
+    data: {
+      integration_type: string;
+      label: string;
+      config: { url: string; secret: string; headers?: Record<string, string> };
+    }
+  ): Promise<AgentIntegration | null> => {
+    try {
+      const response = await axios.post<{ id: number; tenant_id: number; integration_type: string; label: string; is_active: boolean; created_at: number }>(
+        `/api/v1/agent/${slug}/integrations`,
+        data
+      );
+      const newIntegration: AgentIntegration = {
+        id: response.data.id,
+        tenant_id: response.data.tenant_id,
+        integration_type: response.data.integration_type,
+        label: response.data.label,
+        is_active: response.data.is_active,
+        created_at: response.data.created_at,
+        updated_at: response.data.created_at,
+      };
+      runInAction(() => {
+        state.integrations = [...state.integrations, newIntegration];
+      });
+      return newIntegration;
+    } catch (error) {
+      return null;
+    }
+  };
+
+  const updateIntegration = async (
+    slug: string,
+    id: number,
+    data: { label?: string; is_active?: boolean; config?: { url: string; secret: string; headers?: Record<string, string> } }
+  ): Promise<boolean> => {
+    try {
+      const response = await axios.put<{ id: number; label: string; is_active: boolean; updated_at: number }>(
+        `/api/v1/agent/${slug}/integrations/${id}`,
+        data
+      );
+      runInAction(() => {
+        state.integrations = state.integrations.map((ig) =>
+          ig.id === id
+            ? { ...ig, label: response.data.label, is_active: response.data.is_active, updated_at: response.data.updated_at }
+            : ig
+        );
+      });
+      return true;
+    } catch (error) {
+      return false;
+    }
+  };
+
+  const deleteIntegration = async (slug: string, id: number): Promise<boolean> => {
+    try {
+      await axios.delete(`/api/v1/agent/${slug}/integrations/${id}`);
+      runInAction(() => {
+        state.integrations = state.integrations.filter((ig) => ig.id !== id);
+      });
+      return true;
+    } catch (error) {
+      return false;
+    }
+  };
+
+  const testIntegration = async (slug: string, id: number): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const response = await axios.post<{ success: boolean; error?: string; message?: string }>(
+        `/api/v1/agent/${slug}/integrations/${id}/test`
+      );
+      return response.data;
+    } catch (error) {
+      return { success: false, error: "Request failed" };
+    }
+  };
+
+  const fetchEvents = async (slug: string, params?: { status?: string; limit?: number }): Promise<void> => {
+    state.setPartial({ isLoadingEvents: true });
+    try {
+      const queryParams = new URLSearchParams();
+      if (params?.status) queryParams.set("status", params.status);
+      if (params?.limit) queryParams.set("limit", params.limit.toString());
+      const queryString = queryParams.toString();
+      const url = `/api/v1/agent/${slug}/events${queryString ? `?${queryString}` : ""}`;
+      const response = await axios.get<{ events: AgentEvent[] }>(url);
+      runInAction(() => {
+        state.events = response.data.events || [];
+        state.isLoadingEvents = false;
+      });
+    } catch (error) {
+      runInAction(() => {
+        state.isLoadingEvents = false;
+        state.events = [];
+      });
+    }
+  };
+
   const fetchTenantSettings = async (slug: string): Promise<void> => {
     try {
       const response = await axios.get<{ record_transcripts: boolean }>(
@@ -1597,6 +1748,13 @@ const agentAdminStore = (() => {
     updateLeadStatus,
     exportLeads,
     clearLeads,
+    // Integrations
+    fetchIntegrations,
+    createIntegration,
+    updateIntegration,
+    deleteIntegration,
+    testIntegration,
+    fetchEvents,
     fetchTenantSettings,
     updateTenantSettings,
   };

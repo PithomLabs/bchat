@@ -267,4 +267,17 @@ type Driver interface {
 	RevokeBridgeAuthKey(ctx context.Context, tenantID int32, keyID string, now time.Time) error
 	StoreBridgeAuthNonce(ctx context.Context, nonce *BridgeAuthNonce) error
 	CleanupBridgeAuthNonces(ctx context.Context, now time.Time) error
+
+	// Agent Integration methods
+	CreateAgentIntegration(ctx context.Context, integration *AgentIntegration) (*AgentIntegration, error)
+	GetAgentIntegration(ctx context.Context, find *FindAgentIntegration) (*AgentIntegration, error)
+	ListAgentIntegrations(ctx context.Context, find *FindAgentIntegration) ([]*AgentIntegration, error)
+	UpdateAgentIntegration(ctx context.Context, update *AgentIntegration) error
+	DeleteAgentIntegration(ctx context.Context, id int32) error
+
+	// Agent Event methods
+	CreateAgentEvent(ctx context.Context, event *AgentEvent) (*AgentEvent, error)
+	ListAgentEvents(ctx context.Context, find *FindAgentEvent) ([]*AgentEvent, error)
+	ClaimPendingEvents(ctx context.Context, limit int32) ([]*AgentEvent, error)
+	UpdateAgentEvent(ctx context.Context, update *AgentEvent) error
 }

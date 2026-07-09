@@ -64,7 +64,15 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     tzdata \
     gosu \
+    curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Install supercronic for webhook event polling
+ARG SUPERCRONIC_URL=https://github.com/aptible/supercronic/releases/download/v0.2.33/supercronic-linux-amd64
+ARG SUPERCRONIC_SHA1SUM=c430cce812b1b47863a2f2506571a2f3c1357845
+RUN curl -fsSL "$SUPERCRONIC_URL" -o /usr/local/bin/supercronic \
+    && echo "$SUPERCRONIC_SHA1SUM /usr/local/bin/supercronic" | sha1sum -c - \
+    && chmod +x /usr/local/bin/supercronic
 
 # Copy LanceDB shared library for runtime
 COPY --from=backend /usr/local/lib/lancedb/liblancedb_go.so /usr/local/lib/
@@ -74,6 +82,10 @@ RUN ldconfig
 COPY --from=backend /backend-build/memos .
 COPY scripts/entrypoint.sh .
 RUN chmod +x entrypoint.sh
+
+# Copy crontab for supercronic
+RUN mkdir -p /etc/bchat
+COPY build/crontab /etc/bchat/crontab
 
 # Copy widget bundle for external embeds
 COPY --from=frontend /widget-build/dist ./widget/dist

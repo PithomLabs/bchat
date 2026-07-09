@@ -50,6 +50,7 @@ import toast from "react-hot-toast";
 import MobileHeader from "@/components/MobileHeader";
 import useResponsiveWidth from "@/hooks/useResponsiveWidth";
 import { agentAdminStore, userStore } from "@/store/v2";
+import IntegrationsSection from "./AgentAdminSections/IntegrationsSection";
 import type {
   AgentTenant,
   AgentLead,
@@ -228,6 +229,8 @@ const AgentAdmin = observer(() => {
         agentAdminStore.fetchTenantSettings(selectedTenant.tenant.slug);
         agentAdminStore.fetchTranscripts(selectedTenant.tenant.slug);
         agentAdminStore.fetchLeads(selectedTenant.tenant.slug);
+        // Fetch integrations
+        agentAdminStore.fetchIntegrations(selectedTenant.tenant.slug);
       }
     }
   }, [selectedTenant?.tenant.slug, selectedTenant?.tenant.id, isAdmin]);
@@ -1971,6 +1974,14 @@ const AgentAdmin = observer(() => {
                   </div>
                 )}
               </div>
+            )}
+
+            {/* Webhook Integrations - Admin only */}
+            {isAdmin && selectedTenant && (
+              <IntegrationsSection
+                slug={selectedTenant.tenant.slug}
+                isAdmin={isAdmin}
+              />
             )}
 
             {/* Chat Transcripts - Admin only */}

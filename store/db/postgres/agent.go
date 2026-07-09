@@ -2475,3 +2475,226 @@ func (d *DB) DeleteReindexCheckpoint(ctx context.Context, tenantID int32, audien
 func (d *DB) SupportsBridgeDelivery() bool {
 	return true
 }
+
+// ============================================================================
+// AGENT INTEGRATIONS
+// ============================================================================
+
+func (d *DB) CreateAgentIntegration(ctx context.Context, integration *store.AgentIntegration) (*store.AgentIntegration, error) {
+	stmt := `
+		INSERT INTO agent_integrations (tenant_id, integration_type, label, config, is_active, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, EXTRACT(EPOCH FROM NOW())::BIGINT, EXTRACT(EPOCH FROM NOW())::BIGINT)
+		RETURNING id
+	`
+	var id int32
+	err := d.db.QueryRowContext(ctx, stmt,
+		integration.TenantID, integration.IntegrationType, integration.Label,
+		integration.Config, integration.IsActive,
+	).Scan(&id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create agent integration: %w", err)
+	}
+	integration.ID = id
+	return integration, nil
+}
+
+func (d *DB) GetAgentIntegration(ctx context.Context, find *store.FindAgentIntegration) (*store.AgentIntegration, error) {
+	query := "SELECT id, tenant_id, integration_type, label, config, is_active, created_at, updated_at FROM agent_integrations WHERE 1=1"
+	args := []any{}
+	argIdx := 1
+	if find.ID != nil {
+		query += fmt.Sprintf(" AND id = $%d", argIdx)
+		args = append(args, *find.ID)
+		argIdx++
+	}
+	if find.TenantID != nil {
+		query += fmt.Sprintf(" AND tenant_id = $%d", argIdx)
+		args = append(args, *find.TenantID)
+		argIdx++
+	}
+	if find.IntegrationType != nil {
+		query += fmt.Sprintf(" AND integration_type = $%d", argIdx)
+		args = append(args, *find.IntegrationType)
+		argIdx++
+	}
+	query += " LIMIT 1"
+
+	var integration store.AgentIntegration
+	err := d.db.QueryRowContext(ctx, query, args...).Scan(
+		&integration.ID, &integration.TenantID, &integration.IntegrationType,
+		&integration.Label, &integration.Config, &integration.IsActive,
+		&integration.CreatedAt, &integration.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get agent integration: %w", err)
+	}
+	return &integration, nil
+}
+
+func (d *DB) ListAgentIntegrations(ctx context.Context, find *store.FindAgentIntegration) ([]*store.AgentIntegration, error) {
+	query := "SELECT id, tenant_id, integration_type, label, config, is_active, created_at, updated_at FROM agent_integrations WHERE 1=1"
+	args := []any{}
+	argIdx := 1
+	if find.TenantID != nil {
+		query += fmt.Sprintf(" AND tenant_id = $%d", argIdx)
+		args = append(args, *find.TenantID)
+		argIdx++
+	}
+	if find.IntegrationType != nil {
+		query += fmt.Sprintf(" AND integration_type = $%d", argIdx)
+		args = append(args, *find.IntegrationType)
+		argIdx++
+	}
+	query += " ORDER BY created_at DESC"
+
+	rows, err := d.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list agent integrations: %w", err)
+	}
+	defer rows.Close()
+
+	var integrations []*store.AgentIntegration
+	for rows.Next() {
+		var integration store.AgentIntegration
+		if err := rows.Scan(
+			&integration.ID, &integration.TenantID, &integration.IntegrationType,
+			&integration.Label, &integration.Config, &integration.IsActive,
+			&integration.CreatedAt, &integration.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan agent integration: %w", err)
+		}
+		integrations = append(integrations, &integration)
+	}
+	return integrations, nil
+}
+
+func (d *DB) UpdateAgentIntegration(ctx context.Context, update *store.AgentIntegration) error {
+	stmt := `
+		UPDATE agent_integrations
+		SET label = $1, config = $2, is_active = $3, updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT
+		WHERE id = $4
+	`
+	_, err := d.db.ExecContext(ctx, stmt, update.Label, update.Config, update.IsActive, update.ID)
+	if err != nil {
+		return fmt.Errorf("failed to update agent integration: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) DeleteAgentIntegration(ctx context.Context, id int32) error {
+	_, err := d.db.ExecContext(ctx, "DELETE FROM agent_integrations WHERE id = $1", id)
+	if err != nil {
+		return fmt.Errorf("failed to delete agent integration: %w", err)
+	}
+	return nil
+}
+
+// ============================================================================
+// AGENT EVENTS
+// ============================================================================
+
+func (d *DB) CreateAgentEvent(ctx context.Context, event *store.AgentEvent) (*store.AgentEvent, error) {
+	stmt := `
+		INSERT INTO agent_events (tenant_id, integration_id, event_type, payload, status, claimed_at, attempts, last_error, idempotency_key, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, EXTRACT(EPOCH FROM NOW())::BIGINT)
+		RETURNING id
+	`
+	var id int32
+	err := d.db.QueryRowContext(ctx, stmt,
+		event.TenantID, event.IntegrationID, event.EventType,
+		event.Payload, event.Status, event.ClaimedAt,
+		event.Attempts, event.LastError, event.IdempotencyKey,
+	).Scan(&id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create agent event: %w", err)
+	}
+	event.ID = id
+	return event, nil
+}
+
+func (d *DB) ListAgentEvents(ctx context.Context, find *store.FindAgentEvent) ([]*store.AgentEvent, error) {
+	query := "SELECT id, tenant_id, integration_id, event_type, payload, status, claimed_at, attempts, last_error, idempotency_key, created_at FROM agent_events WHERE 1=1"
+	args := []any{}
+	argIdx := 1
+	if find.TenantID != nil {
+		query += fmt.Sprintf(" AND tenant_id = $%d", argIdx)
+		args = append(args, *find.TenantID)
+		argIdx++
+	}
+	if find.Status != nil {
+		query += fmt.Sprintf(" AND status = $%d", argIdx)
+		args = append(args, *find.Status)
+		argIdx++
+	}
+	query += " ORDER BY created_at DESC"
+
+	rows, err := d.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list agent events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []*store.AgentEvent
+	for rows.Next() {
+		var event store.AgentEvent
+		if err := rows.Scan(
+			&event.ID, &event.TenantID, &event.IntegrationID,
+			&event.EventType, &event.Payload, &event.Status,
+			&event.ClaimedAt, &event.Attempts, &event.LastError,
+			&event.IdempotencyKey, &event.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan agent event: %w", err)
+		}
+		events = append(events, &event)
+	}
+	return events, nil
+}
+
+func (d *DB) ClaimPendingEvents(ctx context.Context, limit int32) ([]*store.AgentEvent, error) {
+	// Postgres claim with FOR UPDATE SKIP LOCKED for concurrent safety
+	stmt := `
+		UPDATE agent_events
+		SET status = 'processing', claimed_at = EXTRACT(EPOCH FROM NOW())::BIGINT, attempts = attempts + 1
+		WHERE id IN (
+			SELECT id FROM agent_events
+			WHERE (status = 'pending' AND attempts < 5)
+			   OR (status = 'processing' AND claimed_at < EXTRACT(EPOCH FROM NOW())::BIGINT - 300 AND attempts < 5)
+			FOR UPDATE SKIP LOCKED
+			LIMIT $1
+		)
+		RETURNING id, tenant_id, integration_id, event_type, payload, status, claimed_at, attempts, last_error, idempotency_key, created_at
+	`
+	rows, err := d.db.QueryContext(ctx, stmt, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to claim pending events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []*store.AgentEvent
+	for rows.Next() {
+		var event store.AgentEvent
+		if err := rows.Scan(
+			&event.ID, &event.TenantID, &event.IntegrationID,
+			&event.EventType, &event.Payload, &event.Status,
+			&event.ClaimedAt, &event.Attempts, &event.LastError,
+			&event.IdempotencyKey, &event.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan claimed event: %w", err)
+		}
+		events = append(events, &event)
+	}
+	return events, nil
+}
+
+func (d *DB) UpdateAgentEvent(ctx context.Context, update *store.AgentEvent) error {
+	stmt := `
+		UPDATE agent_events
+		SET status = $1, last_error = $2, attempts = $3
+		WHERE id = $4
+	`
+	_, err := d.db.ExecContext(ctx, stmt, update.Status, update.LastError, update.Attempts, update.ID)
+	if err != nil {
+		return fmt.Errorf("failed to update agent event: %w", err)
+	}
+	return nil
+}

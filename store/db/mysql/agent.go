@@ -407,3 +407,43 @@ func (d *DB) GetAssistantMessageBySourceID(ctx context.Context, sessionID, sourc
 func (d *DB) GetUserMessageBySourceID(ctx context.Context, sessionID, sourceID string) (*store.AgentMessageRecord, error) {
 	return nil, errNotImplemented
 }
+
+// Agent Integration methods (MySQL stubs)
+
+func (d *DB) CreateAgentIntegration(ctx context.Context, integration *store.AgentIntegration) (*store.AgentIntegration, error) {
+	return nil, errNotImplemented
+}
+
+func (d *DB) GetAgentIntegration(ctx context.Context, find *store.FindAgentIntegration) (*store.AgentIntegration, error) {
+	return nil, errNotImplemented
+}
+
+func (d *DB) ListAgentIntegrations(ctx context.Context, find *store.FindAgentIntegration) ([]*store.AgentIntegration, error) {
+	return nil, errNotImplemented
+}
+
+func (d *DB) UpdateAgentIntegration(ctx context.Context, update *store.AgentIntegration) error {
+	return errNotImplemented
+}
+
+func (d *DB) DeleteAgentIntegration(ctx context.Context, id int32) error {
+	return errNotImplemented
+}
+
+// Agent Event methods (MySQL stubs)
+
+func (d *DB) CreateAgentEvent(ctx context.Context, event *store.AgentEvent) (*store.AgentEvent, error) {
+	return nil, errNotImplemented
+}
+
+func (d *DB) ListAgentEvents(ctx context.Context, find *store.FindAgentEvent) ([]*store.AgentEvent, error) {
+	return nil, errNotImplemented
+}
+
+func (d *DB) ClaimPendingEvents(ctx context.Context, limit int32) ([]*store.AgentEvent, error) {
+	return nil, errNotImplemented
+}
+
+func (d *DB) UpdateAgentEvent(ctx context.Context, update *store.AgentEvent) error {
+	return errNotImplemented
+}

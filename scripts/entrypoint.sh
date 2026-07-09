@@ -45,11 +45,19 @@ file_env "ENCRYPTION_MASTER_KEY"
 file_env "AWS_ACCESS_KEY_ID"
 file_env "AWS_SECRET_ACCESS_KEY"
 
+# Cron token for webhook trigger endpoint
+file_env "CRON_TOKEN"
+
 # M3: H5 — Drop privileges to non-root user via gosu
 # Container enters as root to fix volume permissions, then drops to memos user
 if [ "$(id -u)" = '0' ]; then
    # Fix ownership of data volume (may be root-owned from fresh mount)
    chown -R memos:memos /var/opt/memos 2>/dev/null || true
+
+   # Launch supercronic in background if available and CRON_TOKEN is set
+   if command -v supercronic >/dev/null 2>&1 && [ -n "$CRON_TOKEN" ]; then
+      supercronic /etc/bchat/crontab &
+   fi
 
    # Drop to memos user and execute the main command
    if command -v gosu >/dev/null 2>&1; then
@@ -60,5 +68,9 @@ if [ "$(id -u)" = '0' ]; then
    fi
 fi
 
-# Already running as non-root user
+# Already running as non-root user — launch supercronic if available
+if command -v supercronic >/dev/null 2>&1 && [ -n "$CRON_TOKEN" ]; then
+   supercronic /etc/bchat/crontab &
+fi
+
 exec "$@"
