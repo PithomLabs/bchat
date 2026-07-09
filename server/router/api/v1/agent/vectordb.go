@@ -79,6 +79,7 @@ type VectorDBConfig struct {
 	S3SecretKey     string
 	S3ForcePathStyle bool   // false for Tigris (virtual-hosted); true for MinIO/R2 path-style
 	S3AllowHTTP     bool   // false for production (HTTPS); true for local dev
+	S3Prefix        string // Deployment namespace prefix (default "lancedb"); set to app name for multi-deploy isolation
 
 	// Embedding configuration
 	EmbeddingConfig *EmbeddingConfig
@@ -110,6 +111,7 @@ func NewVectorDBConfigFromEnv() *VectorDBConfig {
 		S3SecretKey:         os.Getenv("AWS_SECRET_ACCESS_KEY"),
 		S3ForcePathStyle:    getEnvOrDefault("LANCEDB_S3_FORCE_PATH_STYLE", "false") == "true",
 		S3AllowHTTP:         getEnvOrDefault("LANCEDB_S3_ALLOW_HTTP", "false") == "true",
+		S3Prefix:            getEnvOrDefault("LANCEDB_S3_PREFIX", "lancedb"),
 		EmbeddingConfig:     NewEmbeddingConfigFromEnv(),
 		Enabled:             os.Getenv("RAG_PIPELINE_ENABLED") == "true",
 		HybridSearchEnabled: os.Getenv("HYBRID_SEARCH_ENABLED") == "true",
@@ -219,7 +221,10 @@ func resolveStorageTarget(global *VectorDBConfig, override *TenantS3Override, te
 	}
 
 	// Build S3 URI with tenant prefix
-	prefix := "lancedb"
+	prefix := global.S3Prefix
+	if prefix == "" {
+		prefix = "lancedb"
+	}
 	if override != nil && override.Prefix != "" {
 		prefix = override.Prefix
 	}

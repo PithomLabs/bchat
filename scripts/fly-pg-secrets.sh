@@ -19,8 +19,10 @@
 #   OPENROUTER_API_KEY       - LLM and embedding API key
 #   ENCRYPTION_MASTER_KEY    - Tenant API key encryption (auto-generated)
 #   LANCEDB_S3_BUCKET        - Tigrisdata S3 bucket name
-#   AWS_ACCESS_KEY_ID        - Tigrisdata credential (auto-set by fly storage)
-#   AWS_SECRET_ACCESS_KEY    - Tigrisdata credential (auto-set by fly storage)
+#   LANCEDB_S3_PREFIX        - Deployment namespace (auto-set to app name)
+#   AWS_ACCESS_KEY_ID        - Tigrisdata access key
+#   AWS_SECRET_ACCESS_KEY    - Tigrisdata secret key
+#   AWS_ENDPOINT_URL_S3      - Tigrisdata S3 endpoint (default: https://t3.storage.dev)
 # =============================================================================
 
 set -e
@@ -40,7 +42,7 @@ echo ""
 # =============================================================================
 # Step 1: Check fly CLI
 # =============================================================================
-echo -e "${YELLOW}[1/7] Checking flyctl...${NC}"
+echo -e "${YELLOW}[1/8] Checking flyctl...${NC}"
 if ! command -v fly &>/dev/null; then
     echo -e "${RED}flyctl is not installed.${NC}"
     echo "Install: curl -L https://fly.io/install.sh | sh"
@@ -52,7 +54,7 @@ echo ""
 # =============================================================================
 # Step 2: Check authentication
 # =============================================================================
-echo -e "${YELLOW}[2/7] Checking authentication...${NC}"
+echo -e "${YELLOW}[2/8] Checking authentication...${NC}"
 if ! fly auth whoami &>/dev/null; then
     echo "Not logged in. Opening browser for authentication..."
     fly auth login
@@ -63,7 +65,7 @@ echo ""
 # =============================================================================
 # Step 3: App name
 # =============================================================================
-echo -e "${YELLOW}[3/7] Fly app name...${NC}"
+echo -e "${YELLOW}[3/8] Fly app name...${NC}"
 read -p "  Enter app name [bchat-pg]: " APP_NAME
 APP_NAME="${APP_NAME:-bchat-pg}"
 
@@ -79,7 +81,7 @@ echo ""
 # =============================================================================
 # Step 4: Neon DATABASE_URL
 # =============================================================================
-echo -e "${YELLOW}[4/7] Neon connection string...${NC}"
+echo -e "${YELLOW}[4/8] Neon connection string...${NC}"
 echo "  Get this from: https://console.neon.tech → Connection Details"
 echo "  Format: postgresql://user:password@ep-xxx.us-east-2.aws.neon.tech/neondb?sslmode=require"
 echo ""
@@ -104,7 +106,7 @@ echo ""
 # =============================================================================
 # Step 5: OPENROUTER_API_KEY
 # =============================================================================
-echo -e "${YELLOW}[5/7] OpenRouter API key...${NC}"
+echo -e "${YELLOW}[5/8] OpenRouter API key...${NC}"
 echo "  Get yours at: https://openrouter.ai/keys"
 read -s -p "  OPENROUTER_API_KEY (sk-or-v1-...): " OPENROUTER_KEY
 echo ""
@@ -119,17 +121,27 @@ echo ""
 # =============================================================================
 # Step 6: S3 storage (Tigrisdata)
 # =============================================================================
-echo -e "${YELLOW}[6/7] S3 storage (Tigrisdata for LanceDB)...${NC}"
+echo -e "${YELLOW}[6/8] S3 storage (Tigrisdata for LanceDB)...${NC}"
 
 # Check for existing storage (no --app flag — fly storage list shows all org buckets)
 STORAGE_OUTPUT=$(fly storage list 2>/dev/null || true)
 STORAGE_LINES=$(echo "$STORAGE_OUTPUT" | tail -n +3 | grep -v "^$" || true)
+
+AWS_ACCESS_KEY_ID=""
+AWS_SECRET_ACCESS_KEY=""
 
 if [[ -n "$STORAGE_LINES" ]]; then
     echo -e "${GREEN}  Existing buckets:${NC}"
     echo "$STORAGE_OUTPUT" | sed 's/^/    /'
     echo ""
     read -p "  Enter the BUCKET_NAME to use: " BUCKET_NAME
+
+    echo ""
+    echo "  Enter Tigrisdata credentials for this bucket."
+    echo "  Get them from: fly storage dashboard $BUCKET_NAME → Access Keys"
+    read -p "  AWS_ACCESS_KEY_ID (tid_...): " AWS_ACCESS_KEY_ID
+    read -s -p "  AWS_SECRET_ACCESS_KEY (tsec_...): " AWS_SECRET_ACCESS_KEY
+    echo ""
 else
     echo "  No S3 storage found."
     echo ""
@@ -138,15 +150,45 @@ else
     if [[ -z "$BUCKET_NAME" ]]; then
         echo "  Creating Tigrisdata bucket..."
         echo ""
-        if fly storage create; then
+
+        # Capture output to parse credentials
+        CREATE_OUTPUT=$(mktemp)
+        if fly storage create | tee "$CREATE_OUTPUT"; then
             echo ""
-            echo -e "${YELLOW}  Note the BUCKET_NAME from the output above.${NC}"
-            read -p "  Enter the BUCKET_NAME: " BUCKET_NAME
+
+            # Try to auto-parse credentials from output
+            PARSED_ACCESS_KEY=$(grep -iE '(access.key.id|Access Key ID)[:\s]+' "$CREATE_OUTPUT" | head -1 | sed 's/.*[:\s]\+//' | tr -d '[:space:]')
+            PARSED_SECRET_KEY=$(grep -iE '(secret.access.key|Secret Access Key)[:\s]+' "$CREATE_OUTPUT" | head -1 | sed 's/.*[:\s]\+//' | tr -d '[:space:]')
+
+            if [[ -n "$PARSED_ACCESS_KEY" && -n "$PARSED_SECRET_KEY" ]]; then
+                AWS_ACCESS_KEY_ID="$PARSED_ACCESS_KEY"
+                AWS_SECRET_ACCESS_KEY="$PARSED_SECRET_KEY"
+                echo -e "${GREEN}  Auto-captured Tigris credentials from output.${NC}"
+            else
+                echo -e "${YELLOW}  Could not auto-parse credentials from output.${NC}"
+                echo "  Please paste them from the output above:"
+                read -p "  AWS_ACCESS_KEY_ID (tid_...): " AWS_ACCESS_KEY_ID
+                read -s -p "  AWS_SECRET_ACCESS_KEY (tsec_...): " AWS_SECRET_ACCESS_KEY
+                echo ""
+            fi
+
+            # Also extract bucket name if user left it blank
+            if [[ -z "$BUCKET_NAME" ]]; then
+                PARSED_BUCKET=$(grep -iE '(bucket.name|Bucket)[:\s]+' "$CREATE_OUTPUT" | head -1 | sed 's/.*[:\s]\+//' | tr -d '[:space:]')
+                if [[ -n "$PARSED_BUCKET" ]]; then
+                    BUCKET_NAME="$PARSED_BUCKET"
+                    echo -e "${GREEN}  Bucket: $BUCKET_NAME${NC}"
+                else
+                    echo -e "${YELLOW}  Note the BUCKET_NAME from the output above.${NC}"
+                    read -p "  Enter the BUCKET_NAME: " BUCKET_NAME
+                fi
+            fi
         else
             echo ""
             echo -e "${YELLOW}  Creation failed (name may be taken). Enter an existing bucket name:${NC}"
             read -p "  BUCKET_NAME: " BUCKET_NAME
         fi
+        rm -f "$CREATE_OUTPUT"
     fi
 fi
 
@@ -158,9 +200,19 @@ fi
 echo ""
 
 # =============================================================================
-# Step 7: Set all secrets
+# Step 7: S3 endpoint
 # =============================================================================
-echo -e "${YELLOW}[7/7] Setting Fly secrets...${NC}"
+echo -e "${YELLOW}[7/8] S3 endpoint...${NC}"
+echo "  Tigrisdata canonical endpoint: https://t3.storage.dev"
+read -p "  AWS_ENDPOINT_URL_S3 [https://t3.storage.dev]: " AWS_ENDPOINT_URL
+AWS_ENDPOINT_URL="${AWS_ENDPOINT_URL:-https://t3.storage.dev}"
+echo -e "${GREEN}  AWS_ENDPOINT_URL_S3: $AWS_ENDPOINT_URL${NC}"
+echo ""
+
+# =============================================================================
+# Step 8: Set all secrets
+# =============================================================================
+echo -e "${YELLOW}[8/8] Setting Fly secrets...${NC}"
 echo ""
 
 # Auto-generate encryption key
@@ -177,10 +229,25 @@ echo -e "${GREEN}  DATABASE_URL set${NC}"
 echo -e "${GREEN}  OPENROUTER_API_KEY set${NC}"
 echo -e "${GREEN}  ENCRYPTION_MASTER_KEY set${NC}"
 
-# Set S3 bucket if provided
+# Set S3 secrets if bucket was provided
 if [[ -n "$BUCKET_NAME" ]]; then
-    fly secrets set LANCEDB_S3_BUCKET="$BUCKET_NAME" --app "$APP_NAME"
+    fly secrets set \
+        LANCEDB_S3_BUCKET="$BUCKET_NAME" \
+        LANCEDB_S3_PREFIX="$APP_NAME" \
+        --app "$APP_NAME"
     echo -e "${GREEN}  LANCEDB_S3_BUCKET set${NC}"
+    echo -e "${GREEN}  LANCEDB_S3_PREFIX set ($APP_NAME)${NC}"
+fi
+
+if [[ -n "$AWS_ACCESS_KEY_ID" && -n "$AWS_SECRET_ACCESS_KEY" ]]; then
+    fly secrets set \
+        AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
+        AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+        AWS_ENDPOINT_URL_S3="$AWS_ENDPOINT_URL" \
+        --app "$APP_NAME"
+    echo -e "${GREEN}  AWS_ACCESS_KEY_ID set${NC}"
+    echo -e "${GREEN}  AWS_SECRET_ACCESS_KEY set${NC}"
+    echo -e "${GREEN}  AWS_ENDPOINT_URL_S3 set${NC}"
 fi
 
 echo ""
