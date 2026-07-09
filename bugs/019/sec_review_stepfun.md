@@ -72,7 +72,7 @@ Verified claims in `bugs/019/plan_priority.md` and `bugs/019/sec_review_deepseek
 
 **11. Working-Tree `.env` Contains Live Production Secrets**
 - **File:** `.env:16`, `.env:38`
-- `OPENROUTER_API_KEY=REDACTED_KEY...` and `ENCRYPTION_MASTER_KEY=e2590f42-...` are present in the repository working tree. While `.env` is correctly listed in `.gitignore:92` and is not tracked in git, these credentials are visible to anyone with filesystem access.
+- `OPENROUTER_API_KEY=REDACTED_KEY...` and `ENCRYPTION_MASTER_KEY=REDACTED-UUID` are present in the repository working tree. While `.env` is correctly listed in `.gitignore:92` and is not tracked in git, these credentials are visible to anyone with filesystem access.
 - **Verdict:** High. The docs mention `.env` sourcing as a general risk but do not note that the working tree currently contains real, active credentials.
 
 ---

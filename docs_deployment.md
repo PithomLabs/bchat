@@ -172,13 +172,13 @@ task -t Taskfile_pg.yml fly:db-check    # Validates Postgres migrations
 task fly:check                           # Validates env chain
 
 # Set secrets (different app name)
-fly -a bchat0534-pg secrets set DATABASE_URL="postgresql://..."
-fly -a bchat0534-pg secrets set OPENROUTER_API_KEY=sk-or-v1-xxx
-fly -a bchat0534-pg secrets set LANCEDB_S3_BUCKET="your-bucket"
-# fly -a bchat0534-pg secrets set ENCRYPTION_MASTER_KEY=$(uuidgen)  # optional
+fly -a appname secrets set DATABASE_URL="postgresql://..."
+fly -a appname secrets set OPENROUTER_API_KEY=sk-or-v1-xxx
+fly -a appname secrets set LANCEDB_S3_BUCKET="your-bucket"
+# fly -a appname secrets set ENCRYPTION_MASTER_KEY=$(uuidgen)  # optional
 
 # Deploy (no volume needed)
-fly -a bchat0534-pg deploy -c fly_pg.toml
+fly -a appname deploy -c fly_pg.toml
 ```
 
 Config: `fly_pg.toml` + `Dockerfile.pg.fly`
@@ -192,7 +192,7 @@ Config: `fly_pg.toml` + `Dockerfile.pg.fly`
 | Volume | Required (`memos_data`) | Not needed |
 | `DATABASE_URL` | Not set | Set via `fly secrets set` |
 | `MEMOS_DRIVER` | Not set (defaults to sqlite) | In `fly_pg.toml` `[env]` |
-| App name | `bchat0534` | `bchat0534-pg` (separate app) |
+| App name | `appname` | `appname` (separate app) |
 | Pre-deploy check | `task fly:pre-deploy` | `task -t Taskfile_pg.yml fly:db-check` |
 
 ### fly.toml Variants (Stale)
@@ -222,7 +222,7 @@ Only `fly.toml` (SQLite) and `fly_pg.toml` (Postgres) are active.
 | Run store tests | `go test -v ./store/test/...` | `DRIVER=postgres DSN="..." go test -v ./store/test/...` |
 | Validate env chain | `task fly:check` | `task fly:check` (same) |
 | Pre-deploy check | `task fly:pre-deploy` | `task -t Taskfile_pg.yml fly:db-check` |
-| Deploy | `fly deploy` | `fly -a bchat0534-pg deploy -c fly_pg.toml` |
+| Deploy | `fly deploy` | `fly -a appname deploy -c fly_pg.toml` |
 
 ---
 

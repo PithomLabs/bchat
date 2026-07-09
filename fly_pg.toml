@@ -1,7 +1,7 @@
 # ============================================================
-# MUST CHANGE: Replace 'bchat0534-pg' with your Fly.io app name
+# MUST CHANGE: Replace 'bchat-pg' with your Fly.io app name
 # ============================================================
-app = 'bchat0534-pg'
+app = 'bchat-pg'
 primary_region = 'sjc'
 
 [build]

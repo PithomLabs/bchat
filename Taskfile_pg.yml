@@ -19,8 +19,14 @@ tasks:
   # Postgres Validation
   # =============================================================================
 
+  validate:no-libpq:
+    desc: Fail if github.com/lib/pq re-enters the dependency tree
+    cmds:
+      - '! grep -q "lib/pq" go.mod'
+
   validate:migrations:
     desc: Validate Postgres LATEST.sql is in sync with migration files
+    deps: [validate:no-libpq]
     cmds:
       - ./scripts/validate-pg-migrations.sh
 

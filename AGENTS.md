@@ -29,6 +29,7 @@ The chat agent must be **GENERAL PURPOSE**, not tenant-specific.
 | UI Components | Joy UI (@mui/joy) |
 | LLM Provider | OpenRouter API |
 | Vector Database | LanceDB (optional, for RAG) |
+| Postgres Driver | pgx/v5 (sole driver — `lib/pq` is NOT used and must not be added) |
 | Embeddings | OpenRouter text-embedding-3-small, local sentence-transformers, or mock |
 
 ---
@@ -345,6 +346,13 @@ OM_TOKEN_THRESHOLD=2000
 FORCE_REINDEX_ON_STARTUP=true  # Re-index all content
 HYBRID_SEARCH_ENABLED=true     # Enable hybrid search
 LLM_VERIFIER_ENABLED=true      # Enable LLM verification
+```
+
+### Postgres DSN
+```bash
+# DATABASE_URL or MEMOS_DSN — pgx/v5 auto-appends default_query_exec_mode=simple_protocol
+# for Neon pgbouncer compatibility. No manual DSN tuning needed.
+DATABASE_URL="postgresql://user:pass@host/db?sslmode=require"
 ```
 
 ### Configuration Priority

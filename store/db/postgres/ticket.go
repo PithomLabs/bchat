@@ -196,6 +196,20 @@ func (d *DB) UpdateTicket(ctx context.Context, update *store.UpdateTicket) (*sto
 		args = append(args, *update.UpdatedTs)
 		argCounter++
 	}
+	if update.Type != nil {
+		set = append(set, fmt.Sprintf("type = $%d", argCounter))
+		args = append(args, *update.Type)
+		argCounter++
+	}
+	if update.Tags != nil {
+		tagsBytes, err := json.Marshal(update.Tags)
+		if err != nil {
+			return nil, err
+		}
+		set = append(set, fmt.Sprintf("tags = $%d", argCounter))
+		args = append(args, string(tagsBytes))
+		argCounter++
+	}
 
 	args = append(args, update.ID)
 	stmt := fmt.Sprintf(`
@@ -222,6 +236,9 @@ func (d *DB) UpdateTicket(ctx context.Context, update *store.UpdateTicket) (*sto
 		&ticket.TenantID,
 	); err != nil {
 		return nil, err
+	}
+	if err := json.Unmarshal([]byte(tagsStr), &ticket.Tags); err != nil {
+		ticket.Tags = []string{}
 	}
 
 	return &ticket, nil

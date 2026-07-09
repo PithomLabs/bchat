@@ -1,6 +1,12 @@
 # flyctl launch added from .gitignore
 .git/
+.kilo/
+.opencode/
+bin.zip
+scratch/
 build/
+docs/
+bugs/
 **/lancedb-go-main
 **/mastra-main
 
@@ -12,8 +18,8 @@ build/
 **/node_modules
 **/dist
 # NOTE: lib/ and linux_amd64/ are intentionally NOT excluded here.
-# They contain LanceDB native libraries (.so/.a) required for CGO compilation.
-# Fly/Depot COPY lib/linux_amd64/ /usr/local/lib/lancedb/ in Dockerfile.local.fly
+# Dockerfiles COPY lib/linux_amd64/liblancedb_go.so for LanceDB CGO runtime.
+# The .a static library (347 MB) is NOT needed in the build context.
 !lib/
 !include/
 

@@ -33,8 +33,8 @@ RUN apt-get update && apt-get install -y \
     libc-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy LanceDB native libraries and headers
-COPY lib/linux_amd64/ /usr/local/lib/lancedb/
+# Copy LanceDB shared library (only .so needed — saves 347 MB .a from build context)
+COPY lib/linux_amd64/liblancedb_go.so /usr/local/lib/lancedb/
 COPY include/ /usr/local/include/lancedb/
 
 # Copy go modules first for better layer caching
@@ -59,10 +59,11 @@ FROM ubuntu:24.04
 
 WORKDIR /usr/local/memos
 
-# Install runtime dependencies
+# Install runtime dependencies + gosu for privilege dropping
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     tzdata \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy LanceDB shared library for runtime
@@ -77,8 +78,13 @@ RUN chmod +x entrypoint.sh
 # Copy widget bundle for external embeds
 COPY --from=frontend /widget-build/dist ./widget/dist
 
-# Create data directory (LanceDB local fallback, not primary storage)
-RUN mkdir -p /var/opt/memos
+# H5: Create non-root user
+RUN groupadd -r memos && useradd -r -g memos -d /usr/local/memos -s /sbin/nologin memos
+
+# Create data directory for LanceDB local fallback (S3 is primary storage in prod)
+RUN mkdir -p /var/opt/memos && chown memos:memos /var/opt/memos
+
+# H5: Do NOT add USER memos here — entrypoint handles privilege dropping
 
 # Environment defaults
 ENV TZ="UTC"

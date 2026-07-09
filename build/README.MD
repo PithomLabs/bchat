@@ -71,7 +71,7 @@ export LLM_MODEL=xiaomi/mimo-v2-flash:free
 export LLM_MODEL=openai/gpt-oss-120b:free
 
 uuidgen to encrypt OPENROUTER_API_KEY
-export ENCRYPTION_MASTER_KEY=ced26e6e-91ce-4120-b4c0-68ec9ea25701
+export ENCRYPTION_MASTER_KEY=YOUR-UUID-HERE
 
 xiaomi/mimo-v2-flash:free
 openai/gpt-oss-120b:free

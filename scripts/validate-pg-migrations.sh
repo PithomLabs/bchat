@@ -37,7 +37,7 @@ NC='\033[0m'
 
 # Determine database URL
 DATABASE_URL="${DATABASE_URL:-postgresql://bchat:bchat@localhost:5432/bchat}"
-BASE_URL="${DATABASE_URL%%/*}/postgres"
+BASE_URL="${DATABASE_URL%/*}/postgres"
 
 cleanup() {
     echo "Cleaning up..."
@@ -78,8 +78,9 @@ echo "Step 1: Creating test database from LATEST.sql..."
 psql "$BASE_URL" -c "DROP DATABASE IF EXISTS \"$TEST_DB\";" 2>/dev/null || true
 psql "$BASE_URL" -c "CREATE DATABASE \"$TEST_DB\";"
 
-TEST_URL="${DATABASE_URL%%/*}/$TEST_DB"
-if ! psql "$TEST_URL" < "$LATEST_SQL" 2>"$TEMP_DIR/latest_errors.txt"; then
+TEST_URL="${DATABASE_URL%/*}/$TEST_DB"
+# Wrap in transaction to match production behavior (migrator.go runs LATEST.sql inside tx.ExecContext)
+if ! echo "BEGIN; $(cat "$LATEST_SQL") COMMIT;" | psql "$TEST_URL" 2>"$TEMP_DIR/latest_errors.txt"; then
     echo -e "${RED}FAILED: LATEST.sql has SQL errors:${NC}"
     cat "$TEMP_DIR/latest_errors.txt"
     exit 1
@@ -136,7 +137,7 @@ echo "Step 4: Comparing schemas (LATEST.sql vs migrations)..."
 
 # Recreate fresh database from LATEST.sql for comparison
 FRESH_DB_NAME="${TEST_DB}_fresh"
-FRESH_DB_URL="${DATABASE_URL%%/*}/${FRESH_DB_NAME}"
+FRESH_DB_URL="${DATABASE_URL%/*}/${FRESH_DB_NAME}"
 psql "$BASE_URL" -c "DROP DATABASE IF EXISTS \"${FRESH_DB_NAME}\";" 2>/dev/null || true
 psql "$BASE_URL" -c "CREATE DATABASE \"${FRESH_DB_NAME}\";"
 psql "$FRESH_DB_URL" < "$LATEST_SQL" 2>/dev/null
@@ -153,7 +154,7 @@ if ! diff -q "$TEMP_DIR/fresh_tables.txt" "$TEMP_DIR/migrated_tables.txt" > /dev
         echo "Tables in LATEST.sql only:"
         echo "$FRESH_ONLY" | sed 's/^/  /'
     fi
-    if [ -n "$MIGRATED_ONLY" ]]; then
+    if [ -n "$MIGRATED_ONLY" ]; then
         echo "Tables in migrations only:"
         echo "$MIGRATED_ONLY" | sed 's/^/  /'
     fi

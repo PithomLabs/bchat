@@ -65,7 +65,7 @@ The bchat codebase is a multi-tenant AI chat platform built on a fork of usememo
 | No Fly org SSO documented or configured | **High** | Prompt requires SSO for the Fly organization itself; repo contains no IaC or docs for this. |
 | No staging/production org separation | **High** | Only one app (`bchat`) exists; no separate Fly org or staging app is defined in repo. |
 | Secrets partially in `[env]` | **High** | `fly.toml` contains `OPENROUTER_API_KEY`-equivalent usage indirectly via envs that imply secret values, but `.env` with the actual key is committed (see next row). |
-| `.env` with real secrets committed to git | **Critical** | `.env` contains `OPENROUTER_API_KEY=REDACTED_KEY...` and `ENCRYPTION_MASTER_KEY=e2590f42-...`. `.gitignore` has `.env`, but the file is already tracked. |
+| `.env` with real secrets committed to git | **Critical** | `.env` contains `OPENROUTER_API_KEY=REDACTED_KEY...` and `ENCRYPTION_MASTER_KEY=REDACTED-UUID`. `.gitignore` has `.env`, but the file is already tracked. |
 | No `fly secrets` manifest (`SECRETS.md`) | **High** | Prompt requires a complete `fly secrets set` manifest. No such file exists. |
 | Public IPs not audited | **Medium** | No documentation of `fly ips list` / removing unnecessary public IPs. |
 | No Arcjet / rate-limiting on public chat | **Medium** | `ChatExternal` has per-tenant in-memory rate limiting (`CheckRateLimit`), but no edge layer rate limiting or bot protection. |

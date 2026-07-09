@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"log"
+	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -23,7 +24,16 @@ func NewDB(profile *profile.Profile) (store.Driver, error) {
 		return nil, errors.New("profile is nil")
 	}
 
-	db, err := sql.Open("pgx", profile.DSN)
+	dsn := profile.DSN
+	if !strings.Contains(dsn, "default_query_exec_mode") {
+		sep := "?"
+		if strings.Contains(dsn, "?") {
+			sep = "&"
+		}
+		dsn += sep + "default_query_exec_mode=simple_protocol"
+	}
+
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		log.Printf("Failed to open database: %s", err)
 		return nil, errors.Wrapf(err, "failed to open database: %s", profile.DSN)

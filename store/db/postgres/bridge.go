@@ -21,7 +21,7 @@ func (d *DB) EnsureBridgeExternalSession(ctx context.Context, tenantID int32, se
 			tenant_id, session_id, status, created_at, updated_at, expires_at, last_seen_at
 		) VALUES ($1, $2, 'active', $3, $4, $5, $6)
 		ON CONFLICT(tenant_id, session_id) DO NOTHING
-	`, tenantID, sessionID, now, now, expiresAt, now)
+	`, tenantID, sessionID, now.Unix(), now.Unix(), expiresAt.Unix(), now.Unix())
 	if err != nil {
 		return nil, false, fmt.Errorf("ensure bridge external session: %w", err)
 	}
@@ -45,7 +45,8 @@ func (d *DB) FindBridgeExternalSession(ctx context.Context, tenantID int32, sess
 	}
 	var session store.BridgeExternalSession
 	var status string
-	var createdAt, updatedAt, expiresAt, lastSeenAt int64
+	var createdAt, updatedAt int64
+	var expiresAt, lastSeenAt sql.NullInt64
 	err := d.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, session_id, status, created_at, updated_at, expires_at, last_seen_at
 		FROM bridge_external_sessions
@@ -63,8 +64,8 @@ func (d *DB) FindBridgeExternalSession(ctx context.Context, tenantID int32, sess
 	session.Status = store.BridgeExternalSessionStatus(status)
 	session.CreatedAt = time.Unix(createdAt, 0)
 	session.UpdatedAt = time.Unix(updatedAt, 0)
-	session.ExpiresAt = nullableUnixTime(expiresAt)
-	session.LastSeenAt = nullableUnixTime(lastSeenAt)
+	session.ExpiresAt = nullableUnixTimeNull(expiresAt)
+	session.LastSeenAt = nullableUnixTimeNull(lastSeenAt)
 	return &session, nil
 }
 
@@ -76,7 +77,7 @@ func (d *DB) TouchBridgeExternalSession(ctx context.Context, tenantID int32, ses
 		UPDATE bridge_external_sessions
 		SET updated_at = $1, last_seen_at = $2, expires_at = $3
 		WHERE tenant_id = $4 AND session_id = $5
-	`, now, now, expiresAt, tenantID, sessionID)
+	`, now.Unix(), now.Unix(), expiresAt.Unix(), tenantID, sessionID)
 	if err != nil {
 		return fmt.Errorf("touch bridge external session: %w", err)
 	}
@@ -149,7 +150,7 @@ func (d *DB) createBridgeHandoffAttempt(ctx context.Context, tenantID int32, ses
 			routing_mode, outcome, active, version, created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, 'handoff_queued', NULL, true, 1, $6, $7)
 		RETURNING id
-	`, externalSessionID, handoffID, tenantID, sessionID, generation, now, now).Scan(&id)
+	`, externalSessionID, handoffID, tenantID, sessionID, generation, now.Unix(), now.Unix()).Scan(&id)
 	if err != nil {
 		if isPostgresConstraint(err) {
 			return nil, store.ErrBridgeHandoffConflict
@@ -203,7 +204,7 @@ func (d *DB) UpdateBridgeHandoffRoutingModeCAS(ctx context.Context, tenantID int
 			closed_at = CASE WHEN $6 THEN $7 ELSE closed_at END
 		WHERE tenant_id = $8 AND session_id = $9 AND generation = $10 AND handoff_id = $11
 		  AND version = $12 AND routing_mode = $13 AND active = true
-	`, toMode, now, nullableString(reason), closed, closed, closed, now,
+	`, toMode, now.Unix(), nullableString(reason), closed, closed, closed, now.Unix(),
 		tenantID, sessionID, generation, handoffID, fromVersion, fromMode)
 	if err != nil {
 		return nil, fmt.Errorf("update bridge handoff CAS: %w", err)
@@ -249,7 +250,8 @@ func scanBridgeHandoff(row rowScanner) (*store.BridgeHandoff, error) {
 	var outcome, harnessID, operatorID, memoUID, transitionReason sql.NullString
 	var ticketID sql.NullInt32
 	var active bool
-	var createdAt, updatedAt, closedAt int64
+	var createdAt, updatedAt int64
+	var closedAt sql.NullInt64
 	if err := row.Scan(
 		&handoff.ID, &handoff.ExternalSessionID, &handoff.HandoffID, &handoff.TenantID,
 		&handoff.SessionID, &handoff.Generation, &routingMode, &outcome, &active,
@@ -262,7 +264,7 @@ func scanBridgeHandoff(row rowScanner) (*store.BridgeHandoff, error) {
 	handoff.Active = active
 	handoff.CreatedAt = time.Unix(createdAt, 0)
 	handoff.UpdatedAt = time.Unix(updatedAt, 0)
-	handoff.ClosedAt = nullableUnixTime(closedAt)
+	handoff.ClosedAt = nullableUnixTimeNull(closedAt)
 	if outcome.Valid {
 		value := store.BridgeOutcome(outcome.String)
 		handoff.Outcome = &value

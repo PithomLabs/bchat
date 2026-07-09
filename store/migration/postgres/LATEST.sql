@@ -52,7 +52,6 @@ CREATE TABLE memo (
 
 CREATE INDEX idx_memo_tenant ON memo(tenant_id);
 CREATE INDEX idx_memo_creator_id ON memo(creator_id);
-CREATE INDEX IF NOT EXISTS idx_memo_relation_tenant ON memo_relation(tenant_id);
 
 -- memo_organizer
 CREATE TABLE memo_organizer (
@@ -70,6 +69,8 @@ CREATE TABLE memo_relation (
   tenant_id INTEGER DEFAULT NULL,
   UNIQUE(memo_id, related_memo_id, type)
 );
+
+CREATE INDEX IF NOT EXISTS idx_memo_relation_tenant ON memo_relation(tenant_id);
 
 -- resource
 CREATE TABLE resource (
@@ -179,6 +180,32 @@ CREATE TABLE agent_audiences (
   UNIQUE(tenant_id, audience_type)
 );
 
+-- tenant_role_templates
+CREATE TABLE tenant_role_templates (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    code TEXT NOT NULL,
+    permissions TEXT NOT NULL DEFAULT '[]',
+    created_by INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(tenant_id, code)
+);
+
+CREATE INDEX idx_tenant_role_templates_tenant ON tenant_role_templates(tenant_id);
+CREATE INDEX idx_tenant_role_templates_code ON tenant_role_templates(code);
+
+INSERT INTO tenant_role_templates (tenant_id, name, code, permissions)
+VALUES
+    (NULL, 'Viewer', 'viewer', '["tenant:read"]'),
+    (NULL, 'Tester', 'tester', '["tenant:read","chat:test"]'),
+    (NULL, 'Analyst', 'analyst', '["tenant:read","chat:logs"]'),
+    (NULL, 'Editor', 'editor', '["tenant:read","tenant:write","files:upload"]'),
+    (NULL, 'Tenant Admin', 'tenant_admin', '["tenant:admin"]')
+ON CONFLICT (tenant_id, code) DO NOTHING;
+
+-- user_tenant_permission
 CREATE TABLE user_tenant_permission (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
@@ -230,6 +257,33 @@ CREATE INDEX IF NOT EXISTS idx_agent_messages_source_lookup
     ON agent_messages(session_id, source, source_id);
 CREATE INDEX IF NOT EXISTS idx_agent_messages_tenant ON agent_messages(tenant_id);
 
+-- agent_transcripts
+CREATE TABLE agent_transcripts (
+    id TEXT PRIMARY KEY,
+    tenant_id INTEGER NOT NULL,
+    session_id TEXT NOT NULL,
+    audience_type TEXT NOT NULL,
+    messages TEXT NOT NULL DEFAULT '[]',
+    message_count INTEGER DEFAULT 0,
+    client_ip TEXT,
+    user_agent TEXT,
+    customer_name TEXT,
+    customer_phone TEXT,
+    customer_email TEXT,
+    customer_location TEXT,
+    detected_intent TEXT,
+    started_at TIMESTAMPTZ DEFAULT NOW(),
+    ended_at TIMESTAMPTZ,
+    last_message_at TIMESTAMPTZ DEFAULT NOW(),
+    is_completed BOOLEAN DEFAULT FALSE,
+    completion_reason TEXT,
+    FOREIGN KEY (tenant_id) REFERENCES agent_tenants(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_transcripts_tenant ON agent_transcripts(tenant_id);
+CREATE INDEX idx_transcripts_started ON agent_transcripts(started_at DESC);
+CREATE INDEX idx_transcripts_audience ON agent_transcripts(tenant_id, audience_type);
+CREATE INDEX idx_transcripts_session ON agent_transcripts(session_id);
 CREATE TABLE IF NOT EXISTS agent_leads (
     id TEXT PRIMARY KEY,
     tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
@@ -412,7 +466,7 @@ CREATE INDEX idx_source_files_version ON agent_source_files(tenant_id, audience_
 -- agent_rate_limits
 CREATE TABLE agent_rate_limits (
     id SERIAL PRIMARY KEY,
-    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    tenant_id INTEGER NOT NULL,
     audience_type TEXT NOT NULL,
     client_ip TEXT NOT NULL,
     request_count INTEGER DEFAULT 0,
@@ -454,6 +508,27 @@ CREATE TABLE agent_tenant_scripts (
 
 CREATE INDEX idx_tenant_scripts_lookup ON agent_tenant_scripts(tenant_id, audience_type, imported_at DESC);
 CREATE INDEX idx_agent_tenant_scripts_tenant ON agent_tenant_scripts(tenant_id);
+
+-- agent_simulations
+CREATE TABLE agent_simulations (
+    id TEXT PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
+    audience_type TEXT NOT NULL DEFAULT 'external',
+    status TEXT NOT NULL DEFAULT 'pending',
+    scenario TEXT,
+    messages TEXT DEFAULT '[]',
+    message_count INTEGER DEFAULT 0,
+    max_turns INTEGER DEFAULT 20,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    error_message TEXT
+);
+
+CREATE INDEX idx_agent_simulations_tenant ON agent_simulations(tenant_id);
+CREATE INDEX idx_agent_simulations_user ON agent_simulations(user_id);
+CREATE INDEX idx_agent_simulations_status ON agent_simulations(status);
 
 -- agent_script_analysis
 CREATE TABLE agent_script_analysis (
@@ -559,33 +634,38 @@ CREATE INDEX idx_qa_pairs_tenant ON agent_qa_pairs(tenant_id);
 CREATE INDEX idx_qa_pairs_category ON agent_qa_pairs(category);
 CREATE INDEX idx_qa_pairs_active ON agent_qa_pairs(is_active);
 
--- agent_transcripts
-CREATE TABLE agent_transcripts (
-    id TEXT PRIMARY KEY,
-    tenant_id INTEGER NOT NULL,
-    session_id TEXT NOT NULL,
-    audience_type TEXT NOT NULL,
-    messages TEXT NOT NULL DEFAULT '[]',
-    message_count INTEGER DEFAULT 0,
-    client_ip TEXT,
-    user_agent TEXT,
-    customer_name TEXT,
-    customer_phone TEXT,
-    customer_email TEXT,
-    customer_location TEXT,
-    detected_intent TEXT,
-    started_at TIMESTAMPTZ DEFAULT NOW(),
-    ended_at TIMESTAMPTZ,
-    last_message_at TIMESTAMPTZ DEFAULT NOW(),
-    is_completed BOOLEAN DEFAULT FALSE,
-    completion_reason TEXT,
-    FOREIGN KEY (tenant_id) REFERENCES agent_tenants(id) ON DELETE CASCADE
+
+-- tickets
+CREATE TABLE tickets (
+    id SERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'OPEN',
+    priority TEXT NOT NULL DEFAULT 'MEDIUM',
+    creator_id INTEGER NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+    assignee_id INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
+    created_ts BIGINT NOT NULL,
+    updated_ts BIGINT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'TASK',
+    tags TEXT NOT NULL DEFAULT '[]',
+    beads_id TEXT UNIQUE,
+    parent_id INTEGER REFERENCES tickets(id) ON DELETE CASCADE,
+    labels TEXT DEFAULT '[]',
+    dependencies TEXT DEFAULT '[]',
+    discovery_context TEXT,
+    closed_reason TEXT,
+    issue_type TEXT,
+    tenant_id INTEGER DEFAULT NULL
 );
 
-CREATE INDEX idx_transcripts_tenant ON agent_transcripts(tenant_id);
-CREATE INDEX idx_transcripts_started ON agent_transcripts(started_at DESC);
-CREATE INDEX idx_transcripts_audience ON agent_transcripts(tenant_id, audience_type);
-CREATE INDEX idx_transcripts_session ON agent_transcripts(session_id);
+CREATE INDEX idx_tickets_creator_id ON tickets(creator_id);
+CREATE INDEX idx_tickets_status ON tickets(status);
+CREATE INDEX idx_tickets_assignee_id ON tickets(assignee_id);
+CREATE UNIQUE INDEX idx_tickets_beads_id ON tickets(beads_id) WHERE beads_id IS NOT NULL;
+CREATE INDEX idx_tickets_parent_id ON tickets(parent_id);
+CREATE INDEX idx_tickets_issue_type ON tickets(issue_type);
+CREATE UNIQUE INDEX idx_tickets_creator_description_memo ON tickets(creator_id, description) WHERE description LIKE '/m/%';
+CREATE INDEX idx_tickets_tenant ON tickets(tenant_id);
 
 -- agent_workflows
 CREATE TABLE agent_workflows (
@@ -628,27 +708,6 @@ CREATE TABLE agent_reindex_checkpoints (
 
 CREATE UNIQUE INDEX idx_reindex_checkpoint_tenant_audience ON agent_reindex_checkpoints(tenant_id, audience);
 
--- agent_simulations
-CREATE TABLE agent_simulations (
-    id TEXT PRIMARY KEY,
-    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
-    user_id INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
-    audience_type TEXT NOT NULL DEFAULT 'external',
-    status TEXT NOT NULL DEFAULT 'pending',
-    scenario TEXT,
-    messages TEXT DEFAULT '[]',
-    message_count INTEGER DEFAULT 0,
-    max_turns INTEGER DEFAULT 20,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    started_at TIMESTAMPTZ,
-    completed_at TIMESTAMPTZ,
-    error_message TEXT
-);
-
-CREATE INDEX idx_agent_simulations_tenant ON agent_simulations(tenant_id);
-CREATE INDEX idx_agent_simulations_user ON agent_simulations(user_id);
-CREATE INDEX idx_agent_simulations_status ON agent_simulations(status);
-
 -- agent_observations
 CREATE TABLE agent_observations (
     session_id TEXT PRIMARY KEY REFERENCES agent_sessions(id) ON DELETE CASCADE,
@@ -666,31 +725,6 @@ CREATE TABLE agent_observations (
 CREATE INDEX idx_observations_tenant ON agent_observations(tenant_id);
 CREATE INDEX idx_agent_observations_resource ON agent_observations(resource_id);
 
--- tenant_role_templates
-CREATE TABLE IF NOT EXISTS tenant_role_templates (
-    id SERIAL PRIMARY KEY,
-    tenant_id INTEGER CHECK (tenant_id IS NULL OR tenant_id >= 1) REFERENCES agent_tenants(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
-    code TEXT NOT NULL,
-    permissions TEXT NOT NULL DEFAULT '[]',
-    created_by INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
-    created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()),
-    updated_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()),
-    UNIQUE(tenant_id, code)
-);
-
-CREATE INDEX IF NOT EXISTS idx_tenant_role_templates_tenant ON tenant_role_templates(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_tenant_role_templates_code ON tenant_role_templates(code);
-
-INSERT INTO tenant_role_templates (tenant_id, name, code, permissions)
-VALUES
-    (NULL, 'Viewer', 'viewer', '["tenant:read"]'),
-    (NULL, 'Tester', 'tester', '["tenant:read","chat:test"]'),
-    (NULL, 'Analyst', 'analyst', '["tenant:read","chat:logs"]'),
-    (NULL, 'Editor', 'editor', '["tenant:read","tenant:write","files:upload"]'),
-    (NULL, 'Tenant Admin', 'tenant_admin', '["tenant:admin"]')
-ON CONFLICT (tenant_id, code) DO NOTHING;
-
 -- system_secret
 CREATE TABLE system_secret (
     id SERIAL PRIMARY KEY CHECK (id = 1),
@@ -700,37 +734,6 @@ CREATE TABLE system_secret (
     rotated_at BIGINT
 );
 
--- tickets
-CREATE TABLE tickets (
-    id SERIAL PRIMARY KEY,
-    title TEXT NOT NULL,
-    description TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'OPEN',
-    priority TEXT NOT NULL DEFAULT 'MEDIUM',
-    creator_id INTEGER NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
-    assignee_id INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
-    created_ts BIGINT NOT NULL,
-    updated_ts BIGINT NOT NULL,
-    type TEXT NOT NULL DEFAULT 'TASK',
-    tags TEXT NOT NULL DEFAULT '[]',
-    beads_id TEXT UNIQUE,
-    parent_id INTEGER REFERENCES tickets(id) ON DELETE CASCADE,
-    labels TEXT DEFAULT '[]',
-    dependencies TEXT DEFAULT '[]',
-    discovery_context TEXT,
-    closed_reason TEXT,
-    issue_type TEXT,
-    tenant_id INTEGER DEFAULT NULL
-);
-
-CREATE INDEX idx_tickets_creator_id ON tickets(creator_id);
-CREATE INDEX idx_tickets_status ON tickets(status);
-CREATE INDEX idx_tickets_assignee_id ON tickets(assignee_id);
-CREATE UNIQUE INDEX idx_tickets_beads_id ON tickets(beads_id) WHERE beads_id IS NOT NULL;
-CREATE INDEX idx_tickets_parent_id ON tickets(parent_id);
-CREATE INDEX idx_tickets_issue_type ON tickets(issue_type);
-CREATE UNIQUE INDEX idx_tickets_creator_description_memo ON tickets(creator_id, description) WHERE description LIKE '/m/%';
-CREATE INDEX idx_tickets_tenant ON tickets(tenant_id);
 
 -- notifications
 CREATE TABLE notifications (
@@ -803,7 +806,7 @@ CREATE TABLE IF NOT EXISTS bridge_handoff_replies (
     generation INTEGER NOT NULL,
     client_message_id TEXT NOT NULL CHECK(length(client_message_id) > 0 AND length(client_message_id) <= 128),
     text TEXT NOT NULL CHECK(length(text) > 0 AND length(text) <= 2000),
-    delivery_status TEXT NOT NULL DEFAULT 'not_delivered' CHECK(delivery_status = 'not_delivered'),
+    delivery_status TEXT NOT NULL DEFAULT 'not_delivered' CHECK(delivery_status IN ('not_delivered', 'delivered', 'failed')),
     created_at BIGINT NOT NULL,
 
     UNIQUE(tenant_id, session_id, handoff_id, client_message_id),

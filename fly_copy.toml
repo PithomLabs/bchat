@@ -1,31 +1,37 @@
-# ============================================================
-# MUST CHANGE: Replace 'bchat-pg' with your Fly.io app name
-# ============================================================
-app = 'bchat-pg'
+# fly.toml app configuration file generated for bchat0534 on 2026-02-27T15:21:59+08:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'bchat0534'
 primary_region = 'sjc'
 
 [build]
-  dockerfile = 'Dockerfile.pg.fly'
+  dockerfile = 'Dockerfile.s3.fly'
 
 [env]
-  MEMOS_DRIVER = 'postgres'
-  MEMOS_MODE = 'prod'
-  MEMOS_PORT = '5230'
-  RAG_PIPELINE_ENABLED = 'true'
-  EMBEDDING_PROVIDER = 'openrouter'
-  EMBEDDING_MODEL = 'openai/text-embedding-3-small'
   EMBEDDING_BATCH_SIZE = '10'
+  EMBEDDING_MODEL = 'openai/text-embedding-3-small'
+  EMBEDDING_PROVIDER = 'openrouter'
   EMBEDDING_TIMEOUT = '10m'
+  FORCE_REINDEX_ON_STARTUP = 'false'
+  RAG_STARTUP_REINDEX_DISABLED = 'true'
+  ## applicable for local setup only	
+  LANCEDB_LOCAL_PATH = '/var/opt/memos/lancedb'
+  
   LANCEDB_STORAGE_PROVIDER = 's3'
   LANCEDB_S3_FORCE_PATH_STYLE = 'false'
   LLM_MODEL = "poolside/laguna-m.1:free"
   LLM_MODEL_REASONING = "nvidia/nemotron-3-ultra-550b-a55b:free"
   LLM_VERIFIER_ENABLED = 'false'
-  FORCE_REINDEX_ON_STARTUP = 'false'
-  RAG_STARTUP_REINDEX_DISABLED = 'true'
+  MEMOS_MODE = 'prod'
+  MEMOS_PORT = '5230'
+  RAG_PIPELINE_ENABLED = 'true'
   TZ = 'UTC'
 
-# NO [[mounts]] section — Neon replaces the SQLite volume
+[[mounts]]
+  source = 'memos_data'
+  destination = '/var/opt/memos'
 
 [http_service]
   internal_port = 5230

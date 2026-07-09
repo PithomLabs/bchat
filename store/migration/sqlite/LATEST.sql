@@ -386,7 +386,7 @@ CREATE INDEX idx_source_files_version ON agent_source_files(tenant_id, audience_
 -- agent_rate_limits
 CREATE TABLE agent_rate_limits (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    tenant_id INTEGER NOT NULL,
     audience_type TEXT NOT NULL,
     client_ip TEXT NOT NULL,
     request_count INTEGER DEFAULT 0,
@@ -482,7 +482,7 @@ CREATE TABLE system_secret (
 -- agent_simulations
 CREATE TABLE agent_simulations (
     id TEXT PRIMARY KEY,
-    tenant_id INTEGER NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
     user_id INTEGER REFERENCES user(id) ON DELETE SET NULL,
     audience_type TEXT NOT NULL DEFAULT 'external',
     status TEXT NOT NULL DEFAULT 'pending',
@@ -523,7 +523,7 @@ CREATE INDEX idx_agent_tenant_scripts_tenant ON agent_tenant_scripts(tenant_id);
 -- agent_script_analysis
 CREATE TABLE agent_script_analysis (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES agent_tenants(id) ON DELETE CASCADE,
     simulation_id TEXT REFERENCES agent_simulations(id) ON DELETE CASCADE,
     audience_type TEXT NOT NULL DEFAULT 'external',
     analysis_type TEXT NOT NULL DEFAULT 'compliance',
@@ -865,7 +865,7 @@ CREATE TABLE IF NOT EXISTS bridge_handoff_replies (
     generation INTEGER NOT NULL,
     client_message_id TEXT NOT NULL CHECK(length(client_message_id) > 0 AND length(client_message_id) <= 128),
     text TEXT NOT NULL CHECK(length(text) > 0 AND length(text) <= 2000),
-    delivery_status TEXT NOT NULL DEFAULT 'not_delivered' CHECK(delivery_status = 'not_delivered'),
+    delivery_status TEXT NOT NULL DEFAULT 'not_delivered' CHECK(delivery_status IN ('not_delivered', 'delivered', 'failed')),
     created_at INTEGER NOT NULL,
 
     UNIQUE(tenant_id, session_id, handoff_id, client_message_id),

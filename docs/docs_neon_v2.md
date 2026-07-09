@@ -1,6 +1,6 @@
 # Neon PostgreSQL Setup Guide (v2)
 
-**Status:** Ready to implement
+**Status:** Complete
 **Date:** 2026-07-08
 
 ---
@@ -15,55 +15,11 @@ This guide covers the full SQLite → Neon Postgres → Fly.io workflow.
 | 2. Postgres validation | Local | Neon (remote) | `.env` with `MEMOS_DRIVER=postgres` |
 | 3. Production | Fly.io | Neon (remote) | `fly_pg.toml` + `fly secrets set DATABASE_URL=...` |
 
-**Key fact:** The Postgres driver is already fully implemented (`store/db/postgres/`, 24 files). The 6 unimplemented stubs (OM + Workflows) need to be added as part of this plan.
+**Key fact:** The Postgres driver is already fully implemented (`store/db/postgres/`, 24 files), including OM and Workflow methods.
 
 ---
 
-## Step 1: Implement Postgres Stubs
-
-Six methods in the Postgres driver are stubs that will error at runtime. Implement them before porting features.
-
-### 1a. Observational Memory (`store/db/postgres/agent_observations.go`)
-
-| Method | Status | Notes |
-|--------|--------|-------|
-| `UpsertObservationLog` | Stub → implement | Use `INSERT ... ON CONFLICT` for upsert |
-| `GetObservationLog` | Stub → implement | Query by session/resource ID |
-| `GetObservationLogByResource` | Stub → implement | Query by resource type + ID |
-
-Reference: `store/db/sqlite/agent_observations.go` for SQL patterns. Adapt to Postgres syntax (`$1` placeholders, `EXTRACT(EPOCH FROM NOW())` for timestamps).
-
-### 1b. Agent Workflows (`store/db/postgres/agent_workflow.go`)
-
-| Method | Status | Notes |
-|--------|--------|-------|
-| `CreateAgentWorkflow` | No-op → implement | INSERT with `SERIAL PRIMARY KEY` |
-| `ListAgentWorkflows` | No-op → implement | SELECT with filters |
-| `GetAgentWorkflow` | No-op → implement | SELECT by ID |
-
-Reference: `store/db/sqlite/agent_workflow.go` for SQL patterns.
-
----
-
-## Step 2: Fix Taskfile_pg.yml Bug
-
-The env var `DB_DRIVER=postgres` doesn't work because viper uses a `MEMOS_` prefix with `AutomaticEnv()`. Fix all occurrences:
-
-**File:** `Taskfile_pg.yml`
-
-| Line | Current | Fix |
-|------|---------|-----|
-| 72 | `DB_DRIVER=postgres` | `MEMOS_DRIVER=postgres` |
-| 83 | `DB_DRIVER=postgres` | `MEMOS_DRIVER=postgres` |
-| 94 | `DB_DRIVER=postgres` | `MEMOS_DRIVER=postgres` |
-| 104 | `DB_DRIVER=postgres` | `MEMOS_DRIVER=postgres` |
-| 115 | `DB_DRIVER=postgres` | `MEMOS_DRIVER=postgres` |
-
-Also update `.env.example` line 92: `DB_DRIVER=sqlite` → `MEMOS_DRIVER=sqlite` for consistency.
-
----
-
-## Step 3: Configure Local `.env` for Neon
+## Step 1: Configure Local `.env` for Neon
 
 Add to your `.env` file:
 
@@ -97,7 +53,7 @@ pgx/v5 handles sslmode=require natively for Neon
 
 ---
 
-## Step 4: Verify Local Neon Connection
+## Step 2: Verify Local Neon Connection
 
 ```bash
 # Build backend
@@ -121,7 +77,7 @@ If connection fails, check:
 
 ---
 
-## Step 5: Create `fly_pg.toml`
+## Step 3: Create `fly_pg.toml`
 
 Create a new `fly_pg.toml` based on the existing `fly.toml`, with these changes:
 
@@ -132,7 +88,7 @@ Create a new `fly_pg.toml` based on the existing `fly.toml`, with these changes:
 | App name | `bchat0534` | `bchat0534-pg` (or your choice) |
 | `[env] MEMOS_DRIVER` | not set | `'postgres'` |
 | `[[mounts]]` | `source = "memos_data"`, `destination = "/var/opt/memos"` | **Remove entirely** |
-| `Dockerfile` | `Dockerfile.s3.fly` | `Dockerfile.s3.fly` (same) |
+| `Dockerfile` | `Dockerfile.s3.fly` | `Dockerfile.pg.fly` |
 | All other env | Same | Same |
 
 ### `fly_pg.toml` Template
@@ -142,7 +98,7 @@ app = 'bchat0534-pg'
 primary_region = 'sjc'
 
 [build]
-  dockerfile = 'Dockerfile.s3.fly'
+  dockerfile = 'Dockerfile.pg.fly'
 
 [env]
   MEMOS_DRIVER = 'postgres'
@@ -189,7 +145,7 @@ primary_region = 'sjc'
 
 ---
 
-## Step 6: Deploy to Fly.io with Neon
+## Step 4: Deploy to Fly.io with Neon
 
 ### 6a. Set secrets
 
@@ -221,7 +177,7 @@ curl https://bchat0534-pg.fly.dev/api/v1/agent/your-slug/validate
 
 ---
 
-## Step 7: Validate Migrations
+## Step 5: Validate Migrations
 
 Before deploying, validate that Postgres migrations are correct:
 
@@ -309,7 +265,7 @@ Set `DATABASE_URL` in `.env` or pass `--dsn` on command line, or set via `fly se
 - Check network connectivity
 
 ### OM/Workflow errors on Postgres
-Ensure Step 1 (implement stubs) is complete before testing these features.
+OM and Workflow methods are fully implemented. If you see errors, check that the database migrations have run successfully.
 
 ---
 
@@ -319,16 +275,16 @@ Ensure Step 1 (implement stubs) is complete before testing these features.
 |------|---------|
 | `store/db/postgres/postgres.go` | Connection setup, pgx driver |
 | `store/db/postgres/agent.go` | Agent CRUD (2474 lines) |
-| `store/db/postgres/agent_observations.go` | OM stubs → to implement |
-| `store/db/postgres/agent_workflow.go` | Workflow stubs → to implement |
+| `store/db/postgres/agent_observations.go` | OM implementation (UpsertObservationLog, GetObservationLog, GetObservationLogByResource) |
+| `store/db/postgres/agent_workflow.go` | Workflow implementation (CreateAgentWorkflow, ListAgentWorkflows, GetAgentWorkflow) |
 | `store/db/postgres/common.go` | `$N` placeholder helpers |
 | `store/db/db.go` | Driver selection switch |
 | `internal/profile/profile.go` | DSN resolution (`DATABASE_URL` fallback) |
 | `bin/memos/main.go` | Viper config, `MEMOS_` env prefix |
 | `store/migration/postgres/LATEST.sql` | Full Postgres schema |
-| `Taskfile_pg.yml` | Postgres Taskfile (to fix `DB_DRIVER` bug) |
+| `Taskfile_pg.yml` | Postgres Taskfile (uses `MEMOS_DRIVER=postgres`) |
 | `fly.toml` | SQLite deployment config (keep as-is) |
-| `fly_pg.toml` | Neon Postgres deployment config (to create) |
+| `fly_pg.toml` | Neon Postgres deployment config |
 | `scripts/entrypoint.sh` | Docker entrypoint (`MEMOS_DSN` `_FILE` support) |
 | `scripts/validate-pg-migrations.sh` | Migration validation script |
 | `.env.example` | Reference env file |
@@ -336,5 +292,5 @@ Ensure Step 1 (implement stubs) is complete before testing these features.
 
 ---
 
-*Document Version: 2.0*
-*Based on Q&A session: 2026-07-08*
+*Document Version: 2.1*
+*Updated: 2026-07-08 — Cleaned up stale references (stubs implemented, DB_DRIVER fixed, Dockerfile corrected)*

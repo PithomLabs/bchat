@@ -2,10 +2,12 @@ package teststore
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
+	"strings"
 	"testing"
 
 	// sqlite driver.
@@ -58,21 +60,8 @@ func resetTestingDB(ctx context.Context, profile *profile.Profile, dbDriver stor
 		}
 	} else if profile.Driver == "postgres" {
 		_, err := dbDriver.GetDB().ExecContext(ctx, `
-		DROP TABLE IF EXISTS migration_history CASCADE;
-		DROP TABLE IF EXISTS system_setting CASCADE;
-		DROP TABLE IF EXISTS "user" CASCADE;
-		DROP TABLE IF EXISTS user_setting CASCADE;
-		DROP TABLE IF EXISTS memo CASCADE;
-		DROP TABLE IF EXISTS memo_organizer CASCADE;
-		DROP TABLE IF EXISTS memo_relation CASCADE;
-		DROP TABLE IF EXISTS resource CASCADE;
-		DROP TABLE IF EXISTS tag CASCADE;
-		DROP TABLE IF EXISTS activity CASCADE;
-		DROP TABLE IF EXISTS storage CASCADE;
-		DROP TABLE IF EXISTS idp CASCADE;
-		DROP TABLE IF EXISTS inbox CASCADE;
-		DROP TABLE IF EXISTS webhook CASCADE;
-		DROP TABLE IF EXISTS reaction CASCADE;`)
+		DROP SCHEMA IF EXISTS public CASCADE;
+		CREATE SCHEMA public;`)
 		if err != nil {
 			slog.Error("failed to reset testing db", slog.String("error", err.Error()))
 			panic(err)
@@ -123,4 +112,12 @@ func getDriverFromEnv() string {
 		driver = "sqlite"
 	}
 	return driver
+}
+
+func getDriverFromEngine(db *sql.DB) string {
+	name := fmt.Sprintf("%T", db.Driver())
+	if strings.Contains(name, "postgres") || strings.Contains(name, "pgx") {
+		return "postgres"
+	}
+	return "sqlite"
 }

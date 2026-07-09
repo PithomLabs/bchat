@@ -568,15 +568,28 @@ func TestCreateBridgeHandoffReplyIfActiveDeliveryStatusConstraint(t *testing.T) 
 	ctx, ts, tenant, session, handoff := createHumanActiveHandoffFixture(t, "reply-delivery-constraint")
 	defer ts.Close()
 
-	_, err := ts.GetDriver().GetDB().ExecContext(ctx, `
-		INSERT INTO bridge_handoff_replies (
-			reply_id, tenant_id, session_id, handoff_id, generation,
-			client_message_id, text, delivery_status, created_at
-		) VALUES ('reply-fail', ?, ?, ?, ?, 'msg-fail', 'some text', 'delivered', ?)
-	`, tenant.ID, session.SessionID, handoff.HandoffID, handoff.Generation, time.Now().Unix())
+	driver := getDriverFromEnv()
+	var stmt string
+	if driver == "postgres" {
+		stmt = `
+			INSERT INTO bridge_handoff_replies (
+				reply_id, tenant_id, session_id, handoff_id, generation,
+				client_message_id, text, delivery_status, created_at
+			) VALUES ('reply-fail', $1, $2, $3, $4, 'msg-fail', 'some text', 'bogus_status', $5)
+		`
+	} else {
+		stmt = `
+			INSERT INTO bridge_handoff_replies (
+				reply_id, tenant_id, session_id, handoff_id, generation,
+				client_message_id, text, delivery_status, created_at
+			) VALUES ('reply-fail', ?, ?, ?, ?, 'msg-fail', 'some text', 'bogus_status', ?)
+		`
+	}
+	_, err := ts.GetDriver().GetDB().ExecContext(ctx, stmt,
+		tenant.ID, session.SessionID, handoff.HandoffID, handoff.Generation, time.Now().Unix())
 
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "constraint failed")
+	require.Contains(t, err.Error(), "constraint")
 }
 
 func TestCreateBridgeHandoffReplyAndOutboxIfActivePersistsBoth(t *testing.T) {

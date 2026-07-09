@@ -245,7 +245,7 @@ Secrets are staged for the first deployment
 
 ENCRYPTION_MASTER_KEY is used for tenant API key encryption.
 You can generate one with: uuidgen
-Enter your ENCRYPTION_MASTER_KEY: ced26e6e-91ce-4120-b4c0-68ec9ea25701
+Enter your ENCRYPTION_MASTER_KEY: YOUR-UUID-HERE
 Secrets are staged for the first deployment
 ✓ ENCRYPTION_MASTER_KEY set
 

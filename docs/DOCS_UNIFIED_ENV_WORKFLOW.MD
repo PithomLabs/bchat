@@ -105,7 +105,7 @@ The recommended approach for local development:
    ```bash
    # .env (example)
    OPENROUTER_API_KEY=sk-or-v1-your-actual-key
-   ENCRYPTION_MASTER_KEY=ced26e6e-91ce-4120-b4c0-68ec9ea25701
+   ENCRYPTION_MASTER_KEY=YOUR-UUID-HERE
    RAG_PIPELINE_ENABLED=true
    ```
 
