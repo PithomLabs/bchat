@@ -91,7 +91,7 @@ func (f *FusionEngine) Fuse(
 				Score:   ragScore,
 				Source:  "rag",
 				Date:    chunk.IndexedAt,
-				Tokens:  estimateTokens(chunk.Content),
+				Tokens:  EstimateTokens(chunk.Content),
 				ChunkID: chunk.ID,
 			}
 			items = append(items, item)
@@ -209,7 +209,7 @@ func (f *FusionEngine) parseObservations(obsLog *store.ObservationLog) []Context
 				item := ContextItem{
 					Content:  content,
 					Date:     currentDate,
-					Tokens:   estimateTokens(content),
+					Tokens:   EstimateTokens(content),
 					Source:   "om",
 					Priority: priority,
 				}

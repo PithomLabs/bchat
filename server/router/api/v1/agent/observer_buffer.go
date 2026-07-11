@@ -218,7 +218,7 @@ func (ob *ObserverBuffer) runBufferObservation(ctx context.Context, tenantID int
 	buffer.PendingObservations = newObservations
 	buffer.PendingCurrentTask = currentTask
 	buffer.PendingSuggestedResp = suggestedResponse
-	buffer.TokenCount = estimateTokens(newObservations)
+	buffer.TokenCount = EstimateTokens(newObservations)
 	buffer.LastBufferTime = time.Now()
 	buffer.LastBufferedMsgIndex = lastBufferedIdx + len(newMessages)
 	buffer.ResourceID = resourceID // Store for resource-scoped memory

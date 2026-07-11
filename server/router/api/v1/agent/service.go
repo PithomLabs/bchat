@@ -2396,7 +2396,7 @@ func (s *Service) generateResponse(ctx context.Context, config *AudienceConfig, 
 		// This aligns with Mastra's OM specification for consistent triggering
 		unobservedTokens := 0
 		for i := lastObservedIdx + 1; i < len(session.Messages); i++ {
-			unobservedTokens += estimateTokens(session.Messages[i].Content)
+			unobservedTokens += EstimateTokens(session.Messages[i].Content)
 		}
 
 		threshold := omConfig.ObserverTokenThreshold

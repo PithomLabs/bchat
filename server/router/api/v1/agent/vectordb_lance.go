@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -414,6 +415,7 @@ func (db *LanceVectorDB) Insert(ctx context.Context, chunks []DocumentChunk) err
 		}
 
 		batch := chunks[batchStart:batchEnd]
+		batch = expandAndValidateBatch(batch, embeddingLimit(db.embedSvc)) // per-batch expansion; totalChunks pre-calculated above
 		batchNum := (batchStart / batchSize) + 1
 		totalBatches := (totalChunks + batchSize - 1) / batchSize
 
@@ -435,12 +437,28 @@ func (db *LanceVectorDB) Insert(ctx context.Context, chunks []DocumentChunk) err
 		}
 
 		if len(textsToEmbed) > 0 {
-			embeddings, err := db.embedSvc.Embed(ctx, textsToEmbed)
-			if err != nil {
-				return fmt.Errorf("failed to generate embeddings for batch %d: %w", batchNum, err)
+			embeddings, failed := db.embedWithIsolation(ctx, textsToEmbed)
+
+			allFailed := len(failed) > 0
+			for _, f := range failed {
+				if !f {
+					allFailed = false
+					break
+				}
+			}
+			if allFailed {
+				return fmt.Errorf("failed to generate embeddings for batch %d: all %d chunks failed to embed (systemic embedding failure): %w", batchNum, len(textsToEmbed), ErrEmbeddingProviderUnavailable)
 			}
 
 			for i, idx := range indicesToEmbed {
+				if failed[i] {
+					slog.Error("Skipping chunk due to embedding failure (batch continues)",
+						"chunkID", batch[idx].ID,
+						"title", batch[idx].Title,
+						"tenantID", batch[idx].TenantID,
+						"contentLength", len(batch[idx].Content))
+					continue
+				}
 				batch[idx].Embedding = embeddings[i]
 			}
 		}
@@ -613,8 +631,68 @@ func (db *LanceVectorDB) Validate(ctx context.Context) error {
 	return nil
 }
 
+// embeddingLimit returns the embedding model's hard input token limit for the
+// given service. For OpenRouter it is the authoritative model limit; for local
+// and mock providers it is math.MaxInt32 (unlimited), so validation is skipped.
+// (Plan 8 / R5)
+func embeddingLimit(embedSvc EmbeddingService) int {
+	if ore, ok := embedSvc.(*OpenRouterEmbedding); ok {
+		return ore.MaxInputTokens()
+	}
+	return math.MaxInt32
+}
+
 // processSingleBatch processes a single batch of chunks.
+// expandAndValidateBatch splits chunks whose combined Title+Content exceeds the
+// model's input limit, preventing 400 errors from the embedding API. Each
+// oversized chunk is split via splitByHardLimit with a content limit adjusted
+// for title overhead. The embedding boundary (OpenRouterEmbedding.doEmbed)
+// is the authoritative final guard; this is defense-in-depth.
+func expandAndValidateBatch(batch []DocumentChunk, limit int) []DocumentChunk {
+	// When the provider has no hard limit, skip validation entirely.
+	if limit >= math.MaxInt32 {
+		return batch
+	}
+	// Keep a safety margin consistent with the embedding boundary.
+	guardLimit := limit - embedSafetyMargin
+	if guardLimit <= 0 {
+		guardLimit = limit
+	}
+	var expanded []DocumentChunk
+	for _, chunk := range batch {
+		embedText := fmt.Sprintf("%s: %s", chunk.Title, chunk.Content)
+		if EstimateTokens(embedText) > guardLimit {
+			// contentLimit excludes the title + ": " overhead
+			titleCost := EstimateTokens(chunk.Title) + 2
+			contentLimit := guardLimit - titleCost
+			if contentLimit < 100 {
+				contentLimit = 100
+			}
+			slog.Error("Oversized embedding input detected and split",
+				"tokens", EstimateTokens(embedText),
+				"limit", guardLimit,
+				"title", chunk.Title,
+				"contentLength", len(chunk.Content),
+				"contentPreview", chunk.Content[:min(200, len(chunk.Content))])
+			parts := splitByHardLimit(chunk.Content, contentLimit)
+			for p, part := range parts {
+				newChunk := chunk
+				newChunk.Content = part
+				newChunk.Title = fmt.Sprintf("%s (Part %d)", chunk.Title, p+1)
+				newChunk.Code = fmt.Sprintf("%s_split_%d", chunk.Code, p+1)
+				newChunk.ID = fmt.Sprintf("%s_split_%d", chunk.ID, p+1)
+				expanded = append(expanded, newChunk)
+			}
+		} else {
+			expanded = append(expanded, chunk)
+		}
+	}
+	return expanded
+}
+
 func (db *LanceVectorDB) processSingleBatch(ctx context.Context, batch []DocumentChunk, batchNum int) error {
+	batch = expandAndValidateBatch(batch, embeddingLimit(db.embedSvc))
+
 	// Generate embeddings for chunks that don't have them
 	var textsToEmbed []string
 	var indicesToEmbed []int
@@ -627,15 +705,53 @@ func (db *LanceVectorDB) processSingleBatch(ctx context.Context, batch []Documen
 	}
 
 	if len(textsToEmbed) > 0 {
-		embeddings, err := db.embedSvc.Embed(ctx, textsToEmbed)
-		if err != nil {
-			return fmt.Errorf("failed to generate embeddings for batch %d: %w", batchNum, err)
+		// embedWithIsolation embeds the batch, retrying item-by-item and
+		// skipping any chunk that still fails (Plan 8 / R3). This prevents a
+		// single bad chunk from aborting the entire reindex.
+		embeddings, failed := db.embedWithIsolation(ctx, textsToEmbed)
+
+		// Partial failures are isolated (skipped). But if EVERY chunk in the
+		// batch failed to embed, the cause is almost certainly systemic (e.g.
+		// a misconfigured/down embedding provider) rather than a few bad
+		// chunks — abort loudly so the reindex does not silently produce an
+		// empty index (Plan 8 / R3 refinement).
+		allFailed := len(failed) > 0
+		for _, f := range failed {
+			if !f {
+				allFailed = false
+				break
+			}
+		}
+		if allFailed {
+			return fmt.Errorf("failed to generate embeddings for batch %d: all %d chunks failed to embed (systemic embedding failure): %w", batchNum, len(textsToEmbed), ErrEmbeddingProviderUnavailable)
 		}
 
-		for i, idx := range indicesToEmbed {
-			batch[idx].Embedding = embeddings[i]
+		for k, idx := range indicesToEmbed {
+			if failed[k] {
+				slog.Error("Skipping chunk due to embedding failure (batch continues)",
+					"chunkID", batch[idx].ID,
+					"title", batch[idx].Title,
+					"tenantID", batch[idx].TenantID,
+					"contentLength", len(batch[idx].Content))
+				continue
+			}
+			batch[idx].Embedding = embeddings[k]
 		}
 	}
+
+	// Keep only chunks that received an embedding; skipped chunks are dropped
+	// so the Arrow record and index stay consistent.
+	var kept []DocumentChunk
+	for _, c := range batch {
+		if len(c.Embedding) > 0 {
+			kept = append(kept, c)
+		}
+	}
+	if len(kept) == 0 {
+		slog.Warn("Batch had no embeddable chunks after isolation; skipping", "batch", batchNum)
+		return nil
+	}
+	batch = kept
 
 	// Build Arrow record for this batch
 	record, err := db.chunksToArrowRecord(batch)
@@ -653,7 +769,48 @@ func (db *LanceVectorDB) processSingleBatch(ctx context.Context, batch []Documen
 	return nil
 }
 
-// chunksToArrowRecord converts DocumentChunks to an Arrow Record.
+// embedWithIsolation embeds a batch of texts with per-item fault isolation
+// (Plan 8 / R3). It first attempts a single batched Embed call. If that fails,
+// it retries each text individually and records which indices failed so the
+// caller can skip them instead of aborting the whole batch.
+//
+// Returns embeddings aligned 1:1 with texts, and failed[k]=true for any text
+// that could not be embedded.
+func (db *LanceVectorDB) embedWithIsolation(ctx context.Context, texts []string) ([][]float32, []bool) {
+	embeddings, err := db.embedSvc.Embed(ctx, texts)
+	if err == nil {
+		return embeddings, make([]bool, len(texts))
+	}
+
+	slog.Warn("Batch embedding failed; retrying items individually",
+		"texts", len(texts),
+		"error", err.Error())
+
+	out := make([][]float32, len(texts))
+	failed := make([]bool, len(texts))
+	for i, t := range texts {
+		emb, e2 := db.embedSvc.Embed(ctx, []string{t})
+		if e2 != nil || len(emb) == 0 {
+			failed[i] = true
+			slog.Warn("Individual embedding failed; chunk will be skipped",
+				"index", i,
+				"error", firstErr(e2, err))
+			continue
+		}
+		out[i] = emb[0]
+	}
+	return out, failed
+}
+
+// firstErr returns a human-readable error string from the most specific error.
+func firstErr(errs ...error) string {
+	for _, e := range errs {
+		if e != nil {
+			return e.Error()
+		}
+	}
+	return "unknown error"
+}
 func (db *LanceVectorDB) chunksToArrowRecord(chunks []DocumentChunk) (arrow.Record, error) {
 	if db.embedSvc == nil {
 		return nil, fmt.Errorf("embedding service is required")

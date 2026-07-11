@@ -234,6 +234,10 @@ func (m *mockEmbeddingService) Provider() string {
 	return "mock"
 }
 
+func (m *mockEmbeddingService) MaxInputTokens() int {
+	return math.MaxInt32
+}
+
 func TestMemoryVectorDB_Validate(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		embedSvc := &mockEmbeddingService{dimension: 8}

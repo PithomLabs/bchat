@@ -8,12 +8,16 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/tiktoken-go/tokenizer"
 )
 
 var (
@@ -21,6 +25,65 @@ var (
 	ErrEmbeddingProviderUnavailable   = errors.New("embedding provider unavailable")
 	ErrVectorStoreUnavailable         = errors.New("vector store unavailable")
 )
+
+var globalTokenizer tokenizer.Codec
+var fallbackWarnOnce sync.Once
+
+// estimateTokenizerConfig holds the embedding config so EstimateTokens can
+// self-heal (initialize the tokenizer on demand) if it was missed at startup.
+// Set once from NewVectorDB via SetEstimateTokenizerConfig.
+var estimateTokenizerConfig *EmbeddingConfig
+
+// embedSafetyMargin is the token headroom kept below the model's hard input
+// limit when deciding whether to split an input (covers local-vs-API token
+// counting discrepancies and the splitByHardLimit binary-search off-by-one).
+const embedSafetyMargin = 16
+
+// SetEstimateTokenizerConfig stores the embedding config for on-demand
+// tokenizer initialization in EstimateTokens (see Plan 8 / R4).
+func SetEstimateTokenizerConfig(cfg *EmbeddingConfig) {
+	estimateTokenizerConfig = cfg
+}
+
+// maybeInitTokenizer attempts to initialize the global tokenizer from the
+// captured embedding config if it is not already initialized.
+func maybeInitTokenizer() {
+	if globalTokenizer != nil || estimateTokenizerConfig == nil {
+		return
+	}
+	InitTokenizer(estimateTokenizerConfig.Provider, estimateTokenizerConfig.Model)
+}
+
+// InitTokenizer initializes the global tokenizer for accurate token counting.
+// Must be called before any EstimateTokens calls. Uses the embedding model name
+// to select the correct tokenizer encoding.
+func InitTokenizer(provider, model string) {
+	if globalTokenizer != nil {
+		return
+	}
+	var enc tokenizer.Codec
+	var encName tokenizer.Encoding
+	switch {
+	case strings.Contains(model, "text-embedding-3-small"),
+		strings.Contains(model, "text-embedding-3-large"),
+		strings.Contains(model, "text-embedding-ada-002"):
+		encName = tokenizer.Cl100kBase
+	case strings.Contains(model, "gpt-4o"),
+		strings.Contains(model, "gpt-5"):
+		encName = tokenizer.O200kBase
+	default:
+		encName = tokenizer.Cl100kBase
+	}
+	enc, err := tokenizer.Get(encName)
+	if err != nil {
+		slog.Error("CRITICAL: Tokenizer initialization failed, falling back to len/4 heuristic. Embedding token counts will be inaccurate.", "encoding", encName, "error", err)
+		return
+	}
+	globalTokenizer = enc
+	testTokens, _ := enc.Count("The quick brown fox jumps over the lazy dog.")
+	slog.Info("Tokenizer verified", "encoding", encName, "testStringTokens", testTokens)
+	slog.Info("Tokenizer initialized", "encoding", encName, "provider", provider, "model", model)
+}
 
 type embeddingHTTPError struct {
 	statusCode int
@@ -42,6 +105,26 @@ type EmbeddingService interface {
 	Dimension() int
 	// Provider returns the provider name ("local", "openrouter", or "mock").
 	Provider() string
+	// MaxInputTokens returns the embedding model's hard input token limit.
+	// Returns math.MaxInt32 for providers without a hard limit.
+	MaxInputTokens() int
+}
+
+// modelMaxInputTokens returns the embedding model's hard input token limit.
+// This is the single authoritative source of truth for the limit; callers must
+// derive the safe chunk/embed size from it rather than using magic constants.
+// (Plan 8 / R1)
+func modelMaxInputTokens(model string) int {
+	switch {
+	case strings.Contains(model, "text-embedding-3-small"),
+		strings.Contains(model, "text-embedding-3-large"),
+		strings.Contains(model, "text-embedding-ada-002"):
+		return 8192
+	case strings.Contains(model, "qwen3-embedding-8b"):
+		return 32768
+	default:
+		return 8192 // OpenAI default; the API is the final authority
+	}
 }
 
 // EmbeddingConfig holds configuration for embedding services.
@@ -245,17 +328,23 @@ func (e *LocalEmbedding) Provider() string {
 	return "local"
 }
 
+// MaxInputTokens returns math.MaxInt32 (local provider has no hard limit).
+func (e *LocalEmbedding) MaxInputTokens() int {
+	return math.MaxInt32
+}
+
 // ============================================================================
 // OPENROUTER EMBEDDING SERVICE (Production)
 // ============================================================================
 
 // OpenRouterEmbedding implements EmbeddingService using OpenRouter's API.
 type OpenRouterEmbedding struct {
-	apiKey    string
-	model     string
-	endpoint  string
-	dimension int
-	client    *http.Client
+	apiKey         string
+	model          string
+	endpoint       string
+	dimension      int
+	maxInputTokens int
+	client         *http.Client
 }
 
 // NewOpenRouterEmbedding creates a new OpenRouter embedding service.
@@ -274,12 +363,18 @@ func NewOpenRouterEmbedding(config *EmbeddingConfig) (*OpenRouterEmbedding, erro
 	timeout := getEnvDuration("EMBEDDING_TIMEOUT", 180*time.Second)
 
 	return &OpenRouterEmbedding{
-		apiKey:    config.OpenRouterAPIKey,
-		model:     model,
-		endpoint:  "https://openrouter.ai/api/v1/embeddings",
-		dimension: dimension,
-		client:    &http.Client{Timeout: timeout},
+		apiKey:         config.OpenRouterAPIKey,
+		model:          model,
+		endpoint:       "https://openrouter.ai/api/v1/embeddings",
+		dimension:      dimension,
+		maxInputTokens: modelMaxInputTokens(model),
+		client:         &http.Client{Timeout: timeout},
 	}, nil
+}
+
+// MaxInputTokens returns the model's hard input token limit.
+func (e *OpenRouterEmbedding) MaxInputTokens() int {
+	return e.maxInputTokens
 }
 
 type openRouterEmbedRequest struct {
@@ -340,8 +435,142 @@ func (e *OpenRouterEmbedding) Embed(ctx context.Context, texts []string) ([][]fl
 	return nil, fmt.Errorf("%w: failed after %d retries: %v", ErrEmbeddingProviderUnavailable, maxRetries, lastErr)
 }
 
-// doEmbed performs the actual HTTP request to OpenRouter.
+// doEmbedEnforceLimit expands oversized inputs and embeds them, returning one
+// embedding per input. It is the API-authoritative boundary (Plan 8 / R2, R7):
+// if the embedding provider rejects an input for exceeding its hard token
+// limit, doEmbed recurses with a halved split limit until every input fits.
+// This makes the guard immune to EstimateTokens under/over-estimation.
 func (e *OpenRouterEmbedding) doEmbed(ctx context.Context, texts []string) ([][]float32, error) {
+	limit := e.maxInputTokens - embedSafetyMargin
+	if limit <= 0 {
+		limit = e.maxInputTokens
+	}
+	return e.doEmbedWith(ctx, texts, limit, 0, e.doEmbedRaw)
+}
+
+// doEmbedMaxDepth bounds the re-split recursion. Starting from ~8176 tokens and
+// halving each iteration reaches a safe size well within any model limit long
+// before this depth.
+const doEmbedMaxDepth = 12
+
+// doEmbedWith is the recursive core of doEmbed. embedFunc performs the actual
+// (already-expanded) embedding request; it is a parameter so tests can inject a
+// fake that simulates the provider's "maximum input length" rejection.
+func (e *OpenRouterEmbedding) doEmbedWith(
+	ctx context.Context,
+	texts []string,
+	splitLimit int,
+	depth int,
+	embedFunc func(context.Context, []string) ([][]float32, error),
+) ([][]float32, error) {
+	if depth > doEmbedMaxDepth {
+		return nil, fmt.Errorf("%w: unable to fit input within model limit after %d re-splits", ErrEmbeddingProviderUnavailable, depth)
+	}
+
+	// Expand oversized inputs into sub-inputs, tracking each original input's
+	// sub-input indices so we can collapse them back afterward.
+	expanded := make([]string, 0, len(texts))
+	groups := make([]embedGroup, len(texts))
+	for i, t := range texts {
+		if EstimateTokens(t) > splitLimit {
+			parts := splitByHardLimit(t, splitLimit)
+			slog.Warn("Embedding input exceeded model limit; splitting",
+				"origIndex", i,
+				"tokens", EstimateTokens(t),
+				"limit", splitLimit,
+				"parts", len(parts),
+				"depth", depth)
+			for _, p := range parts {
+				groups[i].subIndices = append(groups[i].subIndices, len(expanded))
+				expanded = append(expanded, p)
+			}
+		} else {
+			groups[i].subIndices = append(groups[i].subIndices, len(expanded))
+			expanded = append(expanded, t)
+		}
+	}
+
+	if len(expanded) == 0 {
+		return [][]float32{}, nil
+	}
+
+	raw, err := embedFunc(ctx, expanded)
+	if err == nil {
+		// Collapse: average sub-embeddings per original input, then renormalize.
+		return collapseEmbeddings(raw, groups, e.dimension), nil
+	}
+
+	// The API is the final authority: if it rejected an input for length,
+	// halve the split limit and re-split everything. Even if EstimateTokens is
+	// inaccurate, this converges because the limit shrinks each iteration.
+	if isMaxInputLengthError(err) {
+		slog.Warn("OpenRouter rejected input for length; re-splitting with smaller limit",
+			"depth", depth,
+			"splitLimit", splitLimit,
+			"error", err.Error())
+		return e.doEmbedWith(ctx, texts, splitLimit/2, depth+1, embedFunc)
+	}
+	return nil, err
+}
+
+// embedGroup tracks the expanded sub-input indices that belong to one original
+// input, so they can be collapsed back into a single embedding.
+type embedGroup struct {
+	subIndices []int
+}
+
+// collapseEmbeddings averages the sub-embeddings of each original input back
+// into a single vector and renormalizes it (Plan 8 / R2).
+func collapseEmbeddings(raw [][]float32, groups []embedGroup, dim int) [][]float32 {
+	result := make([][]float32, len(groups))
+	for i, g := range groups {
+		if len(g.subIndices) == 0 {
+			continue
+		}
+		if len(g.subIndices) == 1 {
+			result[i] = raw[g.subIndices[0]]
+			continue
+		}
+		merged := make([]float32, dim)
+		for _, si := range g.subIndices {
+			for d := 0; d < dim; d++ {
+				merged[d] += raw[si][d]
+			}
+		}
+		n := float32(len(g.subIndices))
+		for d := 0; d < dim; d++ {
+			merged[d] /= n
+		}
+		// Renormalize so cosine similarity downstream stays valid (Plan 8 / R2).
+		var norm float32
+		for d := 0; d < dim; d++ {
+			norm += merged[d] * merged[d]
+		}
+		if norm > 0 {
+			scale := float32(1.0 / math.Sqrt(float64(norm)))
+			for d := 0; d < dim; d++ {
+				merged[d] *= scale
+			}
+		}
+		result[i] = merged
+	}
+	return result
+}
+
+// isMaxInputLengthError reports whether err is the provider's hard input-length
+// rejection (e.g. OpenRouter: 'Invalid "input[0]": maximum input length is 8192
+// tokens.'). This is the trigger for the recursive re-split in doEmbed.
+func isMaxInputLengthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "maximum input length") || strings.Contains(msg, "maximum input")
+}
+
+// doEmbedRaw performs the actual HTTP request to OpenRouter for the given
+// (already expanded) texts and returns embeddings aligned by response index.
+func (e *OpenRouterEmbedding) doEmbedRaw(ctx context.Context, texts []string) ([][]float32, error) {
 	apiKey := e.apiKey
 	if tenantAPIKey := embeddingOpenRouterAPIKeyFromContext(ctx); tenantAPIKey != "" {
 		apiKey = tenantAPIKey
@@ -542,6 +771,11 @@ func (e *MockEmbedding) Dimension() int {
 // Provider returns "mock".
 func (e *MockEmbedding) Provider() string {
 	return "mock"
+}
+
+// MaxInputTokens returns math.MaxInt32 (mock provider has no hard limit).
+func (e *MockEmbedding) MaxInputTokens() int {
+	return math.MaxInt32
 }
 
 // ============================================================================

@@ -25,10 +25,14 @@ func TestLanceVectorDBProcessBatchWithRetryShortCircuitsPermanentError(t *testin
 			Content:  "Content",
 		},
 	}, 1, 3, time.Millisecond)
-	if !errors.Is(err, ErrEmbeddingProviderMisconfigured) {
-		t.Fatalf("processBatchWithRetry() error = %v, want ErrEmbeddingProviderMisconfigured", err)
+	// Plan 8 / R3: when EVERY chunk in a batch fails to embed, the failure is
+	// systemic (e.g. misconfigured/down provider) and must abort loudly rather
+	// than silently producing an empty index. embedWithIsolation first tries a
+	// batch call then retries the single item individually before giving up.
+	if !errors.Is(err, ErrEmbeddingProviderUnavailable) {
+		t.Fatalf("processBatchWithRetry() error = %v, want ErrEmbeddingProviderUnavailable", err)
 	}
-	if embedSvc.calls != 1 {
-		t.Fatalf("Embed calls = %d, want 1", embedSvc.calls)
+	if embedSvc.calls < 1 {
+		t.Fatalf("Embed calls = %d, want >= 1", embedSvc.calls)
 	}
 }

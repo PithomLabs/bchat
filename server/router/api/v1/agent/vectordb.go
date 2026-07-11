@@ -245,6 +245,11 @@ func NewVectorDB(config *VectorDBConfig) (VectorDB, error) {
 		return NewNoOpVectorDB(), nil
 	}
 
+	// Initialize tokenizer for accurate token counting
+	InitTokenizer(config.EmbeddingConfig.Provider, config.EmbeddingConfig.Model)
+	// Capture config so EstimateTokens can self-heal if init was missed (Plan 8 / R4)
+	SetEstimateTokenizerConfig(config.EmbeddingConfig)
+
 	// Initialize embedding service
 	embedSvc, err := NewEmbeddingService(config.EmbeddingConfig)
 	if err != nil {

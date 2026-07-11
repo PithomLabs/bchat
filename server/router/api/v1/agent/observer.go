@@ -195,7 +195,7 @@ func (s *Service) RunObserver(ctx context.Context, tenantID int32, sessionID str
 	}
 	updatedLog += newObservations
 
-	tokenCount := estimateTokens(updatedLog)
+	tokenCount := EstimateTokens(updatedLog)
 
 	// 8. Reflector Logic (Compression)
 	reflectorTriggered := false
@@ -213,7 +213,7 @@ func (s *Service) RunObserver(ctx context.Context, tenantID int32, sessionID str
 		})
 		if err == nil {
 			updatedLog = reflectedLog
-			tokenCount = estimateTokens(updatedLog)
+			tokenCount = EstimateTokens(updatedLog)
 			reflectorTriggered = true
 
 			// Memory Analytics: Track compression ratio
@@ -422,13 +422,6 @@ func parseXMLTag(content, tagName string) string {
 	return ""
 }
 
-// Approximate token count (1 token ~= 4 chars)
-// Note: This is a simple approximation. For production use, consider using
-// a proper tokenizer like tiktoken for more accurate counting.
-func estimateTokens(text string) int {
-	return len(text) / 4
-}
-
 // withRetry executes a function with retry logic
 // maxAttempts: number of attempts including the first
 // delayMs: delay in milliseconds between attempts
@@ -545,7 +538,7 @@ func (s *Service) storeObservationFromBuffer(ctx context.Context, tenantID int32
 	// Update the log
 	obsLog.ObservationLog = updatedLog
 	obsLog.LastObservedMsgIndex = lastMsgIndex
-	obsLog.TokensInLog = estimateTokens(updatedLog)
+	obsLog.TokensInLog = EstimateTokens(updatedLog)
 	obsLog.CurrentTask = currentTask
 	obsLog.SuggestedResponse = suggestedResponse
 

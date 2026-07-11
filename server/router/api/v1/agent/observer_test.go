@@ -60,6 +60,9 @@ func TestParseXMLTag(t *testing.T) {
 }
 
 func TestEstimateTokens(t *testing.T) {
+	// Initialize the real tokenizer (cl100k_base) for accurate counting
+	InitTokenizer("test", "text-embedding-3-small")
+
 	tests := []struct {
 		name     string
 		input    string
@@ -71,42 +74,42 @@ func TestEstimateTokens(t *testing.T) {
 			expected: 0,
 		},
 		{
-			name:     "4 chars = 1 token",
+			name:     "simple word",
 			input:    "test",
 			expected: 1,
 		},
 		{
-			name:     "8 chars = 2 tokens",
+			name:     "two words",
 			input:    "test test",
 			expected: 2,
 		},
 		{
-			name:     "exactly 4 chars",
+			name:     "short word",
 			input:    "hell",
 			expected: 1,
 		},
 		{
-			name:     "5 chars = 2 tokens (ceiling)",
+			name:     "common word",
 			input:    "hello",
-			expected: 1, // 5/4 = 1.25, truncated to 1
+			expected: 1,
 		},
 		{
 			name:     "longer text",
 			input:    "This is a longer text with more words to test the token estimation",
-			expected: 16, // 64/4 = 16
+			expected: 13,
 		},
 		{
-			name:     "unicode chars",
+			name:     "unicode chars (CJK)",
 			input:    "hello世界",
-			expected: 2, // 6 bytes / 4 = 1.5 -> truncated to 1, but len() returns bytes = 6
+			expected: 4,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := estimateTokens(tt.input)
+			result := EstimateTokens(tt.input)
 			if result != tt.expected {
-				t.Errorf("estimateTokens() = %d, want %d", result, tt.expected)
+				t.Errorf("EstimateTokens() = %d, want %d", result, tt.expected)
 			}
 		})
 	}
