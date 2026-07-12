@@ -130,3 +130,14 @@ CREATE TABLE `reaction` (
   `reaction_type` VARCHAR(256) NOT NULL,
   UNIQUE(`creator_id`,`content_id`,`reaction_type`)  
 );
+
+-- agent_rag_active_versions (versioned RAG index active pointer)
+CREATE TABLE IF NOT EXISTS `agent_rag_active_versions` (
+  `id` INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `tenant_id` INT NOT NULL,
+  `audience_type` VARCHAR(256) NOT NULL,
+  `file_type` VARCHAR(256) NOT NULL,
+  `version` INT NOT NULL,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY `idx_rag_active_version_lookup` (`tenant_id`, `audience_type`, `file_type`)
+);

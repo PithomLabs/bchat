@@ -37,9 +37,22 @@ type VectorDB interface {
 	// Delete removes chunks matching the filter criteria.
 	Delete(ctx context.Context, tenantID int32, audienceType string) error
 
+	// DeleteByVersion removes chunks for a specific (tenant, audience, file_type, version).
+	// Used for retention cleanup and cutover of pre-versioning data.
+	DeleteByVersion(ctx context.Context, tenantID int32, audienceType, fileType string, version int32) error
+
+	// PurgePreVersionedChunks removes chunks that predate versioning
+	// (source_version IS NULL OR 0 OR 1). Used for one-time cutover before the
+	// first versioned reindex.
+	PurgePreVersionedChunks(ctx context.Context, tenantID int32, audienceType, fileType string) error
+
 	// DeleteByIDPrefix removes chunks whose IDs start with the given prefix.
 	// This is useful for deleting all observations for a specific session.
 	DeleteByIDPrefix(ctx context.Context, tenantID int32, idPrefix string) (int, error)
+
+	// ListIndexedVersions returns the distinct indexed source_version values for a
+	// given (tenant, audience, file_type). Used to resolve the default query version.
+	ListIndexedVersions(ctx context.Context, tenantID int32, audienceType, fileType string) ([]int32, error)
 
 	// Search performs hybrid search (vector + metadata filtering).
 	Search(ctx context.Context, query SearchQuery) (*SearchResult, error)
@@ -143,6 +156,7 @@ type SearchQuery struct {
 	AudienceType string
 	ContentTypes []string // Filter by content types (service, faq, etc.)
 	ActiveOnly   bool     // Only return active chunks
+	SourceVersion *int32  // Optional: only return chunks for this indexed source version
 
 	// Pagination
 	TopK     int     // Number of results to return
@@ -386,6 +400,60 @@ func (db *MemoryVectorDB) DeleteByIDPrefix(ctx context.Context, tenantID int32, 
 		"tenantID", tenantID,
 		"idPrefix", idPrefix)
 	return len(toDelete), nil
+}
+
+// DeleteByVersion removes chunks for a specific (tenant, audience, file_type, version).
+func (db *MemoryVectorDB) DeleteByVersion(ctx context.Context, tenantID int32, audienceType, fileType string, version int32) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var toDelete []string
+	for id, chunk := range db.chunks {
+		if chunk.TenantID == tenantID && chunk.AudienceType == audienceType &&
+			chunk.ContentType == fileType && chunk.SourceVersion == version {
+			toDelete = append(toDelete, id)
+		}
+	}
+	for _, id := range toDelete {
+		delete(db.chunks, id)
+	}
+	return nil
+}
+
+// PurgePreVersionedChunks removes chunks that predate versioning (SourceVersion 0 or 1).
+func (db *MemoryVectorDB) PurgePreVersionedChunks(ctx context.Context, tenantID int32, audienceType, fileType string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var toDelete []string
+	for id, chunk := range db.chunks {
+		if chunk.TenantID == tenantID && chunk.AudienceType == audienceType &&
+			chunk.ContentType == fileType && (chunk.SourceVersion == 0 || chunk.SourceVersion == 1) {
+			toDelete = append(toDelete, id)
+		}
+	}
+	for _, id := range toDelete {
+		delete(db.chunks, id)
+	}
+	return nil
+}
+
+// ListIndexedVersions returns distinct indexed SourceVersion values for a (tenant, audience, file_type).
+func (db *MemoryVectorDB) ListIndexedVersions(ctx context.Context, tenantID int32, audienceType, fileType string) ([]int32, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	seen := make(map[int32]struct{})
+	for _, chunk := range db.chunks {
+		if chunk.TenantID == tenantID && chunk.AudienceType == audienceType && chunk.ContentType == fileType {
+			seen[chunk.SourceVersion] = struct{}{}
+		}
+	}
+	versions := make([]int32, 0, len(seen))
+	for v := range seen {
+		versions = append(versions, v)
+	}
+	return versions, nil
 }
 
 // Search performs vector or hybrid search based on query parameters.
@@ -644,6 +712,21 @@ func (db *NoOpVectorDB) Delete(ctx context.Context, tenantID int32, audienceType
 // DeleteByIDPrefix is a no-op.
 func (db *NoOpVectorDB) DeleteByIDPrefix(ctx context.Context, tenantID int32, idPrefix string) (int, error) {
 	return 0, nil
+}
+
+// DeleteByVersion is a no-op.
+func (db *NoOpVectorDB) DeleteByVersion(ctx context.Context, tenantID int32, audienceType, fileType string, version int32) error {
+	return nil
+}
+
+// PurgePreVersionedChunks is a no-op.
+func (db *NoOpVectorDB) PurgePreVersionedChunks(ctx context.Context, tenantID int32, audienceType, fileType string) error {
+	return nil
+}
+
+// ListIndexedVersions returns empty for NoOp.
+func (db *NoOpVectorDB) ListIndexedVersions(ctx context.Context, tenantID int32, audienceType, fileType string) ([]int32, error) {
+	return nil, nil
 }
 
 // Search returns empty results.

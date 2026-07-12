@@ -803,12 +803,16 @@ func getEnvDuration(key string, defaultVal time.Duration) time.Duration {
 
 // GetEmbeddingBatchSize returns the embedding batch size from env or default.
 // Controls how many chunks are sent to embedding API per request.
-// Default is 25. For Qwen3 (32K context), up to 40 is safe with 800-token chunks.
+// Default is 200 (was 10). Larger batches drastically cut the number of
+// API calls during reindex — the dominant cost for large KBs. The OpenRouter
+// text-embedding-3-small request limit (8191 tokens/input) keeps a 200×~1024
+// token batch well within bounds. For Qwen3 (32K context), 40 is safe with
+// 800-token chunks.
 func GetEmbeddingBatchSize() int {
 	if v := os.Getenv("EMBEDDING_BATCH_SIZE"); v != "" {
 		if size, err := strconv.Atoi(v); err == nil && size > 0 && size <= 200 {
 			return size
 		}
 	}
-	return 10
+	return 200
 }

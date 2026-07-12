@@ -392,6 +392,23 @@ func (d *DB) DeleteReindexCheckpoint(ctx context.Context, tenantID int32, audien
 	return errNotImplemented
 }
 
+// Agent RAG active-version methods (MySQL stubs).
+func (d *DB) UpsertAgentRAGActiveVersion(ctx context.Context, v *store.AgentRAGActiveVersion) (*store.AgentRAGActiveVersion, error) {
+	return nil, errNotImplemented
+}
+
+func (d *DB) GetAgentRAGActiveVersion(ctx context.Context, find *store.FindAgentRAGActiveVersion) (*store.AgentRAGActiveVersion, error) {
+	return nil, errNotImplemented
+}
+
+func (d *DB) ListAgentRAGActiveVersions(ctx context.Context, tenantID int32) ([]*store.AgentRAGActiveVersion, error) {
+	return nil, errNotImplemented
+}
+
+func (d *DB) DeleteAgentRAGActiveVersion(ctx context.Context, tenantID int32, audienceType, fileType string) error {
+	return errNotImplemented
+}
+
 func (d *DB) SupportsBridgeDelivery() bool {
 	return false
 }

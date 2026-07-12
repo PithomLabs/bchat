@@ -1132,6 +1132,90 @@ func (d *DB) DeleteAgentSourceFiles(ctx context.Context, tenantID int32, audienc
 	return err
 }
 
+// ============================================================================
+// AGENT RAG ACTIVE-VERSION OPERATIONS (versioned RAG index pointer)
+// ============================================================================
+
+func (d *DB) UpsertAgentRAGActiveVersion(ctx context.Context, v *store.AgentRAGActiveVersion) (*store.AgentRAGActiveVersion, error) {
+	now := time.Now()
+	v.UpdatedAt = now
+	stmt := `
+		INSERT INTO agent_rag_active_versions (tenant_id, audience_type, file_type, version, updated_at)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT(tenant_id, audience_type, file_type) DO UPDATE SET
+			version = excluded.version,
+			updated_at = excluded.updated_at
+		RETURNING id
+	`
+	if err := d.db.QueryRowContext(ctx, stmt, v.TenantID, v.AudienceType, v.FileType, v.Version, now).Scan(&v.ID); err != nil {
+		return nil, fmt.Errorf("failed to upsert rag active version: %w", err)
+	}
+	return v, nil
+}
+
+func (d *DB) GetAgentRAGActiveVersion(ctx context.Context, find *store.FindAgentRAGActiveVersion) (*store.AgentRAGActiveVersion, error) {
+	where := []string{"TRUE"}
+	args := []any{}
+	if find.TenantID != nil {
+		args = append(args, *find.TenantID)
+		where = append(where, fmt.Sprintf("tenant_id = $%d", len(args)))
+	}
+	if find.AudienceType != nil {
+		args = append(args, *find.AudienceType)
+		where = append(where, fmt.Sprintf("audience_type = $%d", len(args)))
+	}
+	if find.FileType != nil {
+		args = append(args, *find.FileType)
+		where = append(where, fmt.Sprintf("file_type = $%d", len(args)))
+	}
+	query := `
+		SELECT id, tenant_id, audience_type, file_type, version, updated_at
+		FROM agent_rag_active_versions
+		WHERE ` + strings.Join(where, " AND ") + `
+		LIMIT 1
+	`
+	var v store.AgentRAGActiveVersion
+	if err := d.db.QueryRowContext(ctx, query, args...).Scan(
+		&v.ID, &v.TenantID, &v.AudienceType, &v.FileType, &v.Version, &v.UpdatedAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get rag active version: %w", err)
+	}
+	return &v, nil
+}
+
+func (d *DB) ListAgentRAGActiveVersions(ctx context.Context, tenantID int32) ([]*store.AgentRAGActiveVersion, error) {
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT id, tenant_id, audience_type, file_type, version, updated_at
+		FROM agent_rag_active_versions
+		WHERE tenant_id = $1
+		ORDER BY audience_type, file_type
+	`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	list := []*store.AgentRAGActiveVersion{}
+	for rows.Next() {
+		var v store.AgentRAGActiveVersion
+		if err := rows.Scan(&v.ID, &v.TenantID, &v.AudienceType, &v.FileType, &v.Version, &v.UpdatedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, &v)
+	}
+	return list, rows.Err()
+}
+
+func (d *DB) DeleteAgentRAGActiveVersion(ctx context.Context, tenantID int32, audienceType, fileType string) error {
+	_, err := d.db.ExecContext(ctx,
+		"DELETE FROM agent_rag_active_versions WHERE tenant_id = $1 AND audience_type = $2 AND file_type = $3",
+		tenantID, audienceType, fileType,
+	)
+	return err
+}
+
 // Agent Rate Limit methods
 
 func (d *DB) GetOrCreateAgentRateLimit(ctx context.Context, tenantID int32, audienceType, clientIP string) (*store.AgentRateLimit, error) {
@@ -2370,13 +2454,22 @@ func (d *DB) UpsertReindexCheckpoint(ctx context.Context, checkpoint *store.Rein
 		checkpoint.CompletedAt = &now
 	}
 
+	var fileType sql.NullString
+	if checkpoint.FileType != nil {
+		fileType = sql.NullString{String: *checkpoint.FileType, Valid: true}
+	}
+	var version sql.NullInt32
+	if checkpoint.Version != nil {
+		version = sql.NullInt32{Int32: *checkpoint.Version, Valid: true}
+	}
+
 	stmt := `
 		INSERT INTO agent_reindex_checkpoints (
-			tenant_id, audience, total_chunks, processed_chunks, current_batch,
+			tenant_id, audience, file_type, version, total_chunks, processed_chunks, current_batch,
 			total_batches, batch_size, status, error_message, last_message, error_batch,
 			started_at, updated_at, completed_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-		ON CONFLICT(tenant_id, audience) DO UPDATE SET
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		ON CONFLICT(tenant_id, audience, file_type, version) DO UPDATE SET
 			total_chunks = excluded.total_chunks,
 			processed_chunks = excluded.processed_chunks,
 			current_batch = excluded.current_batch,
@@ -2391,7 +2484,7 @@ func (d *DB) UpsertReindexCheckpoint(ctx context.Context, checkpoint *store.Rein
 	`
 
 	result, err := d.db.ExecContext(ctx, stmt,
-		checkpoint.TenantID, checkpoint.Audience, checkpoint.TotalChunks,
+		checkpoint.TenantID, checkpoint.Audience, fileType, version, checkpoint.TotalChunks,
 		checkpoint.ProcessedChunks, checkpoint.CurrentBatch, checkpoint.TotalBatches,
 		checkpoint.BatchSize, checkpoint.Status, checkpoint.ErrorMessage,
 		checkpoint.LastMessage, checkpoint.ErrorBatch, checkpoint.StartedAt,
@@ -2422,17 +2515,26 @@ func (d *DB) GetReindexCheckpoint(ctx context.Context, find *store.FindReindexCh
 		args = append(args, *find.Audience)
 		where = append(where, fmt.Sprintf("audience = $%d", len(args)))
 	}
+	if find.FileType != nil {
+		args = append(args, *find.FileType)
+		where = append(where, fmt.Sprintf("file_type = $%d", len(args)))
+	}
+	if find.Version != nil {
+		args = append(args, *find.Version)
+		where = append(where, fmt.Sprintf("version = $%d", len(args)))
+	}
 	if find.Status != nil {
 		args = append(args, *find.Status)
 		where = append(where, fmt.Sprintf("status = $%d", len(args)))
 	}
 
 	var c store.ReindexCheckpoint
-	var errorMessage, errorBatch sql.NullString
+	var errorMessage, errorBatch, fileType sql.NullString
+	var version sql.NullInt32
 	var completedAt sql.NullTime
 
 	err := d.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, audience, total_chunks, processed_chunks, current_batch,
+		SELECT id, tenant_id, audience, file_type, version, total_chunks, processed_chunks, current_batch,
 			total_batches, batch_size, status, error_message, last_message, error_batch,
 			started_at, updated_at, completed_at
 		FROM agent_reindex_checkpoints
@@ -2440,7 +2542,7 @@ func (d *DB) GetReindexCheckpoint(ctx context.Context, find *store.FindReindexCh
 		ORDER BY updated_at DESC
 		LIMIT 1
 	`, args...).Scan(
-		&c.ID, &c.TenantID, &c.Audience, &c.TotalChunks, &c.ProcessedChunks,
+		&c.ID, &c.TenantID, &c.Audience, &fileType, &version, &c.TotalChunks, &c.ProcessedChunks,
 		&c.CurrentBatch, &c.TotalBatches, &c.BatchSize, &c.Status,
 		&errorMessage, &c.LastMessage, &errorBatch, &c.StartedAt, &c.UpdatedAt, &completedAt,
 	)
@@ -2451,6 +2553,14 @@ func (d *DB) GetReindexCheckpoint(ctx context.Context, find *store.FindReindexCh
 		return nil, fmt.Errorf("failed to get reindex checkpoint: %w", err)
 	}
 
+	if fileType.Valid {
+		ft := fileType.String
+		c.FileType = &ft
+	}
+	if version.Valid {
+		v := version.Int32
+		c.Version = &v
+	}
 	c.ErrorMessage = errorMessage.String
 	if errorBatch.Valid {
 		batch := int32(0)

@@ -254,6 +254,12 @@ type Driver interface {
 	GetReindexCheckpoint(ctx context.Context, find *FindReindexCheckpoint) (*ReindexCheckpoint, error)
 	DeleteReindexCheckpoint(ctx context.Context, tenantID int32, audience string) error
 
+	// Agent RAG active-version model related methods (versioned RAG index pointer).
+	UpsertAgentRAGActiveVersion(ctx context.Context, v *AgentRAGActiveVersion) (*AgentRAGActiveVersion, error)
+	GetAgentRAGActiveVersion(ctx context.Context, find *FindAgentRAGActiveVersion) (*AgentRAGActiveVersion, error)
+	ListAgentRAGActiveVersions(ctx context.Context, tenantID int32) ([]*AgentRAGActiveVersion, error)
+	DeleteAgentRAGActiveVersion(ctx context.Context, tenantID int32, audienceType, fileType string) error
+
 	// Observation Log model related methods.
 	UpsertObservationLog(ctx context.Context, log *ObservationLog) (*ObservationLog, error)
 	GetObservationLog(ctx context.Context, sessionID string) (*ObservationLog, error)

@@ -20,7 +20,7 @@ This document provides a comprehensive reference for all environment variables u
 | Category | Key Variables |
 |----------|--------------|
 | **Core** | `OPENROUTER_API_KEY`, `LLM_MODEL` |
-| **Embedding** | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_TIMEOUT` |
+| **Embedding** | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_BATCH_SIZE`, `RAG_MAX_CHUNK_TOKENS`, `EMBEDDING_TIMEOUT` |
 | **RAG** | `RAG_PIPELINE_ENABLED`, `REINDEX_RAG`, `HYBRID_SEARCH_ENABLED` |
 | **Observational Memory** | `OM_ENABLED`, `OM_OBSERVER_TOKEN_THRESHOLD`, `OM_TOKEN_THRESHOLD` |
 | **Hybrid OM + RAG** | `HYBRID_OM_RAG_ENABLED`, `HYBRID_OM_RAG_TEMPORAL_DECAY`, `HYBRID_OM_RAG_TTL_DAYS` |
@@ -271,24 +271,60 @@ export EMBEDDING_TIMEOUT=180s
 
 ### EMBEDDING_BATCH_SIZE
 
-Number of chunks to send in a single embedding API request.
+Number of chunks sent in a single embedding API request. Larger batches make fewer
+HTTP round-trips, which is the dominant factor in reindex speed.
 
 | Property | Value |
 |----------|-------|
 | Type | Integer |
-| Default | `10` |
-| Range | `1` to `100` |
+| Default | `200` |
+| Range | `1` to `200` (hard cap) |
 
 ```bash
-export EMBEDDING_BATCH_SIZE=32
+export EMBEDDING_BATCH_SIZE=200
 ```
 
 **Recommended Values:**
-- `openai/text-embedding-3-small`: `10-50` (Stable)
+- `openai/text-embedding-3-small`: `200` (max — fastest reindex; default)
 - `qwen/qwen3-embedding-8b`: `32` (Verified working)
 - Debugging/Instability: `1`
 
-**Note:** Lower values increase stability but reduce speed. If you encounter "No successful provider responses" or timeouts, try reducing this value.
+**Note:** Lower values increase stability but reduce speed. If you encounter "No successful provider responses" or timeouts, try reducing this value. Keep at `200` for production reindexing speed.
+
+---
+
+### RAG_MAX_CHUNK_TOKENS
+
+Maximum size (in tokens) of each chunk produced by the Markdown chunker before embedding.
+Larger chunks = fewer chunks = fewer embedding API calls = faster reindex, at the cost of
+slightly lower retrieval precision on very short queries.
+
+| Property | Value |
+|----------|-------|
+| Type | Integer |
+| Default | Provider-dependent (see below) |
+| Range | `100` to `8000` (env override) |
+
+**Defaults by Provider (when env not set):**
+
+| Provider | Default Chunk Tokens |
+|----------|----------------------|
+| `openrouter` | `1024` |
+| `local` | `150` |
+
+```bash
+# Aggressive, fast reindex (fewer, larger chunks)
+export RAG_MAX_CHUNK_TOKENS=4096
+```
+
+**Recommended Values:**
+- Balanced / fast reindex: `2048`–`4096`
+- Max speed (precision tradeoff): up to `8000`
+- Fine-grained retrieval: `1024` (openrouter default)
+
+**Note:** This is the primary reindex-speed lever alongside `EMBEDDING_BATCH_SIZE`. The
+`.env` example ships with `RAG_MAX_CHUNK_TOKENS=4096` and `EMBEDDING_BATCH_SIZE=200`, which
+are already near-optimal for openrouter reindexing.
 
 ---
 
@@ -1023,8 +1059,8 @@ task build:backend:rag
 
 ---
 
-*Document Version: 1.5*
-*Updated: 2026-02-14* - Added Hybrid OM + RAG configuration variables
+*Document Version: 1.6*
+*Updated: 2026-07-12* - Documented `RAG_MAX_CHUNK_TOKENS`; corrected `EMBEDDING_BATCH_SIZE` default (200, cap 200) and `run:testrag` batch size (32)
 
 ## Taskfile Commands & RAG Configuration
 
@@ -1043,6 +1079,6 @@ When running RAG tasks, it is critical to understand the difference between prod
 - It does not reindex. If you change embedding models or batch sizes, existing embeddings may be incompatible or cause errors until you manually reindex.
 
 **Why `run:testrag` works reliably:**
-- It explicitly sets `RAG_PIPELINE_ENABLED=true`, `EMBEDDING_BATCH_SIZE=10`, and `EMBEDDING_MODEL` inline.
-- It sets `REINDEX_RAG=true`, forcing a fresh index build on startup, which validates the entire pipeline.
+- It explicitly sets `RAG_PIPELINE_ENABLED=true`, `EMBEDDING_BATCH_SIZE=32`, `EMBEDDING_MODEL=qwen/qwen3-embedding-8b`, and `FORCE_REINDEX_ON_STARTUP=true` inline.
+- It forces a fresh index build on startup, which validates the entire pipeline.
 

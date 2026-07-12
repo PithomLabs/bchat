@@ -976,6 +976,81 @@ func (db *LanceVectorDB) TableName() string {
 	return db.tableName
 }
 
+// DeleteByVersion removes chunks for a specific (tenant, audience, file_type, version).
+func (db *LanceVectorDB) DeleteByVersion(ctx context.Context, tenantID int32, audienceType, fileType string, version int32) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	filter := fmt.Sprintf("tenant_id = %d AND audience_type = '%s' AND content_type = '%s' AND source_version = %d",
+		tenantID, audienceType, fileType, version)
+	if err := db.table.Delete(ctx, filter); err != nil {
+		return fmt.Errorf("failed to delete version from LanceDB: %w", err)
+	}
+	slog.Debug("Deleted versioned chunks from LanceDB",
+		"tenantID", tenantID, "audience", audienceType, "fileType", fileType, "version", version)
+	return nil
+}
+
+// PurgePreVersionedChunks removes chunks that predate versioning
+// (source_version IS NULL OR 0 OR 1).
+func (db *LanceVectorDB) PurgePreVersionedChunks(ctx context.Context, tenantID int32, audienceType, fileType string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	filter := fmt.Sprintf(
+		"tenant_id = %d AND audience_type = '%s' AND content_type = '%s' AND (source_version IS NULL OR source_version = 0 OR source_version = 1)",
+		tenantID, audienceType, fileType)
+	if err := db.table.Delete(ctx, filter); err != nil {
+		return fmt.Errorf("failed to purge pre-versioned chunks from LanceDB: %w", err)
+	}
+	slog.Debug("Purged pre-versioned chunks from LanceDB",
+		"tenantID", tenantID, "audience", audienceType, "fileType", fileType)
+	return nil
+}
+
+// ListIndexedVersions returns the distinct indexed source_version values for a
+// given (tenant, audience, file_type).
+func (db *LanceVectorDB) ListIndexedVersions(ctx context.Context, tenantID int32, audienceType, fileType string) ([]int32, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	filter := fmt.Sprintf("tenant_id = %d AND audience_type = '%s' AND content_type = '%s'",
+		tenantID, audienceType, fileType)
+	records, err := db.table.Query().Filter(filter).Limit(200000).Execute()
+	if err != nil {
+		return nil, fmt.Errorf("failed to query indexed versions: %w", err)
+	}
+
+	seen := make(map[int32]struct{})
+	for _, rec := range records {
+		idx := -1
+		fields := rec.Schema().Fields()
+		for i, f := range fields {
+			if f.Name == "source_version" {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			continue
+		}
+		if arr, ok := rec.Column(idx).(*array.Int32); ok {
+			for r := 0; r < arr.Len(); r++ {
+				if arr.IsNull(r) {
+					continue
+				}
+				seen[arr.Value(r)] = struct{}{}
+			}
+		}
+	}
+
+	versions := make([]int32, 0, len(seen))
+	for v := range seen {
+		versions = append(versions, v)
+	}
+	return versions, nil
+}
+
 // Search performs vector or hybrid search based on query parameters.
 func (db *LanceVectorDB) Search(ctx context.Context, query SearchQuery) (*SearchResult, error) {
 	start := time.Now()
@@ -1061,6 +1136,10 @@ func (db *LanceVectorDB) buildFilter(query SearchQuery) string {
 			types[i] = fmt.Sprintf("'%s'", ct)
 		}
 		filterParts = append(filterParts, fmt.Sprintf("content_type IN (%s)", strings.Join(types, ", ")))
+	}
+
+	if query.SourceVersion != nil {
+		filterParts = append(filterParts, fmt.Sprintf("source_version = %d", *query.SourceVersion))
 	}
 
 	return strings.Join(filterParts, " AND ")

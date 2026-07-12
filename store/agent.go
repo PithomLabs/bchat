@@ -346,6 +346,26 @@ type FindAgentSourceFile struct {
 	LatestOnly   bool   // If true, only return the latest version
 }
 
+// AgentRAGActiveVersion records the "active" (queried-by-default) indexed version
+// for a given (tenant, audience, file_type). It enables instant rollback of the RAG
+// index to a prior version without re-embedding.
+type AgentRAGActiveVersion struct {
+	ID          int32
+	TenantID    int32
+	AudienceType string
+	FileType    string // "kb", "policy", or "script"
+	Version     int32  // Active indexed source version
+	UpdatedAt   time.Time
+}
+
+// FindAgentRAGActiveVersion contains filters for finding active-version records.
+type FindAgentRAGActiveVersion struct {
+	ID           *int32
+	TenantID     *int32
+	AudienceType *string
+	FileType     *string
+}
+
 // AgentRateLimit tracks rate limiting per client.
 type AgentRateLimit struct {
 	ID           int32
@@ -1148,6 +1168,8 @@ type ReindexCheckpoint struct {
 	ID              int32
 	TenantID        int32
 	Audience        string
+	FileType        *string // File type being reindexed (kb/policy/script); nil for legacy
+	Version         *int32  // Source version being indexed; nil for legacy
 	TotalChunks     int32
 	ProcessedChunks int32
 	CurrentBatch    int32
@@ -1166,6 +1188,8 @@ type ReindexCheckpoint struct {
 type FindReindexCheckpoint struct {
 	TenantID *int32
 	Audience *string
+	FileType *string
+	Version  *int32
 	Status   *string
 }
 
@@ -1179,6 +1203,24 @@ func (s *Store) GetReindexCheckpoint(ctx context.Context, find *FindReindexCheck
 
 func (s *Store) DeleteReindexCheckpoint(ctx context.Context, tenantID int32, audience string) error {
 	return s.driver.DeleteReindexCheckpoint(ctx, tenantID, audience)
+}
+
+// AgentRAGActiveVersion model related methods.
+
+func (s *Store) UpsertAgentRAGActiveVersion(ctx context.Context, v *AgentRAGActiveVersion) (*AgentRAGActiveVersion, error) {
+	return s.driver.UpsertAgentRAGActiveVersion(ctx, v)
+}
+
+func (s *Store) GetAgentRAGActiveVersion(ctx context.Context, find *FindAgentRAGActiveVersion) (*AgentRAGActiveVersion, error) {
+	return s.driver.GetAgentRAGActiveVersion(ctx, find)
+}
+
+func (s *Store) ListAgentRAGActiveVersions(ctx context.Context, tenantID int32) ([]*AgentRAGActiveVersion, error) {
+	return s.driver.ListAgentRAGActiveVersions(ctx, tenantID)
+}
+
+func (s *Store) DeleteAgentRAGActiveVersion(ctx context.Context, tenantID int32, audienceType, fileType string) error {
+	return s.driver.DeleteAgentRAGActiveVersion(ctx, tenantID, audienceType, fileType)
 }
 
 func (s *Store) UpsertObservationLog(ctx context.Context, log *ObservationLog) (*ObservationLog, error) {

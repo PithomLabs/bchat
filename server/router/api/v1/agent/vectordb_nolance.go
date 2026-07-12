@@ -37,6 +37,15 @@ func (p *TenantVectorDBPool) Delete(_ context.Context, _ int32, _ string) error 
 func (p *TenantVectorDBPool) DeleteByIDPrefix(_ context.Context, _ int32, _ string) (int, error) {
 	return 0, fmt.Errorf("RAG pool unavailable (non-rag build)")
 }
+func (p *TenantVectorDBPool) DeleteByVersion(_ context.Context, _ int32, _ string, _ string, _ int32) error {
+	return fmt.Errorf("RAG pool unavailable (non-rag build)")
+}
+func (p *TenantVectorDBPool) PurgePreVersionedChunks(_ context.Context, _ int32, _ string, _ string) error {
+	return fmt.Errorf("RAG pool unavailable (non-rag build)")
+}
+func (p *TenantVectorDBPool) ListIndexedVersions(_ context.Context, _ int32, _ string, _ string) ([]int32, error) {
+	return nil, fmt.Errorf("RAG pool unavailable (non-rag build)")
+}
 func (p *TenantVectorDBPool) Search(_ context.Context, _ SearchQuery) (*SearchResult, error) {
 	return nil, fmt.Errorf("RAG pool unavailable (non-rag build)")
 }

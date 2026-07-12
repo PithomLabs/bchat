@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -280,6 +281,61 @@ func (s *Service) RefreshVectorDB() error {
 	return nil
 }
 
+// reindexFileEntry holds a source-file's content together with its version, so the
+// reindex grouping can preserve the real document version (not just the content).
+type reindexFileEntry struct {
+	content string
+	version int32
+}
+
+// reindexFileVersion indexes a single (tenant, audience, file_type) source-file version:
+// it chunks, performs a one-time cutover purge of pre-versioning data, inserts the new
+// versioned chunks (append-only — never wiping other versions), updates the active-version
+// pointer, and enforces retention (keep the last 5 versions).
+func (s *Service) reindexFileVersion(ctx context.Context, tenantID int32, audience, fileType string, version int32, content string, maxChunkTokens int) (int, error) {
+	if content == "" {
+		return 0, nil
+	}
+	chunks := s.chunker.ChunkMarkdownContent(content, tenantID, audience, fileType, version, maxChunkTokens)
+	if len(chunks) == 0 {
+		return 0, nil
+	}
+
+	// Cutover: if no versioned chunks exist yet for this key, purge pre-versioning data.
+	existing, err := s.vectorDB.ListIndexedVersions(ctx, tenantID, audience, fileType)
+	if err == nil && len(existing) == 0 {
+		if perr := s.vectorDB.PurgePreVersionedChunks(ctx, tenantID, audience, fileType); perr != nil {
+			slog.Warn("failed to purge pre-versioned chunks", "tenantID", tenantID, "audience", audience, "fileType", fileType, "error", perr)
+		}
+	}
+
+	if err := s.vectorDB.Insert(ctx, chunks); err != nil {
+		return 0, fmt.Errorf("failed to insert chunks: %w", err)
+	}
+
+	// Set the active-version pointer to the newly indexed version.
+	if _, err := s.store.UpsertAgentRAGActiveVersion(ctx, &store.AgentRAGActiveVersion{
+		TenantID:     tenantID,
+		AudienceType: audience,
+		FileType:     fileType,
+		Version:      version,
+	}); err != nil {
+		slog.Warn("failed to upsert active version", "tenantID", tenantID, "audience", audience, "fileType", fileType, "version", version, "error", err)
+	}
+
+	// Retention: keep the last 5 indexed versions.
+	if versions, lerr := s.vectorDB.ListIndexedVersions(ctx, tenantID, audience, fileType); lerr == nil && len(versions) > 5 {
+		sort.Slice(versions, func(i, j int) bool { return versions[i] < versions[j] })
+		for _, v := range versions[:len(versions)-5] {
+			if derr := s.vectorDB.DeleteByVersion(ctx, tenantID, audience, fileType, v); derr != nil {
+				slog.Warn("failed to delete old version during retention", "tenantID", tenantID, "audience", audience, "fileType", fileType, "version", v, "error", derr)
+			}
+		}
+	}
+
+	return len(chunks), nil
+}
+
 // ReindexAllContent re-indexes all existing KB and Policy content from the database.
 // This is useful when changing embedding providers or after a fresh deployment.
 func (s *Service) ReindexAllContent(ctx context.Context) error {
@@ -314,64 +370,38 @@ func (s *Service) ReindexAllContent(ctx context.Context) error {
 			continue
 		}
 
-		// Group files by audience type
-		audienceFiles := make(map[string]map[string]string) // audience -> fileType -> content
+		// Group files by audience type, preserving version.
+		audienceFiles := make(map[string]map[string]reindexFileEntry) // audience -> fileType -> {content, version}
 		for _, f := range files {
 			if _, ok := audienceFiles[f.AudienceType]; !ok {
-				audienceFiles[f.AudienceType] = make(map[string]string)
+				audienceFiles[f.AudienceType] = make(map[string]reindexFileEntry)
 			}
-			audienceFiles[f.AudienceType][f.FileType] = f.Content
+			audienceFiles[f.AudienceType][f.FileType] = reindexFileEntry{content: f.Content, version: f.Version}
 		}
 
-		// Index each audience using heading-based chunker
+		// Get chunk size based on embedding provider.
+		embeddingProvider := ""
+		if s.vectorDBConfig != nil && s.vectorDBConfig.EmbeddingConfig != nil {
+			embeddingProvider = s.vectorDBConfig.EmbeddingConfig.Provider
+		}
+		maxChunkTokens := GetMaxChunkTokens(embeddingProvider)
+
+		// Index each audience/file-type version (kb + policy).
 		for audience, fileMap := range audienceFiles {
-			kbContent := fileMap["kb"]
-			policyContent := fileMap["policy"]
-
-			if kbContent == "" && policyContent == "" {
-				continue
+			if entry, ok := fileMap["kb"]; ok {
+				if count, err := s.reindexFileVersion(tenantCtx, tenant.ID, audience, "kb", entry.version, entry.content, maxChunkTokens); err != nil {
+					slog.Warn("failed to reindex kb", "tenantID", tenant.ID, "audience", audience, "error", err)
+				} else {
+					totalChunks += count
+				}
 			}
-
-			// Delete existing chunks
-			if err := s.vectorDB.Delete(tenantCtx, tenant.ID, audience); err != nil {
-				slog.Warn("Failed to delete existing chunks", "tenantID", tenant.ID, "audience", audience, "error", err)
+			if entry, ok := fileMap["policy"]; ok {
+				if count, err := s.reindexFileVersion(tenantCtx, tenant.ID, audience, "policy", entry.version, entry.content, maxChunkTokens); err != nil {
+					slog.Warn("failed to reindex policy", "tenantID", tenant.ID, "audience", audience, "error", err)
+				} else {
+					totalChunks += count
+				}
 			}
-
-			// Use heading-based chunker for raw markdown content
-			// Get chunk size based on embedding provider
-			embeddingProvider := ""
-			if s.vectorDBConfig != nil && s.vectorDBConfig.EmbeddingConfig != nil {
-				embeddingProvider = s.vectorDBConfig.EmbeddingConfig.Provider
-			}
-			maxChunkTokens := GetMaxChunkTokens(embeddingProvider)
-
-			var allChunks []DocumentChunk
-			if kbContent != "" {
-				kbChunks := s.chunker.ChunkMarkdownContent(kbContent, tenant.ID, audience, "kb", 1, maxChunkTokens)
-				allChunks = append(allChunks, kbChunks...)
-			}
-			if policyContent != "" {
-				policyChunks := s.chunker.ChunkMarkdownContent(policyContent, tenant.ID, audience, "policy", 1, maxChunkTokens)
-				allChunks = append(allChunks, policyChunks...)
-			}
-
-			if len(allChunks) == 0 {
-				continue
-			}
-
-			// Insert chunks
-			if err := s.vectorDB.Insert(tenantCtx, allChunks); err != nil {
-				slog.Warn("Failed to insert chunks", "tenantID", tenant.ID, "audience", audience, "error", err)
-				continue
-			}
-
-			totalChunks += len(allChunks)
-			slog.Info("Reindexed content for tenant",
-				"tenantID", tenant.ID,
-				"tenant", tenant.Slug,
-				"audience", audience,
-				"chunks", len(allChunks),
-				"method", "heading-based")
 		}
 	}
 
@@ -448,70 +478,35 @@ func (s *Service) ReindexTenantContent(ctx context.Context, tenantID int32, audi
 			"version", f.Version)
 	}
 
-	// Group files by audience type
-	audienceFiles := make(map[string]map[string]string) // audience -> fileType -> content
+	// Group files by audience type, preserving version.
+	audienceFiles := make(map[string]map[string]reindexFileEntry) // audience -> fileType -> {content, version}
 	for _, f := range files {
 		if _, ok := audienceFiles[f.AudienceType]; !ok {
-			audienceFiles[f.AudienceType] = make(map[string]string)
+			audienceFiles[f.AudienceType] = make(map[string]reindexFileEntry)
 		}
-		audienceFiles[f.AudienceType][f.FileType] = f.Content
+		audienceFiles[f.AudienceType][f.FileType] = reindexFileEntry{content: f.Content, version: f.Version}
 	}
 
 	totalChunks := 0
 
-	// Index each audience using heading-based chunker
+	// Index each audience/file-type version (kb + policy).
 	for audience, fileMap := range audienceFiles {
-		kbContent := fileMap["kb"]
-		policyContent := fileMap["policy"]
-
-		if kbContent == "" && policyContent == "" {
-			continue
+		if entry, ok := fileMap["kb"]; ok {
+			if count, err := s.reindexFileVersion(ctx, tenantID, audience, "kb", entry.version, entry.content, maxChunkTokens); err != nil {
+				slog.Error("failed to reindex kb", "tenantID", tenantID, "audience", audience, "error", err)
+				return totalChunks, fmt.Errorf("failed to reindex kb for audience %s: %w", audience, err)
+			} else {
+				totalChunks += count
+			}
 		}
-
-		// Delete existing chunks for this tenant/audience
-		if err := s.vectorDB.Delete(ctx, tenantID, audience); err != nil {
-			slog.Warn("Failed to delete existing chunks", "tenantID", tenantID, "audience", audience, "error", err)
+		if entry, ok := fileMap["policy"]; ok {
+			if count, err := s.reindexFileVersion(ctx, tenantID, audience, "policy", entry.version, entry.content, maxChunkTokens); err != nil {
+				slog.Error("failed to reindex policy", "tenantID", tenantID, "audience", audience, "error", err)
+				return totalChunks, fmt.Errorf("failed to reindex policy for audience %s: %w", audience, err)
+			} else {
+				totalChunks += count
+			}
 		}
-
-		// Use heading-based chunker for raw markdown content (maxChunkTokens set at function start)
-		var allChunks []DocumentChunk
-		if kbContent != "" {
-			kbChunks := s.chunker.ChunkMarkdownContent(kbContent, tenantID, audience, "kb", 1, maxChunkTokens)
-			allChunks = append(allChunks, kbChunks...)
-		}
-		if policyContent != "" {
-			policyChunks := s.chunker.ChunkMarkdownContent(policyContent, tenantID, audience, "policy", 1, maxChunkTokens)
-			allChunks = append(allChunks, policyChunks...)
-		}
-
-		if len(allChunks) == 0 {
-			slog.Warn("No chunks created from content",
-				"tenantID", tenantID,
-				"audience", audience,
-				"kbLength", len(kbContent),
-				"policyLength", len(policyContent))
-			continue
-		}
-
-		// DEBUG: Log chunks about to insert
-		slog.Info("DEBUG: About to insert chunks",
-			"tenantID", tenantID,
-			"audience", audience,
-			"chunkCount", len(allChunks))
-
-		// Insert chunks
-		if err := s.vectorDB.Insert(ctx, allChunks); err != nil {
-			slog.Error("DEBUG: Insert failed", "error", err)
-			return totalChunks, fmt.Errorf("failed to insert chunks for audience %s: %w", audience, err)
-		}
-
-		totalChunks += len(allChunks)
-		slog.Info("Reindexed content for tenant",
-			"tenantID", tenantID,
-			"tenant", tenant.Slug,
-			"audience", audience,
-			"chunks", len(allChunks),
-			"method", "heading-based")
 	}
 
 	slog.Info("RAG reindex completed for tenant", "tenantID", tenantID, "tenant", tenant.Slug, "totalChunks", totalChunks)
@@ -789,26 +784,26 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 		return 0, fmt.Errorf("failed to list source files: %w", err)
 	}
 
-	// Group files by audience for correct chunking
-	audienceFiles := make(map[string]map[string]string) // audience -> fileType -> content
+	// Group files by audience for correct chunking, preserving version.
+	audienceFiles := make(map[string]map[string]reindexFileEntry) // audience -> fileType -> {content, version}
+	fileVersions := make(map[string]map[string]int32)              // audience -> fileType -> version
 	for _, f := range files {
 		if _, ok := audienceFiles[f.AudienceType]; !ok {
-			audienceFiles[f.AudienceType] = make(map[string]string)
+			audienceFiles[f.AudienceType] = make(map[string]reindexFileEntry)
+			fileVersions[f.AudienceType] = make(map[string]int32)
 		}
-		audienceFiles[f.AudienceType][f.FileType] = f.Content
+		audienceFiles[f.AudienceType][f.FileType] = reindexFileEntry{content: f.Content, version: f.Version}
+		fileVersions[f.AudienceType][f.FileType] = f.Version
 	}
 
 	var allChunks []DocumentChunk
 	for audience, fileMap := range audienceFiles {
-		kbContent := fileMap["kb"]
-		policyContent := fileMap["policy"]
-
-		if kbContent != "" {
-			kbChunks := s.chunker.ChunkMarkdownContent(kbContent, tenantID, audience, "kb", 1, maxChunkTokens)
+		if entry, ok := fileMap["kb"]; ok && entry.content != "" {
+			kbChunks := s.chunker.ChunkMarkdownContent(entry.content, tenantID, audience, "kb", entry.version, maxChunkTokens)
 			allChunks = append(allChunks, kbChunks...)
 		}
-		if policyContent != "" {
-			policyChunks := s.chunker.ChunkMarkdownContent(policyContent, tenantID, audience, "policy", 1, maxChunkTokens)
+		if entry, ok := fileMap["policy"]; ok && entry.content != "" {
+			policyChunks := s.chunker.ChunkMarkdownContent(entry.content, tenantID, audience, "policy", entry.version, maxChunkTokens)
 			allChunks = append(allChunks, policyChunks...)
 		}
 	}
@@ -823,10 +818,16 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 	totalBatches := (totalChunks + batchSize - 1) / batchSize
 	startBatch := 0
 
-	// If not resuming, delete existing content and start fresh
+	// If not resuming, perform a one-time cutover purge of pre-versioning data per file type.
 	if existingCheckpoint == nil {
-		if err := s.vectorDB.Delete(ctx, tenantID, audienceType); err != nil {
-			slog.Warn("Failed to delete existing chunks", "error", err)
+		for audience, fileMap := range fileVersions {
+			for fileType := range fileMap {
+				if existing, lerr := s.vectorDB.ListIndexedVersions(ctx, tenantID, audience, fileType); lerr == nil && len(existing) == 0 {
+					if perr := s.vectorDB.PurgePreVersionedChunks(ctx, tenantID, audience, fileType); perr != nil {
+						slog.Warn("failed to purge pre-versioned chunks", "tenantID", tenantID, "audience", audience, "fileType", fileType, "error", perr)
+					}
+				}
+			}
 		}
 
 		// Create new checkpoint
@@ -942,6 +943,28 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 		"tenantID", tenantID,
 		"tenant", tenant.Slug,
 		"totalChunks", totalChunks)
+
+	// Update active-version pointers and enforce retention for each indexed file version.
+	for audience, fileMap := range fileVersions {
+		for fileType, version := range fileMap {
+			if _, err := s.store.UpsertAgentRAGActiveVersion(ctx, &store.AgentRAGActiveVersion{
+				TenantID:     tenantID,
+				AudienceType: audience,
+				FileType:     fileType,
+				Version:      version,
+			}); err != nil {
+				slog.Warn("failed to upsert active version", "tenantID", tenantID, "audience", audience, "fileType", fileType, "version", version, "error", err)
+			}
+			if versions, lerr := s.vectorDB.ListIndexedVersions(ctx, tenantID, audience, fileType); lerr == nil && len(versions) > 5 {
+				sort.Slice(versions, func(i, j int) bool { return versions[i] < versions[j] })
+				for _, v := range versions[:len(versions)-5] {
+					if derr := s.vectorDB.DeleteByVersion(ctx, tenantID, audience, fileType, v); derr != nil {
+						slog.Warn("failed to delete old version during retention", "tenantID", tenantID, "audience", audience, "fileType", fileType, "version", v, "error", derr)
+					}
+				}
+			}
+		}
+	}
 
 	return totalChunks, nil
 }
@@ -4160,7 +4183,49 @@ func (s *Service) CallLLMSimple(ctx context.Context, tenantID int32, systemPromp
 
 // SearchVectorDB performs a direct vector search for testing/evaluation purposes.
 // Returns nil if RAG is not enabled.
-func (s *Service) SearchVectorDB(ctx context.Context, tenantID int32, audienceType, query string, topK int) (*SearchResult, error) {
+// resolveQueryVersion determines which source version to query for a (tenant, audience,
+// fileType). Precedence: explicit request > active-version pointer > latest indexed version.
+// Returns nil when no versioned data exists (caller should return empty results).
+func (s *Service) resolveQueryVersion(ctx context.Context, tenantID int32, audience, fileType string, requested *int32) (*int32, error) {
+	if requested != nil {
+		return requested, nil
+	}
+
+	if fileType != "" {
+		if av, err := s.store.GetAgentRAGActiveVersion(ctx, &store.FindAgentRAGActiveVersion{
+			TenantID:     &tenantID,
+			AudienceType: &audience,
+			FileType:     &fileType,
+		}); err == nil && av != nil {
+			return &av.Version, nil
+		}
+	} else {
+		active, err := s.store.ListAgentRAGActiveVersions(ctx, tenantID)
+		if err == nil && len(active) > 0 {
+			best := active[0].Version
+			for _, a := range active {
+				if a.Version > best {
+					best = a.Version
+				}
+			}
+			return &best, nil
+		}
+	}
+
+	if versions, err := s.vectorDB.ListIndexedVersions(ctx, tenantID, audience, fileType); err == nil && len(versions) > 0 {
+		best := versions[0]
+		for _, v := range versions {
+			if v > best {
+				best = v
+			}
+		}
+		return &best, nil
+	}
+
+	return nil, nil
+}
+
+func (s *Service) SearchVectorDB(ctx context.Context, tenantID int32, audienceType, fileType, query string, topK int, sourceVersion *int32) (*SearchResult, error) {
 	if s.vectorDB == nil {
 		return nil, fmt.Errorf("RAG pipeline not enabled")
 	}
@@ -4170,12 +4235,27 @@ func (s *Service) SearchVectorDB(ctx context.Context, tenantID int32, audienceTy
 	}
 	ctx = s.withTenantEmbeddingAPIKey(ctx, tenantID)
 
-	return s.vectorDB.Search(ctx, SearchQuery{
+	version, err := s.resolveQueryVersion(ctx, tenantID, audienceType, fileType, sourceVersion)
+	if err != nil {
+		slog.Warn("failed to resolve query version", "tenantID", tenantID, "audience", audienceType, "error", err)
+	}
+	if version == nil {
+		// No versioned data: return empty results rather than matching pre-versioning chunks.
+		return &SearchResult{Chunks: nil, Scores: nil}, nil
+	}
+
+	queryObj := SearchQuery{
 		TenantID:     tenantID,
 		AudienceType: audienceType,
 		QueryText:    query,
 		TopK:         topK,
-	})
+		SourceVersion: version,
+	}
+	if fileType != "" {
+		queryObj.ContentTypes = []string{fileType}
+	}
+
+	return s.vectorDB.Search(ctx, queryObj)
 }
 
 // buildKBGenerationPrompt constructs the prompt for KB.MD generation.

@@ -64,12 +64,14 @@ func (p *TenantVectorDBPool) getOrCreate(ctx context.Context, tenantID int32) (V
 		return db, nil
 	}
 
-	// Read per-tenant override from store
+	// Read per-tenant override from store (nil store disables overrides)
 	var override *TenantS3Override
-	if tc, err := p.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &tenantID}); err == nil && tc != nil && tc.VectorDBS3Override != "" {
+	if p.store != nil {
+		if tc, err := p.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &tenantID}); err == nil && tc != nil && tc.VectorDBS3Override != "" {
 		var o TenantS3Override
 		if json.Unmarshal([]byte(tc.VectorDBS3Override), &o) == nil {
 			override = &o
+		}
 		}
 	}
 
@@ -189,6 +191,30 @@ func (p *TenantVectorDBPool) DeleteByIDPrefix(ctx context.Context, tenantID int3
 		return 0, err
 	}
 	return db.DeleteByIDPrefix(ctx, tenantID, idPrefix)
+}
+
+func (p *TenantVectorDBPool) DeleteByVersion(ctx context.Context, tenantID int32, audienceType, fileType string, version int32) error {
+	db, err := p.getOrCreate(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	return db.DeleteByVersion(ctx, tenantID, audienceType, fileType, version)
+}
+
+func (p *TenantVectorDBPool) PurgePreVersionedChunks(ctx context.Context, tenantID int32, audienceType, fileType string) error {
+	db, err := p.getOrCreate(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	return db.PurgePreVersionedChunks(ctx, tenantID, audienceType, fileType)
+}
+
+func (p *TenantVectorDBPool) ListIndexedVersions(ctx context.Context, tenantID int32, audienceType, fileType string) ([]int32, error) {
+	db, err := p.getOrCreate(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	return db.ListIndexedVersions(ctx, tenantID, audienceType, fileType)
 }
 
 func (p *TenantVectorDBPool) Search(ctx context.Context, query SearchQuery) (*SearchResult, error) {

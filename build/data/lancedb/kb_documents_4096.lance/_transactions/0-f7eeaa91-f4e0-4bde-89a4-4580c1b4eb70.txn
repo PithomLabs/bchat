@@ -1,5 +1,0 @@
-$f7eeaa91-f4e0-4bde-89a4-4580c1b4eb70²¦"id ÿÿÿÿÿÿÿÿÿ*string8Zdefault*	tenant_id ÿÿÿÿÿÿÿÿÿ*int328Zdefault/audience_type ÿÿÿÿÿÿÿÿÿ*string8Zdefault.content_type ÿÿÿÿÿÿÿÿÿ*string8Zdefault)title ÿÿÿÿÿÿÿÿÿ*string08Zdefault)content ÿÿÿÿÿÿÿÿÿ*string8Zdefault(code ÿÿÿÿÿÿÿÿÿ*string08Zdefault.is_emergency ÿÿÿÿÿÿÿÿÿ*bool08Zdefault)	is_active ÿÿÿÿÿÿÿÿÿ*bool8Zdefault+priority	 ÿÿÿÿÿÿÿÿÿ*int3208Zdefault?	embedding
- ÿÿÿÿÿÿÿÿÿ*fixed_size_list:float:40968Zdefault+
-indexed_at ÿÿÿÿÿÿÿÿÿ*int648Zdefault1source_version ÿÿÿÿÿÿÿÿÿ*int3208Zdefault"!
-lance.auto_cleanup.interval20"'
-lance.auto_cleanup.older_than14days

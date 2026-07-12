@@ -1556,13 +1556,8 @@ func (h *Handler) importFiles(ctx context.Context, tenantID int32, audienceType,
 		}
 	}
 
-	// Reindex content for RAG pipeline using resume-capable path
-	if _, err := h.service.ReindexTenantContentWithResume(ctx, tenantID, audienceType, false); err != nil {
-		slog.Warn("Failed to reindex content for RAG",
-			"error", err,
-			"tenantID", tenantID,
-			"audience", audienceType)
-	}
+	// RAG reindex is intentionally NOT triggered on upload. The admin must rebuild
+	// the index manually (Rebuild Index) so a new source-file version becomes searchable.
 
 	// Return simplified AudienceInfo (no counts since we don't parse structured content)
 	return &AudienceInfo{
@@ -4522,6 +4517,7 @@ type ChunkInfo struct {
 	ID           string `json:"id"`
 	ContentType  string `json:"contentType"`
 	AudienceType string `json:"audienceType"`
+	SourceVersion int32 `json:"sourceVersion,omitempty"`
 	Title        string `json:"title"`
 	Content      string `json:"content"`
 	Code         string `json:"code,omitempty"`
@@ -4535,12 +4531,14 @@ type ChunkInfo struct {
 type RAGSearchRequest struct {
 	TenantID        int32   `json:"tenantId"`
 	AudienceType    string  `json:"audienceType"`
+	FileType        string  `json:"fileType,omitempty"` // "kb", "policy", or "" for both
 	Query           string  `json:"query"`
 	TopK            int     `json:"topK"`
 	MinScore        float64 `json:"minScore"`
 	UseHybridSearch bool    `json:"useHybridSearch"`
 	VectorWeight    float64 `json:"vectorWeight"`
 	TextWeight      float64 `json:"textWeight"`
+	SourceVersion   *int32  `json:"sourceVersion,omitempty"` // specific version; nil = active/latest
 }
 
 // RAGSearchResponse holds the search test results.
@@ -4786,6 +4784,15 @@ func (h *Handler) HandleTestRAGSearch(c echo.Context) error {
 		req.TextWeight = 0.3
 	}
 
+	// Resolve which source version to query (explicit > active pointer > latest indexed).
+	version, verr := h.service.resolveQueryVersion(ctx, req.TenantID, req.AudienceType, req.FileType, req.SourceVersion)
+	if verr != nil {
+		slog.Warn("failed to resolve query version", "error", verr)
+	}
+	if version == nil {
+		return c.JSON(http.StatusOK, RAGSearchResponse{SearchMode: "versioned", TotalResults: 0, Results: []RAGSearchResult{}})
+	}
+
 	// Execute search
 	searchQuery := SearchQuery{
 		QueryText:       req.Query,
@@ -4796,7 +4803,10 @@ func (h *Handler) HandleTestRAGSearch(c echo.Context) error {
 		UseHybridSearch: req.UseHybridSearch,
 		VectorWeight:    req.VectorWeight,
 		TextWeight:      req.TextWeight,
-		ActiveOnly:      true,
+		SourceVersion:   version,
+	}
+	if req.FileType != "" {
+		searchQuery.ContentTypes = []string{req.FileType}
 	}
 
 	ctx = h.service.withTenantEmbeddingAPIKey(ctx, req.TenantID)
@@ -4816,16 +4826,17 @@ func (h *Handler) HandleTestRAGSearch(c echo.Context) error {
 
 		searchResult := RAGSearchResult{
 			Chunk: ChunkInfo{
-				ID:           chunk.ID,
-				ContentType:  chunk.ContentType,
-				AudienceType: chunk.AudienceType,
-				Title:        chunk.Title,
-				Content:      truncateString(chunk.Content, 300),
-				Code:         chunk.Code,
-				IsActive:     chunk.IsActive,
-				IsEmergency:  chunk.IsEmergency,
-				Priority:     chunk.Priority,
-				IndexedAt:    indexedAt,
+				ID:            chunk.ID,
+				ContentType:   chunk.ContentType,
+				AudienceType:  chunk.AudienceType,
+				SourceVersion: chunk.SourceVersion,
+				Title:         chunk.Title,
+				Content:       truncateString(chunk.Content, 300),
+				Code:          chunk.Code,
+				IsActive:      chunk.IsActive,
+				IsEmergency:   chunk.IsEmergency,
+				Priority:      chunk.Priority,
+				IndexedAt:     indexedAt,
 			},
 			Score: result.Scores[i],
 		}
@@ -4881,7 +4892,9 @@ func (h *Handler) HandleTenantRAGSearch(c echo.Context) error {
 	var req struct {
 		Query        string `json:"query"`
 		AudienceType string `json:"audience_type"`
+		FileType     string `json:"file_type,omitempty"`
 		TopK         int    `json:"top_k"`
+		SourceVersion *int32 `json:"source_version,omitempty"`
 	}
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
@@ -4902,6 +4915,15 @@ func (h *Handler) HandleTenantRAGSearch(c echo.Context) error {
 		req.AudienceType = "external"
 	}
 
+	// Resolve which source version to query (explicit > active pointer > latest indexed).
+	version, verr := h.service.resolveQueryVersion(ctx, tenant.ID, req.AudienceType, req.FileType, req.SourceVersion)
+	if verr != nil {
+		slog.Warn("failed to resolve query version", "error", verr)
+	}
+	if version == nil {
+		return c.JSON(http.StatusOK, RAGSearchResponse{SearchMode: "versioned", TotalResults: 0, Results: []RAGSearchResult{}})
+	}
+
 	// Execute search
 	searchQuery := SearchQuery{
 		QueryText:    req.Query,
@@ -4909,7 +4931,10 @@ func (h *Handler) HandleTenantRAGSearch(c echo.Context) error {
 		AudienceType: req.AudienceType,
 		TopK:         req.TopK,
 		MinScore:     0.0,
-		ActiveOnly:   true,
+		SourceVersion: version,
+	}
+	if req.FileType != "" {
+		searchQuery.ContentTypes = []string{req.FileType}
 	}
 
 	ctx = h.service.withTenantEmbeddingAPIKey(ctx, tenant.ID)
@@ -4929,16 +4954,17 @@ func (h *Handler) HandleTenantRAGSearch(c echo.Context) error {
 
 		results[i] = RAGSearchResult{
 			Chunk: ChunkInfo{
-				ID:           chunk.ID,
-				ContentType:  chunk.ContentType,
-				AudienceType: chunk.AudienceType,
-				Title:        chunk.Title,
-				Content:      truncateString(chunk.Content, 300),
-				Code:         chunk.Code,
-				IsActive:     chunk.IsActive,
-				IsEmergency:  chunk.IsEmergency,
-				Priority:     chunk.Priority,
-				IndexedAt:    indexedAt,
+				ID:            chunk.ID,
+				ContentType:   chunk.ContentType,
+				AudienceType:  chunk.AudienceType,
+				SourceVersion: chunk.SourceVersion,
+				Title:         chunk.Title,
+				Content:       truncateString(chunk.Content, 300),
+				Code:          chunk.Code,
+				IsActive:      chunk.IsActive,
+				IsEmergency:   chunk.IsEmergency,
+				Priority:      chunk.Priority,
+				IndexedAt:     indexedAt,
 			},
 			Score: result.Scores[i],
 		}
@@ -5726,7 +5752,7 @@ func (h *Handler) testRetrievalForPair(ctx context.Context, tenantID int32, pair
 	}
 
 	// Search using the question (use internal audience - same as indexed content)
-	searchResult, err := h.service.SearchVectorDB(ctx, tenantID, "internal", pair.Question, 5)
+	searchResult, err := h.service.SearchVectorDB(ctx, tenantID, "internal", "", pair.Question, 5, nil)
 	if err != nil {
 		result["error"] = err.Error()
 		return result
@@ -5833,7 +5859,9 @@ func (h *Handler) HandleRAGSearch(c echo.Context) error {
 	var req struct {
 		Query        string `json:"query"`
 		AudienceType string `json:"audience_type"`
+		FileType     string `json:"file_type,omitempty"`
 		TopK         int    `json:"top_k"`
+		SourceVersion *int32 `json:"source_version,omitempty"`
 	}
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
@@ -5855,7 +5883,7 @@ func (h *Handler) HandleRAGSearch(c echo.Context) error {
 	}
 
 	// Perform search
-	searchResult, err := h.service.SearchVectorDB(ctx, tenant.ID, req.AudienceType, req.Query, req.TopK)
+	searchResult, err := h.service.SearchVectorDB(ctx, tenant.ID, req.AudienceType, req.FileType, req.Query, req.TopK, req.SourceVersion)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Search failed: %v", err))
 	}
@@ -5894,6 +5922,7 @@ func (h *Handler) HandleRAGSearch(c echo.Context) error {
 			"content_preview":  preview,
 			"content_type":     chunk.ContentType,
 			"audience_type":    chunk.AudienceType,
+			"source_version":   chunk.SourceVersion,
 			"matched_keywords": matchedKeywords,
 			"keyword_match_ratio": func() float64 {
 				if len(queryKeywords) == 0 {
@@ -5907,12 +5936,164 @@ func (h *Handler) HandleRAGSearch(c echo.Context) error {
 	latencyMs := time.Since(start).Milliseconds()
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"query":         req.Query,
-		"audience_type": req.AudienceType,
-		"top_k":         req.TopK,
-		"latency_ms":    latencyMs,
-		"total_results": len(results),
+		"query":          req.Query,
+		"audience_type":  req.AudienceType,
+		"file_type":      req.FileType,
+		"source_version": req.SourceVersion,
+		"top_k":          req.TopK,
+		"latency_ms":     latencyMs,
+		"total_results":  len(results),
 		"results":       results,
+	})
+}
+
+// HandleSetActiveVersion sets the active RAG source version for a (audience, fileType)
+// without re-embedding. This is the versioned rollback mechanism.
+// POST /api/v1/agent/:slug/rag/active-version
+// Requires: ADMIN role or api:config permission.
+func (h *Handler) HandleSetActiveVersion(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermAPIConfig) {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin role or api:config permission required")
+	}
+
+	var req struct {
+		AudienceType string `json:"audience_type"`
+		FileType     string `json:"file_type"`
+		Version      int32  `json:"version"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
+	}
+	if req.AudienceType == "" {
+		req.AudienceType = "internal"
+	}
+	if req.FileType == "" || (req.FileType != "kb" && req.FileType != "policy") {
+		return echo.NewHTTPError(http.StatusBadRequest, "file_type must be 'kb' or 'policy'")
+	}
+	if req.Version <= 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "version must be a positive integer")
+	}
+
+	// Ensure the requested version is actually indexed.
+	indexed, lerr := h.service.vectorDB.ListIndexedVersions(ctx, tenant.ID, req.AudienceType, req.FileType)
+	if lerr != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list indexed versions: "+lerr.Error())
+	}
+	found := false
+	for _, v := range indexed {
+		if v == req.Version {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return echo.NewHTTPError(http.StatusBadRequest, "version not found in indexed versions")
+	}
+
+	if _, err := h.store.UpsertAgentRAGActiveVersion(ctx, &store.AgentRAGActiveVersion{
+		TenantID:     tenant.ID,
+		AudienceType: req.AudienceType,
+		FileType:     req.FileType,
+		Version:      req.Version,
+	}); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to set active version: "+err.Error())
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"audience_type": req.AudienceType,
+		"file_type":     req.FileType,
+		"version":       req.Version,
+		"status":        "active",
+	})
+}
+
+// HandleListActiveVersions returns the active RAG source version for each
+// (audience, fileType) of a tenant.
+// GET /api/v1/agent/:slug/rag/active-versions
+// Requires: ADMIN role or api:config permission.
+func (h *Handler) HandleListActiveVersions(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermAPIConfig) {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin role or api:config permission required")
+	}
+
+	active, err := h.store.ListAgentRAGActiveVersions(ctx, tenant.ID)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list active versions: "+err.Error())
+	}
+
+	items := make([]map[string]interface{}, 0, len(active))
+	for _, a := range active {
+		items = append(items, map[string]interface{}{
+			"audience_type": a.AudienceType,
+			"file_type":     a.FileType,
+			"version":       a.Version,
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"tenantId": tenant.ID,
+		"activeVersions": items,
+	})
+}
+
+// HandleListIndexedVersions returns the distinct indexed source versions grouped by
+// (audience, fileType) for a tenant.
+// GET /api/v1/agent/:slug/rag/indexed-versions?audience=&file_type=
+// Requires: ADMIN role or api:config permission.
+func (h *Handler) HandleListIndexedVersions(c echo.Context) error {
+	ctx := c.Request().Context()
+	slug := c.Param("slug")
+
+	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	if err != nil || tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermAPIConfig) {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin role or api:config permission required")
+	}
+
+	audiences := []string{"internal", "external"}
+	fileTypes := []string{"kb", "policy"}
+	if a := c.QueryParam("audience"); a != "" {
+		audiences = []string{a}
+	}
+	if ft := c.QueryParam("file_type"); ft != "" {
+		fileTypes = []string{ft}
+	}
+
+	groups := make([]map[string]interface{}, 0)
+	for _, audience := range audiences {
+		for _, fileType := range fileTypes {
+			versions, lerr := h.service.vectorDB.ListIndexedVersions(ctx, tenant.ID, audience, fileType)
+			if lerr != nil {
+				slog.Warn("failed to list indexed versions", "audience", audience, "fileType", fileType, "error", lerr)
+				continue
+			}
+			groups = append(groups, map[string]interface{}{
+				"audience_type": audience,
+				"file_type":     fileType,
+				"versions":      versions,
+			})
+		}
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"tenantId": tenant.ID,
+		"groups":   groups,
 	})
 }
 

@@ -716,6 +716,8 @@ CREATE TABLE agent_reindex_checkpoints (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant_id INTEGER NOT NULL,
     audience TEXT NOT NULL,
+    file_type TEXT,
+    version INTEGER,
     total_chunks INTEGER NOT NULL,
     processed_chunks INTEGER NOT NULL DEFAULT 0,
     current_batch INTEGER NOT NULL DEFAULT 0,
@@ -732,7 +734,21 @@ CREATE TABLE agent_reindex_checkpoints (
 );
 
 CREATE UNIQUE INDEX idx_reindex_checkpoint_tenant_audience
-ON agent_reindex_checkpoints(tenant_id, audience);
+ON agent_reindex_checkpoints(tenant_id, audience, file_type, version);
+
+-- agent_rag_active_versions (versioned RAG index active pointer)
+CREATE TABLE agent_rag_active_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    audience_type TEXT NOT NULL,
+    file_type TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES agent_tenants(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX idx_rag_active_version_lookup
+ON agent_rag_active_versions(tenant_id, audience_type, file_type);
 
 -- ============================================================================
 -- AGENT OBSERVATIONS TABLE (migration 24, enhanced in migration 26, 27)

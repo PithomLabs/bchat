@@ -178,6 +178,7 @@
     "rebuild-index-success": "Index rebuilt successfully ({{chunks}} chunks indexed)",
     "rebuild-index-failed": "Failed to rebuild index",
     "rebuild-index-started": "Reindexing started",
+    "rebuild-index-hint": "Uploading KB/Policy no longer auto-reindexes. Run a manual Rebuild Index here to make a new version searchable.",
     "qa-pairs-title": "Q&A Pairs Testing",
     "qa-pairs-desc": "Generate question-answer pairs from KB to test embedding quality and retrieval accuracy.",
     "generate-qa": "Generate Pairs",

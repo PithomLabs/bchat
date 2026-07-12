@@ -233,6 +233,7 @@ export interface RAGSearchResult {
   content_preview: string;
   content_type: string;
   audience_type: string;
+  source_version?: number;
   matched_keywords: string[];
   keyword_match_ratio: number;
 }
@@ -240,6 +241,8 @@ export interface RAGSearchResult {
 export interface RAGSearchResponse {
   query: string;
   audience_type: string;
+  file_type?: string;
+  source_version?: number;
   top_k: number;
   latency_ms: number;
   total_results: number;
@@ -1072,13 +1075,18 @@ const agentAdminStore = (() => {
     slug: string,
     query: string,
     audienceType: string = "internal",
-    topK: number = 5
+    topK: number = 5,
+    fileType?: string,
+    sourceVersion?: number
   ): Promise<{ success: boolean; error?: string }> => {
     state.setPartial({ isSearchingRAG: true, ragSearchResults: null });
     try {
+      const body: Record<string, unknown> = { query, audience_type: audienceType, top_k: topK };
+      if (fileType) body.file_type = fileType;
+      if (typeof sourceVersion === "number") body.source_version = sourceVersion;
       const response = await axios.post<RAGSearchResponse>(
         `/api/v1/agent/${slug}/rag/search`,
-        { query, audience_type: audienceType, top_k: topK }
+        body
       );
       runInAction(() => {
         state.ragSearchResults = response.data;

@@ -37,6 +37,8 @@ const RagStats = observer(() => {
   const [useHybrid, setUseHybrid] = useState<boolean>(true);
   const [vectorWeight, setVectorWeight] = useState<number>(0.7);
   const [textWeight, setTextWeight] = useState<number>(0.3);
+  const [searchFileType, setSearchFileType] = useState<string>("");
+  const [searchVersion, setSearchVersion] = useState<string>("");
 
   const { ragStats, selectedTenantDetails, searchResults, isLoading, isLoadingDetails, isSearching, error } = ragStatsStore.state;
 
@@ -89,12 +91,14 @@ const RagStats = observer(() => {
     const params: SearchParams = {
       tenantId: searchTenantId,
       audienceType: searchAudience,
+      fileType: searchFileType || undefined,
       query: searchQuery.trim(),
       topK: searchTopK,
       minScore: searchMinScore,
       useHybridSearch: useHybrid,
       vectorWeight: vectorWeight,
       textWeight: textWeight,
+      sourceVersion: searchVersion.trim() === "" ? undefined : Number(searchVersion),
     };
 
     await ragStatsStore.testSearch(params);
@@ -353,6 +357,29 @@ const RagStats = observer(() => {
                   </Button>
                 </div>
 
+                {/* Versioned search controls */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                  <FormControl size="sm">
+                    <FormLabel>File Type</FormLabel>
+                    <Select
+                      value={searchFileType}
+                      onChange={(_, value) => setSearchFileType((value as string) || "")}
+                    >
+                      <Option value="">All files</Option>
+                      <Option value="kb">KB</Option>
+                      <Option value="policy">Policy</Option>
+                    </Select>
+                  </FormControl>
+                  <FormControl size="sm">
+                    <FormLabel>Source Version (blank = active)</FormLabel>
+                    <Input
+                      value={searchVersion}
+                      onChange={(e) => setSearchVersion(e.target.value)}
+                      placeholder="e.g. 3"
+                    />
+                  </FormControl>
+                </div>
+
                 {/* Advanced Options */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-3 bg-gray-50 dark:bg-gray-900 rounded">
                   <div className="flex items-center gap-2">
@@ -425,6 +452,11 @@ const RagStats = observer(() => {
                               <span className={cn("px-2 py-0.5 rounded text-xs font-medium", CONTENT_TYPE_COLORS[result.chunk.contentType] || "bg-gray-100 text-gray-800")}>
                                 {result.chunk.contentType}
                               </span>
+                              {typeof result.chunk.sourceVersion === "number" && (
+                                <span className="px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">
+                                  v{result.chunk.sourceVersion}
+                                </span>
+                              )}
                               <span className="font-medium text-sm">{result.chunk.title}</span>
                             </div>
                             <div className="flex items-center gap-2 text-xs text-gray-500">

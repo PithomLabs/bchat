@@ -41,6 +41,7 @@ export interface ChunkInfo {
   id: string;
   contentType: string;
   audienceType: string;
+  sourceVersion?: number;
   title: string;
   content: string;
   code?: string;
@@ -67,12 +68,14 @@ export interface SearchResponse {
 export interface SearchParams {
   tenantId: number;
   audienceType: string;
+  fileType?: string;
   query: string;
   topK: number;
   minScore: number;
   useHybridSearch: boolean;
   vectorWeight: number;
   textWeight: number;
+  sourceVersion?: number;
 }
 
 class LocalState {

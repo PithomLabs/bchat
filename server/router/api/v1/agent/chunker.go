@@ -3,7 +3,9 @@ package agent
 import (
 	"fmt"
 	"log/slog"
+	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -75,12 +77,25 @@ const (
 
 // GetMaxChunkTokens returns the maximum chunk size based on embedding provider.
 // With the real tokenizer (cl100k_base), counts are exact, so we target the
-// embedding quality sweet spot (512 tokens) rather than compensating for
-// heuristic undercount.
+// embedding quality sweet spot rather than compensating for heuristic undercount.
+//
+// Larger chunks reduce the total chunk count (and therefore the number of
+// embedding API calls) during reindex — the dominant reindex cost for large
+// KBs. openrouter now defaults to 1024 tokens (balanced: fewer calls with only
+// a slight retrieval-precision tradeoff); text-embedding-3-small accepts up to
+// 8191 tokens/input so 1024 is well within bounds.
+//
+// RAG_MAX_CHUNK_TOKENS, if set (100–8000), overrides the per-provider default
+// and lets each deployment tune chunk size without code changes.
 func GetMaxChunkTokens(embeddingProvider string) int {
+	if v := os.Getenv("RAG_MAX_CHUNK_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 100 && n <= 8000 {
+			return n
+		}
+	}
 	switch embeddingProvider {
 	case "openrouter":
-		return 512 // Sweet spot for embedding quality; exact counting via cl100k_base
+		return 1024 // Balanced: fewer chunks/API calls, slight precision tradeoff
 	case "local":
 		return 150 // 512 token limit with aggressive subword tokenization
 	case "mock":

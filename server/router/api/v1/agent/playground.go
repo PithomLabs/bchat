@@ -676,7 +676,7 @@ func (h *Handler) buildPlaygroundRAGTrace(ctx context.Context, tenantID int32, q
 		return trace
 	}
 
-	result, err := h.service.SearchVectorDB(ctx, tenantID, "external", query, 3)
+	result, err := h.service.SearchVectorDB(ctx, tenantID, "external", "", query, 3, nil)
 	if err != nil {
 		trace.Error = "RAG search unavailable for this turn"
 		slog.Warn("playground RAG trace failed", "tenant_id", tenantID, "error", err)

@@ -112,6 +112,8 @@ const AgentAdmin = observer(() => {
   const [showSearchExplorer, setShowSearchExplorer] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchTopK, setSearchTopK] = useState(5);
+  const [searchFileType, setSearchFileType] = useState<"" | "kb" | "policy">("");
+  const [searchVersion, setSearchVersion] = useState<string>(""); // "" = active/latest
 
   // Transcripts state
   const [showTranscripts, setShowTranscripts] = useState(false);
@@ -133,7 +135,7 @@ const AgentAdmin = observer(() => {
   // Domain allowlisting state
   const [domainAllowlistEnabled, setDomainAllowlistEnabled] = useState(false);
   const [allowedDomainsText, setAllowedDomainsText] = useState("");
-  const [reindexAudience, setReindexAudience] = useState<string>("all");
+  const [reindexAudience, setReindexAudience] = useState<string>("internal");
   const [isSavingDomains, setIsSavingDomains] = useState(false);
 
   const {
@@ -355,11 +357,14 @@ const AgentAdmin = observer(() => {
   // RAG Search Explorer handler
   const handleRAGSearch = async () => {
     if (!selectedTenant || !searchQuery.trim()) return;
+    const versionNum = searchVersion.trim() === "" ? undefined : Number(searchVersion);
     const result = await agentAdminStore.searchRAG(
       selectedTenant.tenant.slug,
       searchQuery.trim(),
       "internal",
       searchTopK,
+      searchFileType || undefined,
+      Number.isNaN(versionNum) ? undefined : versionNum,
     );
     if (result && !result.success) {
       toast.error(result.error || "Search failed");
@@ -1197,6 +1202,9 @@ const AgentAdmin = observer(() => {
                       <p className="text-sm text-blue-600 dark:text-blue-400">
                         {t("agent-admin.rebuild-index-desc")}
                       </p>
+                      <p className="text-xs text-blue-500 dark:text-blue-400/80 mt-1">
+                        {t("agent-admin.rebuild-index-hint")}
+                      </p>
                     </div>
                     <div className="flex items-center gap-2">
                       <Select
@@ -1205,7 +1213,6 @@ const AgentAdmin = observer(() => {
                         onChange={(_, v) => v && setReindexAudience(v)}
                         sx={{ width: 120 }}
                       >
-                        <Option value="all">All</Option>
                         <Option value="internal">Internal</Option>
                         <Option value="external">External</Option>
                       </Select>
@@ -1744,6 +1751,28 @@ const AgentAdmin = observer(() => {
                       </Button>
                     </div>
 
+                    {/* Version + File Type filters */}
+                    <div className="flex flex-wrap gap-2 items-center">
+                      <Select
+                        size="sm"
+                        placeholder="File type"
+                        value={searchFileType}
+                        onChange={(_, v) => setSearchFileType((v as "" | "kb" | "policy") || "")}
+                        sx={{ minWidth: 120 }}
+                      >
+                        <Option value="">All files</Option>
+                        <Option value="kb">KB</Option>
+                        <Option value="policy">Policy</Option>
+                      </Select>
+                      <Input
+                        size="sm"
+                        placeholder="Version (blank = active)"
+                        value={searchVersion}
+                        onChange={(e) => setSearchVersion(e.target.value)}
+                        sx={{ minWidth: 160 }}
+                      />
+                    </div>
+
                     {/* Search Results */}
                     {ragSearchResults && (
                       <div className="space-y-3">
@@ -1830,6 +1859,11 @@ const AgentAdmin = observer(() => {
                               <Chip size="sm" variant="outlined">
                                 {result.content_type}
                               </Chip>
+                              {typeof result.source_version === "number" && (
+                                <Chip size="sm" variant="soft" color="primary">
+                                  v{result.source_version}
+                                </Chip>
+                              )}
                             </div>
                           </div>
                         ))}
