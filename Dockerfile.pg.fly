@@ -24,7 +24,7 @@ COPY widget/ .
 RUN npm run build
 
 # Stage 2: Build backend with LanceDB CGO support
-FROM golang:1.25 AS backend
+FROM golang:1.26 AS backend
 WORKDIR /backend-build
 
 # Install build dependencies for CGO
@@ -69,7 +69,7 @@ RUN apt-get update && apt-get install -y \
 
 # Install supercronic for webhook event polling
 ARG SUPERCRONIC_URL=https://github.com/aptible/supercronic/releases/download/v0.2.33/supercronic-linux-amd64
-ARG SUPERCRONIC_SHA1SUM=c430cce812b1b47863a2f2506571a2f3c1357845
+ARG SUPERCRONIC_SHA1SUM=71b0d58cc53f6bd72cf2f293e09e294b79c666d8
 RUN curl -fsSL "$SUPERCRONIC_URL" -o /usr/local/bin/supercronic \
     && echo "$SUPERCRONIC_SHA1SUM /usr/local/bin/supercronic" | sha1sum -c - \
     && chmod +x /usr/local/bin/supercronic
@@ -112,8 +112,8 @@ ENV LANCEDB_S3_REGION="auto"
 ENV LANCEDB_S3_FORCE_PATH_STYLE="false"
 ENV EMBEDDING_PROVIDER="openrouter"
 ENV EMBEDDING_MODEL="openai/text-embedding-3-small"
-ENV EMBEDDING_BATCH_SIZE="10"
-ENV EMBEDDING_TIMEOUT="10m"
+ENV EMBEDDING_BATCH_SIZE="200"
+ENV EMBEDDING_TIMEOUT="180s"
 
 # LLM models
 ENV LLM_MODEL="poolside/laguna-m.1:free"
@@ -122,6 +122,7 @@ ENV LLM_MODEL_REASONING="nvidia/nemotron-3-ultra-550b-a55b:free"
 # Optional LLM verifier (disabled by default)
 ENV LLM_VERIFIER_ENABLED="false"
 
+ENV RAG_MAX_CHUNK_TOKENS="4096"
 EXPOSE 5230
 
 ENTRYPOINT ["./entrypoint.sh", "./memos"]

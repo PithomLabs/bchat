@@ -22,7 +22,7 @@ COPY widget/ .
 RUN npm run build
 
 # Stage 2: Build backend with LanceDB CGO support
-FROM golang:1.25 AS backend
+FROM golang:1.26 AS backend
 WORKDIR /backend-build
 
 # Install build dependencies for CGO

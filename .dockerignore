@@ -5,8 +5,10 @@
 bin.zip
 scratch/
 build/
+!build/crontab
 docs/
 bugs/
+data/
 **/lancedb-go-main
 **/mastra-main
 

@@ -60,7 +60,8 @@ type ResolvedPermission struct {
 // permissions (source_template_id IS NULL). Auto-increment template IDs start at 1.
 const ExplicitGrantSourceTemplate = int32(0)
 
-// ContainsPermission checks if a permission list contains the required permission
+// ContainsPermission checks if a permission list contains the required permission.
+// Deprecated: prefer containsResolvedPermission for new code.
 func ContainsPermission(permissions []string, required string) bool {
 	for _, p := range permissions {
 		if p == PermWildcard || p == required {
@@ -72,7 +73,8 @@ func ContainsPermission(permissions []string, required string) bool {
 				return true
 			}
 		}
-		if p == PermTenantAdmin && strings.HasPrefix(required, "tenant:") {
+		// tenant:admin grants all permissions for this tenant (superset of tenant:*, chat:*, files:*, api:*).
+		if p == PermTenantAdmin {
 			return true
 		}
 	}
@@ -90,7 +92,8 @@ func containsResolvedPermission(permissions []ResolvedPermission, required strin
 				return true
 			}
 		}
-		if p.Permission == PermTenantAdmin && strings.HasPrefix(required, "tenant:") {
+		// tenant:admin grants all permissions for this tenant (superset of tenant:*, chat:*, files:*, api:*).
+		if p.Permission == PermTenantAdmin {
 			return true
 		}
 	}

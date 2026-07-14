@@ -532,6 +532,11 @@ class LocalState {
   reindexStatus: ReindexStatus | null = null;
   isPollingReindex: boolean = false;
 
+  // RAG Version Rollback
+  activeVersions: Array<{ audience_type: string; file_type: string; version: number }> = [];
+  indexedVersions: Array<{ audience_type: string; file_type: string; versions: number[] }> = [];
+  isLoadingVersions: boolean = false;
+
   constructor() {
     makeAutoObservable(this);
   }
@@ -1691,6 +1696,66 @@ const agentAdminStore = (() => {
     );
   };
 
+  // ============================================================================
+  // RAG VERSION ROLLBACK
+  // ============================================================================
+
+  const fetchActiveVersions = async (slug: string) => {
+    state.setPartial({ isLoadingVersions: true });
+    try {
+      const response = await axios.get<{ activeVersions: Array<{ audience_type: string; file_type: string; version: number }> }>(
+        `/api/v1/agent/${slug}/rag/active-versions`
+      );
+      runInAction(() => {
+        state.activeVersions = response.data.activeVersions || [];
+        state.isLoadingVersions = false;
+      });
+    } catch (error: any) {
+      runInAction(() => {
+        state.error = "Failed to fetch active versions";
+        state.isLoadingVersions = false;
+      });
+    }
+  };
+
+  const fetchIndexedVersions = async (slug: string) => {
+    state.setPartial({ isLoadingVersions: true });
+    try {
+      const response = await axios.get<{ groups: Array<{ audience_type: string; file_type: string; versions: number[] }> }>(
+        `/api/v1/agent/${slug}/rag/indexed-versions`
+      );
+      runInAction(() => {
+        state.indexedVersions = response.data.groups || [];
+        state.isLoadingVersions = false;
+      });
+    } catch (error: any) {
+      runInAction(() => {
+        state.error = "Failed to fetch indexed versions";
+        state.isLoadingVersions = false;
+      });
+    }
+  };
+
+  const setActiveVersion = async (slug: string, audienceType: string, fileType: string, version: number): Promise<boolean> => {
+    state.setPartial({ isSaving: true, error: null });
+    try {
+      await axios.post(`/api/v1/agent/${slug}/rag/active-version`, {
+        audience_type: audienceType,
+        file_type: fileType,
+        version: version,
+      });
+      runInAction(() => { state.isSaving = false; });
+      await fetchActiveVersions(slug);
+      return true;
+    } catch (error: any) {
+      runInAction(() => {
+        state.isSaving = false;
+        state.error = error.response?.data?.message || "Failed to set active version";
+      });
+      return false;
+    }
+  };
+
   return {
     state,
     fetchTenants,
@@ -1768,6 +1833,10 @@ const agentAdminStore = (() => {
     fetchEvents,
     fetchTenantSettings,
     updateTenantSettings,
+    // RAG Version Rollback
+    fetchActiveVersions,
+    fetchIndexedVersions,
+    setActiveVersion,
   };
 })();
 

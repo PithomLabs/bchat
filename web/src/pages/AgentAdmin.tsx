@@ -137,6 +137,7 @@ const AgentAdmin = observer(() => {
   const [allowedDomainsText, setAllowedDomainsText] = useState("");
   const [reindexAudience, setReindexAudience] = useState<string>("internal");
   const [isSavingDomains, setIsSavingDomains] = useState(false);
+  const [showRollbackPanel, setShowRollbackPanel] = useState(false);
 
   const {
     tenants,
@@ -163,6 +164,9 @@ const AgentAdmin = observer(() => {
   leads,
   isLoadingLeads,
   tenantSettings,
+  activeVersions,
+  indexedVersions,
+  isLoadingVersions,
   } = agentAdminStore.state;
 
   // Get current user and determine if they're an admin
@@ -181,6 +185,7 @@ const AgentAdmin = observer(() => {
   const canUpload = isAdmin || agentAdminStore.hasPermission("files:upload");
   const canRestore = isAdmin || agentAdminStore.hasPermission("files:restore");
   const canConfigApi = isAdmin || agentAdminStore.hasPermission("api:config");
+  const canRollbackVersion = isAdmin || canConfigApi || agentAdminStore.hasPermission("tenant:admin");
   const canManagePermissions =
     isAdmin || agentAdminStore.hasPermission("tenant:admin");
 
@@ -277,6 +282,14 @@ const AgentAdmin = observer(() => {
       setAllowedDomainsText(domains.join("\n"));
     }
   }, [selectedTenant?.tenant.slug]);
+
+  // Fetch active/indexed versions when rollback panel is opened
+  useEffect(() => {
+    if (showRollbackPanel && selectedTenant) {
+      agentAdminStore.fetchActiveVersions(selectedTenant.tenant.slug);
+      agentAdminStore.fetchIndexedVersions(selectedTenant.tenant.slug);
+    }
+  }, [showRollbackPanel, selectedTenant?.tenant.slug]);
 
   // Safety timeout: reset isRebuilding after 60s if no status update arrives.
   // Does not cancel the goroutine — only resets the UI spinner.
@@ -1331,6 +1344,128 @@ const AgentAdmin = observer(() => {
                     </div>
                   )}
                 </div>
+              </div>
+            )}
+
+            {/* RAG Version Rollback - Admin, api:config, or tenant:admin permission */}
+            {canRollbackVersion && (
+              <div className="bg-gray-50 dark:bg-zinc-800 rounded-xl border border-gray-200 dark:border-zinc-700 p-4">
+                <div
+                  className="flex items-center gap-2 mb-2 cursor-pointer select-none"
+                  onClick={() => setShowRollbackPanel(!showRollbackPanel)}
+                >
+                  <HistoryIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                  <div className="flex-1">
+                    <h3 className="font-medium text-gray-800 dark:text-gray-200">
+                      {t("agent-admin.version-rollback-title")}
+                    </h3>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      {t("agent-admin.version-rollback-desc")}
+                    </p>
+                  </div>
+                  {showRollbackPanel ? (
+                    <ChevronUpIcon className="w-4 h-4 text-gray-400" />
+                  ) : (
+                    <ChevronDownIcon className="w-4 h-4 text-gray-400" />
+                  )}
+                </div>
+
+                {showRollbackPanel && (
+                  <div className="mt-4 space-y-4">
+                    {isLoadingVersions && (
+                      <div className="flex items-center gap-2 text-xs text-blue-500 dark:text-blue-400 py-2">
+                        <RefreshCwIcon className="w-3 h-3 animate-spin" />
+                        <span>{t("agent-admin.loading-versions")}</span>
+                      </div>
+                    )}
+                    {/* Active Versions */}
+                    <div className="bg-white dark:bg-zinc-700 rounded-lg p-3 border border-gray-200 dark:border-zinc-600">
+                      <h4 className="text-xs font-medium text-gray-600 dark:text-gray-300 mb-2">
+                        {t("agent-admin.active-versions")}
+                      </h4>
+                      {activeVersions.length > 0 ? (
+                        <div className="space-y-2">
+                          {activeVersions.map((av) => (
+                            <div key={`${av.audience_type}-${av.file_type}`} className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300">
+                                  {av.audience_type}
+                                </span>
+                                <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300">
+                                  {av.file_type}
+                                </span>
+                              </div>
+                              <span className="text-sm font-mono text-gray-700 dark:text-gray-200">
+                                v{av.version}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-gray-400 dark:text-gray-500">
+                          {t("agent-admin.no-active-versions")}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Indexed Versions per Audience/File Type */}
+                    <div className="bg-white dark:bg-zinc-700 rounded-lg p-3 border border-gray-200 dark:border-zinc-600">
+                      <h4 className="text-xs font-medium text-gray-600 dark:text-gray-300 mb-2">
+                        {t("agent-admin.indexed-versions")}
+                      </h4>
+                      {indexedVersions.length > 0 ? (
+                        <div className="space-y-3">
+                          {indexedVersions.map((group) => {
+                            const activeVersion = activeVersions.find(
+                              (av) => av.audience_type === group.audience_type && av.file_type === group.file_type,
+                            );
+                            return (
+                              <div key={`${group.audience_type}-${group.file_type}`} className="space-y-1">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300">
+                                    {group.audience_type}
+                                  </span>
+                                  <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300">
+                                    {group.file_type}
+                                  </span>
+                                </div>
+                                <div className="flex flex-wrap gap-1">
+                                  {group.versions.map((v) => (
+                                    <button
+                                      key={v}
+                                      disabled={v === activeVersion?.version}
+                                      onClick={async () => {
+                                        await agentAdminStore.setActiveVersion(
+                                          selectedTenant!.tenant.slug,
+                                          group.audience_type,
+                                          group.file_type,
+                                          v,
+                                        );
+                                      }}
+                                      className={cn(
+                                        "text-xs px-2 py-1 rounded border font-mono transition-colors",
+                                        v === activeVersion?.version
+                                          ? "bg-green-100 dark:bg-green-900/40 border-green-300 dark:border-green-700 text-green-700 dark:text-green-300 cursor-default"
+                                          : "bg-white dark:bg-zinc-800 border-gray-200 dark:border-zinc-600 text-gray-600 dark:text-gray-300 hover:border-blue-400 hover:text-blue-600 dark:hover:border-blue-500 dark:hover:text-blue-400",
+                                      )}
+                                    >
+                                      v{v}
+                                      {v === activeVersion?.version && " ✓"}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-gray-400 dark:text-gray-500">
+                          {t("agent-admin.no-indexed-versions")}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

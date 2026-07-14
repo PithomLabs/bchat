@@ -15,8 +15,8 @@ kill_timeout = "30s"
   RAG_PIPELINE_ENABLED = 'true'
   EMBEDDING_PROVIDER = 'openrouter'
   EMBEDDING_MODEL = 'openai/text-embedding-3-small'
-  EMBEDDING_BATCH_SIZE = '10'
-  EMBEDDING_TIMEOUT = '10m'
+  EMBEDDING_BATCH_SIZE = "200"
+  EMBEDDING_TIMEOUT = "180s"
   LANCEDB_STORAGE_PROVIDER = 's3'
   LANCEDB_S3_FORCE_PATH_STYLE = 'false'
   LLM_MODEL = "poolside/laguna-m.1:free"
@@ -28,6 +28,7 @@ kill_timeout = "30s"
 
 # NO [[mounts]] section — Neon replaces the SQLite volume
 
+  RAG_MAX_CHUNK_TOKENS = "4096"
 [http_service]
   internal_port = 5230
   force_https = true

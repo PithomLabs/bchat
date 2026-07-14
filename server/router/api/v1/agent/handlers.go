@@ -1171,9 +1171,9 @@ func (h *Handler) HandleReindexTenant(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
 
-	// Check admin role OR api:config permission
-	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermAPIConfig) {
-		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or api:config permission")
+	// Check admin role OR api:config OR tenant:admin permission
+	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermAPIConfig) && !h.hasPermission(c, tenant.ID, PermTenantAdmin) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin, api:config, or tenant:admin")
 	}
 
 	// Get audience type from query (default to all) — resolved before skip checks
@@ -6001,8 +6001,9 @@ func (h *Handler) HandleSetActiveVersion(c echo.Context) error {
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
-	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermAPIConfig) {
-		return echo.NewHTTPError(http.StatusForbidden, "Admin role or api:config permission required")
+	// Check admin role OR api:config OR tenant:admin permission
+	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermAPIConfig) && !h.hasPermission(c, tenant.ID, PermTenantAdmin) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin, api:config, or tenant:admin")
 	}
 
 	var req struct {
@@ -6022,6 +6023,11 @@ func (h *Handler) HandleSetActiveVersion(c echo.Context) error {
 	if req.Version <= 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "version must be a positive integer")
 	}
+
+	// Serialize rollback with reindex per tenant to prevent pointer overwrite.
+	mu := h.service.getTenantMutex(tenant.ID)
+	mu.Lock()
+	defer mu.Unlock()
 
 	// Ensure the requested version is actually indexed.
 	indexed, lerr := h.service.vectorDB.ListIndexedVersions(ctx, tenant.ID, req.AudienceType, req.FileType)
@@ -6068,8 +6074,9 @@ func (h *Handler) HandleListActiveVersions(c echo.Context) error {
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
-	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermAPIConfig) {
-		return echo.NewHTTPError(http.StatusForbidden, "Admin role or api:config permission required")
+	// Check admin role OR api:config OR tenant:admin permission
+	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermAPIConfig) && !h.hasPermission(c, tenant.ID, PermTenantAdmin) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin, api:config, or tenant:admin")
 	}
 
 	active, err := h.store.ListAgentRAGActiveVersions(ctx, tenant.ID)
@@ -6104,8 +6111,9 @@ func (h *Handler) HandleListIndexedVersions(c echo.Context) error {
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
-	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermAPIConfig) {
-		return echo.NewHTTPError(http.StatusForbidden, "Admin role or api:config permission required")
+	// Check admin role OR api:config OR tenant:admin permission
+	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermAPIConfig) && !h.hasPermission(c, tenant.ID, PermTenantAdmin) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin, api:config, or tenant:admin")
 	}
 
 	audiences := []string{"internal", "external"}

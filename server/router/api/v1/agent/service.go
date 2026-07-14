@@ -59,7 +59,8 @@ type Service struct {
 	vectorDB            VectorDB
 	vectorDBConfig      *VectorDBConfig
 	chunker             *Chunker
-	vectorDBMu          sync.RWMutex // Protects vectorDB access
+	vectorDBMu          sync.RWMutex  // Protects vectorDB access
+	reindexMu           sync.Map      // per-tenant mutex for reindex/rollback serialization
 	observerBuffer      *ObserverBuffer
 }
 
@@ -184,6 +185,15 @@ func NewService(s *store.Store, p *profile.Profile) *Service {
 	return svc
 }
 
+// getTenantMutex returns a per-tenant mutex for serializing reindex and rollback
+// operations. Different tenants can proceed in parallel; operations on the same
+// tenant are serialized to prevent the rollback pointer from being overwritten
+// by a concurrent reindex goroutine.
+func (s *Service) getTenantMutex(tenantID int32) *sync.Mutex {
+	val, _ := s.reindexMu.LoadOrStore(tenantID, &sync.Mutex{})
+	return val.(*sync.Mutex)
+}
+
 // GetVectorDB returns the current VectorDB instance.
 // Thread-safe accessor for the VectorDB.
 func (s *Service) GetVectorDB() VectorDB {
@@ -296,6 +306,11 @@ func (s *Service) reindexFileVersion(ctx context.Context, tenantID int32, audien
 	if content == "" {
 		return 0, nil
 	}
+
+	// Serialize reindex and rollback per tenant to prevent rollback pointer overwrite.
+	mu := s.getTenantMutex(tenantID)
+	mu.Lock()
+	defer mu.Unlock()
 	chunks := s.chunker.ChunkMarkdownContent(content, tenantID, audience, fileType, version, maxChunkTokens)
 	if len(chunks) == 0 {
 		return 0, nil
