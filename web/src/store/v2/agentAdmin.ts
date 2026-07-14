@@ -258,7 +258,10 @@ export interface ReindexStatus {
   error?: string;
   last_message?: string;
   can_resume: boolean;
+  retrieval_mode?: string;
 }
+
+export type SkipReason = "long_context" | "no_source_files" | "pipeline_disabled";
 
 // Chat Transcript types
 export interface TranscriptMessage {
@@ -960,11 +963,11 @@ const agentAdminStore = (() => {
     }
   };
 
-  const reindexTenant = async (slug: string, audienceType: string = "all"): Promise<{ success: boolean; chunks?: number; error?: string }> => {
+  const reindexTenant = async (slug: string, audienceType: string = "all"): Promise<{ success: boolean; chunks?: number; skip_reason?: SkipReason; error?: string }> => {
     state.setPartial({ isSaving: true, error: null });
 
     try {
-      const response = await axios.post<{ success: boolean; chunks: number; message: string }>(
+      const response = await axios.post<{ success: boolean; chunks: number; message: string; skip_reason?: SkipReason }>(
         `/api/v1/agent/${slug}/reindex`, null, {
         params: { audience_type: audienceType }
       }
@@ -974,7 +977,7 @@ const agentAdminStore = (() => {
         state.isSaving = false;
       });
 
-      return { success: true, chunks: response.data.chunks };
+      return { success: true, chunks: response.data.chunks, skip_reason: response.data.skip_reason };
     } catch (error: any) {
       runInAction(() => {
         state.isSaving = false;

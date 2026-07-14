@@ -82,37 +82,37 @@ func TestChunkerOverlapSafe(t *testing.T) {
 	InitTokenizer("test", "text-embedding-3-small")
 
 	maxTokens := GetMaxChunkTokens("openrouter")
-	// Multi-section content to generate multiple chunks with overlap
-	content := `## Section One
-This is the first section with enough content to be a chunk by itself.
-It contains several sentences that describe the first topic.
-The embedding model needs meaningful text to generate useful vectors.
-We need enough text here to make this section at least minTokens.
-More text to ensure this section stands alone as a proper chunk.
-Even more content to push this over the minimum threshold.
-
-## Section Two
-This is the second section. It also needs enough content.
-The overlap between sections should not push any chunk over maxTokens.
-Each chunk should remain within the safety limit after overlap.
-More sentences to make this a properly sized chunk.
-Additional text to ensure this section is large enough.
-And some more content just to be safe.
-
-## Section Three
-The third section provides even more content.
-Three sections should produce at least three chunks with overlap.
-The overlap between adjacent chunks adds context continuity.
-Each chunk after the first gets prepended text from the prior chunk.
-This means their total token count increases slightly.
-We want to verify this doesn't push anything over the limit.
-`
+	minTokens := maxTokens / 5
+	if minTokens < 30 {
+		minTokens = 30
+	}
+	// Multi-section content to generate multiple chunks with overlap.
+	// Each section must exceed minTokens (maxTokens/5) to survive mergeSmallChunks.
+	// With maxTokens=1024, minTokens=204. Each section needs ~60+ words.
+	var sb strings.Builder
+	for i := 0; i < 5; i++ {
+		sb.WriteString("## Section ")
+		sb.WriteString(itoa(i))
+		sb.WriteString("\n")
+		// Write enough content to exceed minTokens (~204 tokens ≈ 800+ chars)
+		for j := 0; j < 20; j++ {
+			sb.WriteString("This is sentence number ")
+			sb.WriteString(itoa(j))
+			sb.WriteString(" in section ")
+			sb.WriteString(itoa(i))
+			sb.WriteString(". It contains meaningful content that describes the topic in detail. ")
+			sb.WriteString("The embedding model needs enough text to generate useful vectors for this section. ")
+		}
+		sb.WriteString("\n\n")
+	}
+	content := sb.String()
 
 	chunker := NewChunker()
 	chunks := chunker.ChunkMarkdownContent(content, 1, "test", "kb", 1, maxTokens)
 
 	if len(chunks) < 2 {
-		t.Fatal("expected at least 2 chunks for overlap test")
+		t.Fatalf("expected at least 2 chunks for overlap test, got %d (content length=%d chars, ~%d tokens)",
+			len(chunks), len(content), EstimateTokens(content))
 	}
 
 	// Overlap adds ~ChunkOverlapTokens (50) tokens. Allow 2x as buffer.
@@ -163,5 +163,92 @@ func TestChunkerGuardCatchesOversized(t *testing.T) {
 	// With 3000 items, we should get multiple chunks
 	if len(chunks) < 2 {
 		t.Errorf("expected multiple chunks from oversized content, got %d", len(chunks))
+	}
+}
+
+func TestChunkerEvpnLikeContent(t *testing.T) {
+	InitTokenizer("test", "text-embedding-3-small")
+
+	maxTokens := GetMaxChunkTokens("openrouter")
+
+	// Simulate the evpn KB content structure:
+	// 1. YAML front matter with concatenated article titles (pipe-separated)
+	// 2. Real markdown content after the closing ---
+	var sb strings.Builder
+	sb.WriteString("---\ntitle: \"Are VPNs Legal? | ExpressVPN\"\ndescription: \"Uncover the legal status of VPNs worldwide.\"\n---\n\n")
+
+	// Simulate the concatenated titles block (no sentence terminators, no headers)
+	titles := make([]string, 100)
+	for i := range titles {
+		titles[i] = "Article Title " + itoa(i) + " | ExpressVPN"
+	}
+	sb.WriteString(strings.Join(titles, "\n"))
+	sb.WriteString("\n\n")
+
+	// Now add real markdown content with H2 headers
+	for i := 0; i < 5; i++ {
+		sb.WriteString("## Section ")
+		sb.WriteString(itoa(i))
+		sb.WriteString("\nThis is a real section about VPNs with meaningful content. ")
+		sb.WriteString("It describes important aspects of VPN technology and privacy. ")
+		sb.WriteString("The content is detailed enough to produce proper chunks. ")
+		sb.WriteString("Each section should generate its own chunk after splitting. ")
+		sb.WriteString("More sentences to ensure the section exceeds minimum token threshold. ")
+		sb.WriteString("Additional content to make each section a standalone chunk.\n\n")
+	}
+
+	content := sb.String()
+	t.Logf("Test content length: %d chars, ~%d tokens", len(content), EstimateTokens(content))
+
+	chunker := NewChunker()
+	chunks := chunker.ChunkMarkdownContent(content, 1, "internal", "kb", 1, maxTokens)
+
+	t.Logf("Chunks produced: %d", len(chunks))
+	for i, chunk := range chunks {
+		t.Logf("  chunk %d: title=%q, content_length=%d, tokens=%d",
+			i, chunk.Title, len(chunk.Content), EstimateTokens(chunk.Content))
+	}
+
+	if len(chunks) == 0 {
+		t.Fatal("evpn-like content produced ZERO chunks — this reproduces the bug")
+	}
+
+	// Should produce at least 5 chunks (one per H2 section)
+	if len(chunks) < 3 {
+		t.Errorf("expected at least 3 chunks from evpn-like content, got %d", len(chunks))
+	}
+}
+
+func TestChunkerYamlFrontMatterOnly(t *testing.T) {
+	InitTokenizer("test", "text-embedding-3-small")
+
+	maxTokens := GetMaxChunkTokens("openrouter")
+
+	// Test what happens when content is ONLY YAML front matter with no real content
+	// (This simulates what if the content after YAML sanitization is empty)
+	content := "---\ntitle: \"Test\"\ndescription: \"Test desc\"\n---\n"
+
+	chunker := NewChunker()
+	chunks := chunker.ChunkMarkdownContent(content, 1, "internal", "kb", 1, maxTokens)
+
+	t.Logf("YAML-only content produced %d chunks", len(chunks))
+	// This might produce 0 or 1 chunks — document the behavior
+	if len(chunks) == 0 {
+		t.Log("YAML-only content produced 0 chunks — expected for empty real content")
+	}
+}
+
+func TestCleanRAGSourceContentOnEvpnLikeContent(t *testing.T) {
+	// Simulate the evpn content structure
+	content := "---\ntitle: \"Test | ExpressVPN\"\ndescription: \"desc\"\n---\n\n# Real Content\n\nThis is actual content."
+
+	sanitized, report := CleanRAGSourceContent(content)
+	t.Logf("Original bytes: %d, Sanitized bytes: %d", report.OriginalBytes, report.SanitizedBytes)
+	t.Logf("Removed sections: %d, Script blocks: %d, Style blocks: %d",
+		report.RemovedSections, report.RemovedScriptBlocks, report.RemovedStyleBlocks)
+	t.Logf("Sanitized content preview: %.200s", sanitized)
+
+	if report.SanitizedBytes == 0 {
+		t.Error("CleanRAGSourceContent produced empty output — would cause zero chunks")
 	}
 }

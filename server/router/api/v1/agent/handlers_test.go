@@ -44,3 +44,18 @@ func TestReindexHTTPErrorMapsSentinelErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestSkipReasonConstants(t *testing.T) {
+	if SkipReasonNone != "" {
+		t.Fatalf("SkipReasonNone = %q, want empty string", SkipReasonNone)
+	}
+	if SkipReasonLongContext != "long_context" {
+		t.Fatalf("SkipReasonLongContext = %q, want %q", SkipReasonLongContext, "long_context")
+	}
+	if SkipReasonNoSourceFiles != "no_source_files" {
+		t.Fatalf("SkipReasonNoSourceFiles = %q, want %q", SkipReasonNoSourceFiles, "no_source_files")
+	}
+	if SkipReasonPipelineDisabled != "pipeline_disabled" {
+		t.Fatalf("SkipReasonPipelineDisabled = %q, want %q", SkipReasonPipelineDisabled, "pipeline_disabled")
+	}
+}

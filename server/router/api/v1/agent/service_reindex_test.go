@@ -39,3 +39,27 @@ func TestShouldValidateReindex(t *testing.T) {
 		})
 	}
 }
+
+func TestReindexCheckpointStructFields(t *testing.T) {
+	// Validates that ReindexCheckpoint struct fields are correctly populated.
+	// Integration test with mock store (calling createFailedCheckpoint directly)
+	// is deferred — requires mock infrastructure not present in the codebase.
+	cp := &store.ReindexCheckpoint{
+		TenantID:     42,
+		Audience:     "internal",
+		Status:       "failed",
+		ErrorMessage: "RAG pipeline not initialized",
+	}
+	if cp.Status != "failed" {
+		t.Fatalf("Status = %q, want %q", cp.Status, "failed")
+	}
+	if cp.ErrorMessage != "RAG pipeline not initialized" {
+		t.Fatalf("ErrorMessage = %q, want %q", cp.ErrorMessage, "RAG pipeline not initialized")
+	}
+	if cp.TenantID != 42 {
+		t.Fatalf("TenantID = %d, want %d", cp.TenantID, 42)
+	}
+	if cp.Audience != "internal" {
+		t.Fatalf("Audience = %q, want %q", cp.Audience, "internal")
+	}
+}

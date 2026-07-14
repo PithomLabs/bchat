@@ -53,6 +53,11 @@ func NewServer(ctx context.Context, profile *profile.Profile, store *store.Store
 	echoServer.HidePort = true
 	echoServer.Use(middleware.Recover())
 
+	// Safety net: write timeout for long-running operations (reindex is the longest at ~30min).
+	// ReadTimeout left at 0 (no limit) because uploads can be large.
+	echoServer.Server.WriteTimeout = 35 * time.Minute
+	echoServer.Server.IdleTimeout = 120 * time.Second
+
 	// C3: Custom error handler for production — return generic messages, log details server-side
 	if !profile.IsDev() {
 		echoServer.HTTPErrorHandler = func(err error, c echo.Context) {

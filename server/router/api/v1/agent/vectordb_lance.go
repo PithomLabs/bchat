@@ -495,9 +495,6 @@ func (db *LanceVectorDB) InsertWithCheckpoint(ctx context.Context, chunks []Docu
 		return nil
 	}
 
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
 	// Default options
 	if opts.MaxRetries == 0 {
 		opts.MaxRetries = 3
@@ -506,7 +503,7 @@ func (db *LanceVectorDB) InsertWithCheckpoint(ctx context.Context, chunks []Docu
 		opts.RetryDelay = 5 * time.Second
 	}
 
-	// Batch size configurable via EMBEDDING_BATCH_SIZE env var (default: 25, max: 200)
+	// Batch size configurable via EMBEDDING_BATCH_SIZE env var (default: 200, min: 10, max: 200)
 	batchSize := GetEmbeddingBatchSize()
 	totalChunks := len(chunks)
 	totalBatches := (totalChunks + batchSize - 1) / batchSize
@@ -521,6 +518,17 @@ func (db *LanceVectorDB) InsertWithCheckpoint(ctx context.Context, chunks []Docu
 
 	// NOTE: Dimension mismatch check removed - with dimension-based table naming,
 	// each dimension gets its own table (e.g., kb_documents_1536, kb_documents_384).
+
+	// Progress-aware budgeting: track throughput and abort if projected total exceeds cap.
+	// MaxReindexDuration is WriteTimeout(35m) - 5m margin to avoid split-brain.
+	const (
+		MaxReindexDuration     = 30 * time.Minute
+		MinSampleBatches       = 3
+		MinSampleElapsed       = 2 * time.Minute
+		MaxConsecutiveFailures = 3
+	)
+	startTime := time.Now()
+	consecutiveFailures := 0
 
 	// Process chunks in batches starting from startBatch
 	for batchNum := startBatch; batchNum < totalBatches; batchNum++ {
@@ -538,11 +546,22 @@ func (db *LanceVectorDB) InsertWithCheckpoint(ctx context.Context, chunks []Docu
 			"chunksInBatch", len(batch),
 			"progress", fmt.Sprintf("%d/%d", batchEnd, totalChunks))
 
-		// Process batch with retry logic
+		// Per-batch mutex: hold lock only during embedding+write, not between batches.
+		// This lets Search() proceed while we sleep/wait between batches.
+		db.mu.Lock()
 		err := db.processBatchWithRetry(ctx, batch, batchNum+1, opts.MaxRetries, opts.RetryDelay)
+		db.mu.Unlock()
 		if err != nil {
+			consecutiveFailures++
+			if consecutiveFailures >= MaxConsecutiveFailures {
+				return fmt.Errorf("circuit breaker: %d consecutive batch failures, aborting reindex at batch %d/%d: %w",
+					consecutiveFailures, batchNum+1, totalBatches, err)
+			}
 			return fmt.Errorf("failed at batch %d: %w", batchNum+1, err)
 		}
+
+		// Reset consecutive failure counter on success
+		consecutiveFailures = 0
 
 		// Call checkpoint callback after successful batch
 		if opts.CheckpointFunc != nil {
@@ -551,12 +570,35 @@ func (db *LanceVectorDB) InsertWithCheckpoint(ctx context.Context, chunks []Docu
 				// Non-fatal: continue processing
 			}
 		}
+
+		// Progress-aware projection: after minimum samples, check if projected total exceeds cap.
+		// Prevents the operation from silently running for hours when config or provider is degraded.
+		elapsed := time.Since(startTime)
+		batchesCompleted := batchNum - startBatch + 1
+		if (batchesCompleted >= MinSampleBatches && elapsed >= MinSampleElapsed) || batchNum+1 == totalBatches {
+			rate := float64(batchEnd) / elapsed.Minutes()
+			if rate > 0 {
+				projected := time.Duration(float64(totalChunks)/rate) * time.Minute
+				if projected > MaxReindexDuration {
+					return fmt.Errorf("reindex too slow: projected %v but cap is %v (rate: %.0f chunks/min, batch %d/%d)",
+						projected, MaxReindexDuration, rate, batchNum+1, totalBatches)
+				}
+				slog.Info("Reindex progress projection",
+					"batch", batchNum+1, "totalBatches", totalBatches,
+					"elapsed", elapsed.Round(time.Second),
+					"rate", fmt.Sprintf("%.0f chunks/min", rate),
+					"projected", projected.Round(time.Second),
+					"cap", MaxReindexDuration)
+			}
+		}
 	}
 
 	// Create IVF-PQ vector index now that we have data
+	db.mu.Lock()
 	if err := db.ensureVectorIndex(ctx); err != nil {
 		slog.Warn("Failed to create vector index after insert", "error", err)
 	}
+	db.mu.Unlock()
 
 	slog.Info("Completed batched insert with checkpoint", "totalChunks", totalChunks)
 	return nil
@@ -585,7 +627,11 @@ func (db *LanceVectorDB) processBatchWithRetry(ctx context.Context, batch []Docu
 				"maxRetries", maxRetries,
 				"delay", delay,
 				"error", err)
-			time.Sleep(delay)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(delay):
+			}
 			delay = delay * 2
 			if delay > maxDelay {
 				delay = maxDelay

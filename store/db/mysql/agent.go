@@ -207,6 +207,10 @@ func (d *DB) DeleteAgentSourceFiles(ctx context.Context, tenantID int32, audienc
 	return errNotImplemented
 }
 
+func (d *DB) CountTenantSourceFiles(ctx context.Context, tenantID int32) (int, int, int, error) {
+	return 0, 0, 0, errNotImplemented
+}
+
 // Agent Rate Limit methods
 
 func (d *DB) GetOrCreateAgentRateLimit(ctx context.Context, tenantID int32, audienceType, clientIP string) (*store.AgentRateLimit, error) {

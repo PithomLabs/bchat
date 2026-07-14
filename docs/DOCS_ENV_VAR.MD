@@ -293,6 +293,30 @@ export EMBEDDING_BATCH_SIZE=200
 
 ---
 
+### Per-Context Defaults (EMBEDDING_BATCH_SIZE + EMBEDDING_TIMEOUT)
+
+Different environments have different optimal values for batch size and timeout.
+
+| Context | `EMBEDDING_BATCH_SIZE` | `EMBEDDING_TIMEOUT` | Why |
+|---------|------------------------|---------------------|-----|
+| **Local dev** (`.env`) | `200` | `180s` | Fast network, large batches = fast reindex |
+| **Fly.io prod** (`fly.toml`) | `10` | `10m` | OpenRouter rate limits; 10m timeout for slow upstreams |
+| **Testing/debug** | `1` | `5s` | Force granular progress, fast failure detection |
+
+**Configuration priority:** `fly.toml [env]` overrides `.env` at runtime. The `.env` file is only used by `task run:rag` (local dev).
+
+```bash
+# Local development (.env)
+EMBEDDING_BATCH_SIZE=200
+EMBEDDING_TIMEOUT=180s
+
+# Fly.io production (fly.toml [env])
+EMBEDDING_BATCH_SIZE=10
+EMBEDDING_TIMEOUT=10m
+```
+
+---
+
 ### RAG_MAX_CHUNK_TOKENS
 
 Maximum size (in tokens) of each chunk produced by the Markdown chunker before embedding.

@@ -26,6 +26,13 @@ import (
 	"github.com/usememos/memos/store"
 )
 
+const (
+	SkipReasonNone             = ""
+	SkipReasonLongContext      = "long_context"
+	SkipReasonNoSourceFiles    = "no_source_files"
+	SkipReasonPipelineDisabled = "pipeline_disabled"
+)
+
 // Handler handles HTTP requests for the agent API.
 type Handler struct {
 	service       *Service
@@ -1169,37 +1176,72 @@ func (h *Handler) HandleReindexTenant(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or api:config permission")
 	}
 
-	// Check if tenant uses long_context mode - skip indexing entirely
-	tenantConfig, _ := h.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &tenant.ID})
-	if tenantConfig != nil && tenantConfig.RetrievalMode == "long_context" {
-		return c.JSON(http.StatusOK, map[string]interface{}{
-			"success":  true,
-			"message":  "Skipped - tenant uses long_context mode (RAG indexing not needed)",
-			"chunks":   0,
-			"audience": "internal",
-		})
-	}
-
-	// Get audience type from query (default to all)
+	// Get audience type from query (default to all) — resolved before skip checks
+	// so the response reflects the requested audience.
 	audienceType := c.QueryParam("audience_type")
 	if audienceType == "" {
 		audienceType = "all"
 	}
 
+	// Check if tenant uses long_context mode - skip indexing entirely
+	tenantConfig, _ := h.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &tenant.ID})
+	if tenantConfig != nil && tenantConfig.RetrievalMode == "long_context" {
+		return c.JSON(http.StatusOK, map[string]interface{}{
+			"success":     true,
+			"message":     "Skipped - tenant uses long_context mode (RAG indexing not needed)",
+			"chunks":      0,
+			"audience":    audienceType,
+			"skip_reason": SkipReasonLongContext,
+		})
+	}
+
+	// Pre-check: pipeline readiness (detectable synchronously)
+	if !h.service.IsRAGEnabled() {
+		return c.JSON(http.StatusOK, map[string]interface{}{
+			"success":     true,
+			"chunks":      0,
+			"skip_reason": SkipReasonPipelineDisabled,
+			"message":     "RAG pipeline is not available. Check server configuration.",
+		})
+	}
+
+	// Pre-check: source files exist and have content.
+	// Uses CountTenantSourceFiles — lightweight COUNT(*) + SUM(LENGTH(content)) + MAX(LENGTH(TRIM(content)))
+	// instead of ListAgentSourceFiles which fetches full content blobs.
+	// TRIM only strips spaces; tab-only whitespace files are an accepted edge case.
+	count, totalContentLen, maxTrimmedLen, countErr := h.store.CountTenantSourceFiles(ctx, tenant.ID)
+	if countErr != nil {
+		slog.Warn("failed to count source files for pre-check", "tenantID", tenant.ID, "error", countErr)
+		// Don't fail the whole request — let the goroutine handle it
+	} else if count == 0 || totalContentLen == 0 || maxTrimmedLen == 0 {
+		return c.JSON(http.StatusOK, map[string]interface{}{
+			"success":     true,
+			"chunks":      0,
+			"skip_reason": SkipReasonNoSourceFiles,
+			"message":     "No source files found. Upload KB or Policy files first.",
+		})
+	}
+
 	// Check for resume parameter
 	resume := c.QueryParam("resume") == "true"
 
-	// Perform reindex (with or without resume)
-	chunks, reindexErr := h.service.ReindexTenantContentWithResume(ctx, tenant.ID, audienceType, resume)
-	if reindexErr != nil {
-		slog.Error("reindex failed", "tenantID", tenant.ID, "audience", audienceType, "resume", resume, "error", reindexErr)
-		return reindexHTTPError(reindexErr)
-	}
+	// Non-blocking: run reindex in background goroutine with detached context.
+	// The frontend polls GET /:slug/reindex/status for progress updates.
+	reindexCtx, reindexCancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	go func() {
+		defer reindexCancel()
+		slog.Info("reindex goroutine started", "slug", tenant.Slug, "tenant_id", tenant.ID, "audience", audienceType)
+		chunks, reindexErr := h.service.ReindexTenantContentWithResume(reindexCtx, tenant.ID, audienceType, resume)
+		if reindexErr != nil {
+			slog.Error("reindex failed", "tenantID", tenant.ID, "audience", audienceType, "resume", resume, "error", reindexErr)
+		} else {
+			slog.Info("reindex completed", "tenantID", tenant.ID, "chunks", chunks)
+		}
+	}()
 
-	return c.JSON(http.StatusOK, map[string]interface{}{
+	return c.JSON(http.StatusAccepted, map[string]interface{}{
 		"success":  true,
-		"chunks":   chunks,
-		"message":  fmt.Sprintf("Successfully reindexed %d chunks", chunks),
+		"message":  "Reindex started",
 		"audience": audienceType,
 		"resumed":  resume,
 	})

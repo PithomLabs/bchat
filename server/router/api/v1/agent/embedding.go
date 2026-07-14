@@ -252,7 +252,7 @@ func NewLocalEmbedding(config *EmbeddingConfig) (*LocalEmbedding, error) {
 		endpoint = "http://localhost:8001/embed"
 	}
 
-	timeout := getEnvDuration("EMBEDDING_TIMEOUT", 180*time.Second)
+	timeout := getEmbeddingTimeout()
 
 	return &LocalEmbedding{
 		endpoint:  endpoint,
@@ -360,7 +360,7 @@ func NewOpenRouterEmbedding(config *EmbeddingConfig) (*OpenRouterEmbedding, erro
 		dimension = getOpenRouterDimension(model)
 	}
 
-	timeout := getEnvDuration("EMBEDDING_TIMEOUT", 180*time.Second)
+	timeout := getEmbeddingTimeout()
 
 	return &OpenRouterEmbedding{
 		apiKey:         config.OpenRouterAPIKey,
@@ -417,7 +417,11 @@ func (e *OpenRouterEmbedding) Embed(ctx context.Context, texts []string) ([][]fl
 				backoff = maxBackoff
 			}
 			slog.Info("Retrying embedding request", "attempt", attempt+1, "backoff", backoff, "textsCount", len(texts))
-			time.Sleep(backoff)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
 		}
 
 		embeddings, err := e.doEmbed(ctx, texts)
@@ -678,8 +682,12 @@ func isRetryableError(err error) bool {
 		}
 	}
 
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.DeadlineExceeded) {
 		return true
+	}
+	// context.Canceled means caller disconnected — no point retrying
+	if errors.Is(err, context.Canceled) {
+		return false
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {
@@ -801,6 +809,27 @@ func getEnvDuration(key string, defaultVal time.Duration) time.Duration {
 	return defaultVal
 }
 
+// MaxEmbeddingTimeout bounds a single embedding API call. A value larger than
+// this (e.g. 10m) lets one slow batch block the whole reindex for minutes and,
+// combined with a tiny batch size, makes reindex run for hours.
+const MaxEmbeddingTimeout = 5 * time.Minute
+
+// getEmbeddingTimeout returns the embedding API timeout, capped at MaxEmbeddingTimeout.
+// Clamping happens at the call site, not in the generic getEnvDuration utility.
+func getEmbeddingTimeout() time.Duration {
+	d := getEnvDuration("EMBEDDING_TIMEOUT", 180*time.Second)
+	if d > MaxEmbeddingTimeout {
+		slog.Warn("EMBEDDING_TIMEOUT above maximum; clamping",
+			"requested", d, "used", MaxEmbeddingTimeout)
+		return MaxEmbeddingTimeout
+	}
+	if d <= 0 {
+		slog.Warn("EMBEDDING_TIMEOUT must be positive; using default", "value", d)
+		return 180 * time.Second
+	}
+	return d
+}
+
 // GetEmbeddingBatchSize returns the embedding batch size from env or default.
 // Controls how many chunks are sent to embedding API per request.
 // Default is 200 (was 10). Larger batches drastically cut the number of
@@ -808,11 +837,28 @@ func getEnvDuration(key string, defaultVal time.Duration) time.Duration {
 // text-embedding-3-small request limit (8191 tokens/input) keeps a 200×~1024
 // token batch well within bounds. For Qwen3 (32K context), 40 is safe with
 // 800-token chunks.
+//
+// A floor of MinEmbeddingBatchSize prevents pathological single-chunk batches
+// (e.g. EMBEDDING_BATCH_SIZE=1) that make reindex run for hours.
+const MinEmbeddingBatchSize = 10
+const MaxEmbeddingBatchSize = 200
+
 func GetEmbeddingBatchSize() int {
 	if v := os.Getenv("EMBEDDING_BATCH_SIZE"); v != "" {
-		if size, err := strconv.Atoi(v); err == nil && size > 0 && size <= 200 {
+		if size, err := strconv.Atoi(v); err == nil {
+			if size < MinEmbeddingBatchSize {
+				slog.Warn("EMBEDDING_BATCH_SIZE below minimum; clamping",
+					"requested", size, "used", MinEmbeddingBatchSize)
+				return MinEmbeddingBatchSize
+			}
+			if size > MaxEmbeddingBatchSize {
+				slog.Warn("EMBEDDING_BATCH_SIZE above maximum; clamping",
+					"requested", size, "used", MaxEmbeddingBatchSize)
+				return MaxEmbeddingBatchSize
+			}
 			return size
 		}
+		slog.Warn("Invalid EMBEDDING_BATCH_SIZE; using default", "value", v)
 	}
 	return 200
 }

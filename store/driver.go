@@ -171,6 +171,7 @@ type Driver interface {
 	GetAgentSourceFile(ctx context.Context, find *FindAgentSourceFile) (*AgentSourceFile, error)
 	ListAgentSourceFiles(ctx context.Context, find *FindAgentSourceFile) ([]*AgentSourceFile, error)
 	DeleteAgentSourceFiles(ctx context.Context, tenantID int32, audienceType *string) error
+	CountTenantSourceFiles(ctx context.Context, tenantID int32) (count int, totalContentLen int, maxTrimmedLen int, err error)
 
 	GetOrCreateAgentRateLimit(ctx context.Context, tenantID int32, audienceType, clientIP string) (*AgentRateLimit, error)
 	IncrementAgentRateLimit(ctx context.Context, tenantID int32, audienceType, clientIP string) error

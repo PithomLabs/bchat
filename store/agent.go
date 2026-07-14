@@ -1015,6 +1015,10 @@ func (s *Store) DeleteAgentSourceFiles(ctx context.Context, tenantID int32, audi
 	return s.driver.DeleteAgentSourceFiles(ctx, tenantID, audienceType)
 }
 
+func (s *Store) CountTenantSourceFiles(ctx context.Context, tenantID int32) (int, int, int, error) {
+	return s.driver.CountTenantSourceFiles(ctx, tenantID)
+}
+
 func (s *Store) GetOrCreateAgentRateLimit(ctx context.Context, tenantID int32, audienceType, clientIP string) (*AgentRateLimit, error) {
 	return s.driver.GetOrCreateAgentRateLimit(ctx, tenantID, audienceType, clientIP)
 }

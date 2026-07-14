@@ -278,6 +278,16 @@ const AgentAdmin = observer(() => {
     }
   }, [selectedTenant?.tenant.slug]);
 
+  // Safety timeout: reset isRebuilding after 60s if no status update arrives.
+  // Does not cancel the goroutine — only resets the UI spinner.
+  useEffect(() => {
+    if (!isRebuilding) return;
+    const timeout = setTimeout(() => {
+      setIsRebuilding(false);
+    }, 60_000);
+    return () => clearTimeout(timeout);
+  }, [isRebuilding]);
+
   const handleSelectTenant = async (slug: string, tenantId: number) => {
     // Set permissions first so they're available when tenant loads
     agentAdminStore.setMyPermissions(tenantId);
@@ -307,7 +317,20 @@ const AgentAdmin = observer(() => {
       reindexAudience,
     );
     if (result.success) {
-      toast.success(t("agent-admin.rebuild-index-started"));
+      switch (result.skip_reason) {
+        case "long_context":
+          toast(t("agent-admin.reindex-skipped-long-context"), { icon: "ℹ️" });
+          break;
+        case "no_source_files":
+          toast(t("agent-admin.reindex-skipped-no-source"), { icon: "⚠️" });
+          break;
+        case "pipeline_disabled":
+          toast(t("agent-admin.reindex-skipped-pipeline"), { icon: "⚠️" });
+          break;
+        default:
+          toast.success(t("agent-admin.rebuild-index-started"));
+      }
+      setIsRebuilding(false); // reset for all skip cases
       // The polling useEffect will pick up the progress
     } else {
       setIsRebuilding(false);
@@ -1292,6 +1315,21 @@ const AgentAdmin = observer(() => {
                         )}
                       </div>
                     )}
+
+                  {/* Idle state: show mode-aware messaging */}
+                  {agentAdminStore.state.reindexStatus?.status === "idle" && (
+                    <div className="bg-white dark:bg-zinc-800 rounded-lg p-3 border border-blue-100 dark:border-blue-900/40">
+                      {agentAdminStore.state.reindexStatus?.retrieval_mode === "long_context" ? (
+                        <div className="text-xs text-blue-600 dark:text-blue-400">
+                          ℹ️ {t("agent-admin.reindex-idle-long-context")}
+                        </div>
+                      ) : agentAdminStore.state.reindexStatus?.retrieval_mode === "rag" ? (
+                        <div className="text-xs text-amber-600 dark:text-amber-400">
+                          ⚠️ {t("agent-admin.reindex-idle-no-index")}
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
                 </div>
               </div>
             )}

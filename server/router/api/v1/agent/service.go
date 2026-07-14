@@ -524,6 +524,7 @@ type ReindexStatus struct {
 	LastMessage     string `json:"last_message,omitempty"`
 	ErrorBatch      *int   `json:"error_batch,omitempty"`
 	CanResume       bool   `json:"can_resume"`
+	RetrievalMode   string `json:"retrieval_mode,omitempty"`
 	UpdatedAt       string `json:"updated_at,omitempty"`
 }
 
@@ -583,7 +584,13 @@ func (s *Service) GetReindexStatus(ctx context.Context, tenantID int32, audience
 	}
 
 	if len(checkpoints) == 0 {
-		return &ReindexStatus{Status: "idle", CanResume: false}, nil
+		res := &ReindexStatus{Status: "idle", CanResume: false}
+		if tc, err := s.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &tenantID}); err != nil {
+			slog.Warn("failed to get tenant config for status", "tenantID", tenantID, "error", err)
+		} else if tc != nil {
+			res.RetrievalMode = tc.RetrievalMode
+		}
+		return res, nil
 	}
 
 	// Helper to resolve status and stale/resume state
@@ -621,6 +628,11 @@ func (s *Service) GetReindexStatus(ctx context.Context, tenantID int32, audience
 		if cp.ErrorBatch != nil {
 			batch := int(*cp.ErrorBatch)
 			res.ErrorBatch = &batch
+		}
+		if tc, err := s.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &tenantID}); err != nil {
+			slog.Warn("failed to get tenant config for status", "tenantID", tenantID, "error", err)
+		} else if tc != nil {
+			res.RetrievalMode = tc.RetrievalMode
 		}
 		return res, nil
 	}
@@ -702,18 +714,45 @@ func (s *Service) GetReindexStatus(ctx context.Context, tenantID int32, audience
 	if !latestUpdate.IsZero() {
 		res.UpdatedAt = latestUpdate.Format(time.RFC3339)
 	}
+	if tc, err := s.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &tenantID}); err != nil {
+		slog.Warn("failed to get tenant config for status", "tenantID", tenantID, "error", err)
+	} else if tc != nil {
+		res.RetrievalMode = tc.RetrievalMode
+	}
 
 	return res, nil
+}
+
+// createFailedCheckpoint persists a failure checkpoint so the status endpoint
+// can surface goroutine-level failures that occur before any checkpoint was created.
+func (s *Service) createFailedCheckpoint(ctx context.Context, tenantID int32, audience, msg string) {
+	cp := &store.ReindexCheckpoint{
+		TenantID:     tenantID,
+		Audience:     audience,
+		Status:       "failed",
+		ErrorMessage: msg,
+		StartedAt:    time.Now(),
+	}
+	// Detached context: checkpoint write must persist even if the
+	// parent request context is cancelled (goroutine may abort).
+	// 5s timeout prevents a slow DB write from blocking indefinitely.
+	checkpointCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := s.store.UpsertReindexCheckpoint(checkpointCtx, cp); err != nil {
+		slog.Warn("failed to create failure checkpoint", "error", err)
+	}
 }
 
 // ReindexTenantContentWithResume re-indexes with checkpoint support for resume-from-error.
 func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID int32, audienceType string, resume bool) (int, error) {
 	if s.vectorDB == nil || s.chunker == nil {
+		s.createFailedCheckpoint(ctx, tenantID, audienceType, "RAG pipeline not initialized")
 		return 0, fmt.Errorf("RAG pipeline not initialized")
 	}
 
 	// Check if using NoOpVectorDB
 	if _, isNoOp := s.vectorDB.(*NoOpVectorDB); isNoOp {
+		s.createFailedCheckpoint(ctx, tenantID, audienceType, "RAG pipeline disabled")
 		return 0, fmt.Errorf("RAG pipeline disabled (using NoOpVectorDB)")
 	}
 
@@ -750,12 +789,6 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 	}
 	ctx = s.withTenantEmbeddingAPIKey(ctx, tenantID)
 
-	if shouldValidateReindex(resume, existingCheckpoint) {
-		if err := s.vectorDB.Validate(ctx); err != nil {
-			return 0, err
-		}
-	}
-
 	// Get chunk size based on embedding provider
 	embeddingProvider := ""
 	if s.vectorDBConfig != nil && s.vectorDBConfig.EmbeddingConfig != nil {
@@ -784,6 +817,15 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 		return 0, fmt.Errorf("failed to list source files: %w", err)
 	}
 
+	slog.Info("reindex: loaded source files",
+		"tenant_id", tenantID,
+		"count", len(files),
+	)
+	if len(files) == 0 {
+		slog.Warn("reindex: no source files found for tenant", "tenant_id", tenantID, "slug", tenant.Slug)
+		return 0, nil
+	}
+
 	// Group files by audience for correct chunking, preserving version.
 	audienceFiles := make(map[string]map[string]reindexFileEntry) // audience -> fileType -> {content, version}
 	fileVersions := make(map[string]map[string]int32)              // audience -> fileType -> version
@@ -794,21 +836,88 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 		}
 		audienceFiles[f.AudienceType][f.FileType] = reindexFileEntry{content: f.Content, version: f.Version}
 		fileVersions[f.AudienceType][f.FileType] = f.Version
+		slog.Info("reindex: grouped source file",
+			"tenant_id", tenantID,
+			"audience", f.AudienceType,
+			"file_type", f.FileType,
+			"version", f.Version,
+			"content_length", len(f.Content),
+			"content_empty", f.Content == "",
+		)
 	}
+
+	slog.Info("reindex: file grouping summary",
+		"tenant_id", tenantID,
+		"audience_count", len(audienceFiles),
+		"audiences", func() map[string][]string {
+			summary := make(map[string][]string)
+			for aud, fm := range audienceFiles {
+				for ft, entry := range fm {
+					summary[aud] = append(summary[aud], fmt.Sprintf("%s(v%d,%d bytes)", ft, entry.version, len(entry.content)))
+				}
+			}
+			return summary
+		}(),
+		"audience_filter", audienceType,
+	)
 
 	var allChunks []DocumentChunk
 	for audience, fileMap := range audienceFiles {
+		slog.Info("reindex: processing audience",
+			"tenant_id", tenantID,
+			"audience", audience,
+			"file_types", func() []string {
+				var types []string
+				for ft := range fileMap {
+					types = append(types, ft)
+				}
+				return types
+			}(),
+		)
 		if entry, ok := fileMap["kb"]; ok && entry.content != "" {
+			slog.Info("reindex: chunking KB file",
+				"tenant_id", tenantID,
+				"audience", audience,
+				"content_length", len(entry.content),
+				"version", entry.version,
+			)
 			kbChunks := s.chunker.ChunkMarkdownContent(entry.content, tenantID, audience, "kb", entry.version, maxChunkTokens)
+			slog.Info("reindex: KB chunking produced chunks",
+				"tenant_id", tenantID,
+				"audience", audience,
+				"chunk_count", len(kbChunks),
+			)
 			allChunks = append(allChunks, kbChunks...)
 		}
 		if entry, ok := fileMap["policy"]; ok && entry.content != "" {
+			slog.Info("reindex: chunking policy file",
+				"tenant_id", tenantID,
+				"audience", audience,
+				"content_length", len(entry.content),
+				"version", entry.version,
+			)
 			policyChunks := s.chunker.ChunkMarkdownContent(entry.content, tenantID, audience, "policy", entry.version, maxChunkTokens)
+			slog.Info("reindex: policy chunking produced chunks",
+				"tenant_id", tenantID,
+				"audience", audience,
+				"chunk_count", len(policyChunks),
+			)
 			allChunks = append(allChunks, policyChunks...)
 		}
 	}
 
+	slog.Info("reindex: chunking complete",
+		"tenant_id", tenantID,
+		"total_chunks", len(allChunks),
+		"audiences_processed", len(audienceFiles),
+	)
+
 	if len(allChunks) == 0 {
+		slog.Warn("reindex: chunking produced zero chunks",
+			"tenant_id", tenantID,
+			"source_file_count", len(files),
+			"audience_filter", audienceType,
+		)
 		return 0, nil
 	}
 
@@ -856,6 +965,14 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 		}
 	}
 
+	// Validate embedding provider AFTER checkpoint creation.
+	// If Validate() hangs, the checkpoint exists so resume=true can skip it.
+	if shouldValidateReindex(resume, existingCheckpoint) {
+		if err := s.vectorDB.Validate(ctx); err != nil {
+			return 0, err
+		}
+	}
+
 	// Create checkpoint callback
 	checkpointFunc := func(currentBatch, processedChunks, totalBatches, totalChunks, chunksInBatch int) error {
 		checkpoint := &store.ReindexCheckpoint{
@@ -881,6 +998,14 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 		MaxRetries:     3,
 		RetryDelay:     5 * time.Second,
 	}
+
+	slog.Info("reindex: starting embedding",
+		"tenant_id", tenantID,
+		"total_chunks", totalChunks,
+		"total_batches", totalBatches,
+		"batch_size", batchSize,
+		"start_batch", startBatch,
+	)
 
 	if err := s.vectorDB.InsertWithCheckpoint(ctx, allChunks, opts); err != nil {
 		// Mark checkpoint as failed
@@ -2036,32 +2161,55 @@ func (s *Service) processChat(ctx context.Context, config *AudienceConfig, sessi
 	var genErr error
 
 	// Determine which generation method to use based on tenant's retrieval mode:
-	// - "rag" mode: Use RAG pipeline with retrieved chunks (for large KBs)
-	// - "long_context" mode (default): Full KB in system prompt (for small/medium KBs)
-	// - For unstructured content (no structured KB/Policy), always use RAG mode
+	// Priority: explicit RetrieverMode > HasStructuredContent fallback > long_context default
 	useRAG := false
-	forceRAG := !config.HasStructuredContent && s.UseRAGPipeline()
-	if forceRAG {
-		// No structured content - must use RAG mode since there's nothing to build long_context from
-		useRAG = true
-		slog.Debug("forcing RAG mode for unstructured content",
-			"tenant_slug", config.TenantSlug,
-			"session_id", session.ID)
-	} else if s.UseRAGPipeline() {
-		// Check tenant-specific retrieval mode
-		tenantConfig, _ := s.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &config.TenantID})
+	var tenantConfig *store.TenantConfig
+
+	if s.UseRAGPipeline() {
+		tenantConfig, _ = s.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &config.TenantID})
+
+		// Fix misconfigured content_tokens (one-time recalculation for tenants
+		// where the upload handler's token calculation was bypassed).
+		if tenantConfig != nil && tenantConfig.ContentTokens == 0 {
+			s.recalcContentTokens(ctx, tenantConfig)
+		}
+
 		if tenantConfig != nil && tenantConfig.RetrievalMode == "rag" {
+			// Explicit RAG — respect it
 			useRAG = true
+		} else if tenantConfig != nil && tenantConfig.RetrievalMode == "long_context" {
+			// Explicit long_context — respect it
+			useRAG = false
+		} else if !config.HasStructuredContent {
+			// No explicit mode + unstructured content → force RAG
+			useRAG = true
+			slog.Debug("forcing RAG mode for unstructured content (no explicit retrieval mode)",
+				"tenant_slug", config.TenantSlug,
+				"session_id", session.ID)
 		}
 	}
+
+	slog.Info("chat mode decision",
+		"tenant_id", config.TenantID,
+		"retrieval_mode", func() string {
+			if tenantConfig != nil {
+				return tenantConfig.RetrievalMode
+			}
+			return ""
+		}(),
+		"has_structured_content", config.HasStructuredContent,
+		"use_rag", useRAG,
+		"rag_enabled", s.UseRAGPipeline(),
+		"session_id", session.ID,
+	)
 
 	if useRAG {
 		// Use RAG retrieval for focused context (large KBs or unstructured content)
 		response, genErr = s.generateRAGResponse(ctx, config, session, classification, decision, userMessage)
 		if genErr != nil {
-			if forceRAG {
-				// Can't fall back to long context for unstructured content
-				slog.Error("RAG generation failed for unstructured content, no fallback available",
+			// Can only fall back to long_context if mode was NOT explicitly set to "rag"
+			if tenantConfig != nil && tenantConfig.RetrievalMode == "rag" {
+				slog.Error("RAG generation failed for explicit rag mode, no fallback",
 					"error", genErr, "session_id", session.ID)
 				return nil, fmt.Errorf("failed to generate response: %w", genErr)
 			}
@@ -2706,6 +2854,19 @@ func (s *Service) buildSystemPrompt(ctx context.Context, config *AudienceConfig,
 	}
 
 	// =========================================================================
+	// SECTION 8B: RAW KNOWLEDGE BASE (Full context for unstructured content)
+	// =========================================================================
+	if config.RawKB != "" && len(config.Services) == 0 && len(config.FAQs) == 0 {
+		maxKBTokens := 25000
+		truncatedKB := truncateToTokenBudget(config.RawKB, maxKBTokens)
+		if truncatedKB != "" {
+			sb.WriteString("=== KNOWLEDGE BASE (Full reference) ===\n\n")
+			sb.WriteString(truncatedKB)
+			sb.WriteString("\n\n")
+		}
+	}
+
+	// =========================================================================
 	// SECTION 9: AUTHORIZED CONTACT INFO (Only provide these)
 	// =========================================================================
 	sb.WriteString("=== AUTHORIZED CONTACT INFO (Only provide these) ===\n\n")
@@ -2795,6 +2956,40 @@ func (s *Service) UseRAGPipeline() bool {
 	// Check if it's a NoOp (RAG disabled)
 	_, isNoOp := s.vectorDB.(*NoOpVectorDB)
 	return !isNoOp
+}
+
+// recalcContentTokens fixes misconfigured tenants where content_tokens == 0
+// (upload handler's token calculation was bypassed). Runs at most once per
+// misconfigured tenant — subsequent calls skip when content_tokens > 0.
+func (s *Service) recalcContentTokens(ctx context.Context, tc *store.TenantConfig) {
+	files, err := s.store.ListAgentSourceFiles(ctx, &store.FindAgentSourceFile{
+		TenantID:   &tc.TenantID,
+		LatestOnly: true,
+	})
+	if err != nil || len(files) == 0 {
+		return
+	}
+	var totalTokens int
+	for _, f := range files {
+		totalTokens += EstimateTokens(f.Content)
+	}
+	if totalTokens == 0 {
+		return
+	}
+	tc.ContentTokens = int32(totalTokens)
+	if totalTokens >= DefaultTokenThreshold {
+		tc.RetrievalMode = "rag"
+	} else {
+		tc.RetrievalMode = "long_context"
+	}
+	if _, err := s.store.UpsertTenantConfig(ctx, tc); err != nil {
+		slog.Warn("failed to persist content_tokens correction", "error", err)
+	}
+	slog.Info("recalculated content_tokens",
+		"tenant_id", tc.TenantID,
+		"content_tokens", totalTokens,
+		"retrieval_mode", tc.RetrievalMode,
+	)
 }
 
 // generateRAGResponse generates a response using RAG retrieval for context.

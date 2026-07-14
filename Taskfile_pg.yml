@@ -86,7 +86,7 @@ tasks:
           echo "Loading environment from .env file..."
           set -a && source .env && set +a
         fi
-        MEMOS_DRIVER=postgres FORCE_REINDEX_ON_STARTUP=false RAG_PIPELINE_ENABLED=true EMBEDDING_MODEL=openai/text-embedding-3-small EMBEDDING_BATCH_SIZE=1 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev
+        MEMOS_DRIVER=postgres FORCE_REINDEX_ON_STARTUP=false RAG_PIPELINE_ENABLED=true EMBEDDING_MODEL=openai/text-embedding-3-small LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev
 
   run:testrag:
     desc: Run with RAG + Postgres + force full reindex on startup
@@ -132,3 +132,9 @@ tasks:
     desc: Validate Postgres database migrations before fly.io deployment
     cmds:
       - ./scripts/validate-pg-migrations.sh
+
+  fly:deploy:
+    desc: Validate migrations then deploy to fly.io
+    deps: [validate:migrations]
+    cmds:
+      - fly deploy --config fly.toml

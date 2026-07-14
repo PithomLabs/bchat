@@ -1226,6 +1226,17 @@ func (d *DB) DeleteAgentSourceFiles(ctx context.Context, tenantID int32, audienc
 	return err
 }
 
+func (d *DB) CountTenantSourceFiles(ctx context.Context, tenantID int32) (count int, totalContentLen int, maxTrimmedLen int, err error) {
+	// TRIM only strips space characters (0x20), not tabs/newlines.
+	// Tab-only whitespace files are an accepted edge case.
+	err = d.db.QueryRowContext(ctx,
+		`SELECT COUNT(*), COALESCE(SUM(LENGTH(content)), 0), COALESCE(MAX(LENGTH(TRIM(content))), 0)
+		 FROM agent_source_files
+		 WHERE tenant_id = ?`, tenantID,
+	).Scan(&count, &totalContentLen, &maxTrimmedLen)
+	return
+}
+
 // ============================================================================
 // AGENT RAG ACTIVE-VERSION OPERATIONS (versioned RAG index pointer)
 // ============================================================================
