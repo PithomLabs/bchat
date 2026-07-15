@@ -37,6 +37,12 @@ const (
 // Sentinel errors for input validation
 var ErrMessageTooLong = errors.New("message too long")
 
+// isMemstateEnabled controls the in-memory belief-revision feature.
+// Overridable in tests.
+var isMemstateEnabled = func() bool {
+	return os.Getenv("MEMSTATE_ENABLED") == "true"
+}
+
 // newOpenRouterClient creates an OpenRouter client with a timeout.
 func newOpenRouterClient(apiKey string) *openrouter.Client {
 	config := openrouter.DefaultConfig(apiKey)
@@ -59,8 +65,8 @@ type Service struct {
 	vectorDB            VectorDB
 	vectorDBConfig      *VectorDBConfig
 	chunker             *Chunker
-	vectorDBMu          sync.RWMutex  // Protects vectorDB access
-	reindexMu           sync.Map      // per-tenant mutex for reindex/rollback serialization
+	vectorDBMu          sync.RWMutex // Protects vectorDB access
+	reindexMu           sync.Map     // per-tenant mutex for reindex/rollback serialization
 	observerBuffer      *ObserverBuffer
 }
 
@@ -843,7 +849,7 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 
 	// Group files by audience for correct chunking, preserving version.
 	audienceFiles := make(map[string]map[string]reindexFileEntry) // audience -> fileType -> {content, version}
-	fileVersions := make(map[string]map[string]int32)              // audience -> fileType -> version
+	fileVersions := make(map[string]map[string]int32)             // audience -> fileType -> version
 	for _, f := range files {
 		if _, ok := audienceFiles[f.AudienceType]; !ok {
 			audienceFiles[f.AudienceType] = make(map[string]reindexFileEntry)
@@ -1185,6 +1191,10 @@ func (s *MemorySessionStore) GetOrCreate(tenantID int32, sessionID string) *stor
 		Messages:       []store.AgentMessage{},
 		CreatedAt:      now,
 		UpdatedAt:      now,
+	}
+
+	if isMemstateEnabled() {
+		session.Facts = store.NewSafeMemory()
 	}
 
 	s.sessions[key] = session
@@ -2113,6 +2123,22 @@ func (s *Service) processChat(ctx context.Context, config *AudienceConfig, sessi
 		session.CustomerLocation = customerInfo.Address
 	}
 
+	// Memstate: feed latest extracted facts for belief revision
+	if isMemstateEnabled() && session.Facts != nil {
+		if name := extractLatestName(session.Messages); name != "" {
+			session.CustomerName = name
+			session.Facts.Add("Customer name is " + name)
+		}
+		if phone := extractLatestPhone(session.Messages, validatedCompanyPhone); phone != "" {
+			session.CustomerPhone = phone
+			session.Facts.Add("Customer phone is " + phone)
+		}
+		if addr := extractLatestAddress(session.Messages); addr != "" {
+			session.CustomerLocation = addr
+			session.Facts.Add("Customer location is " + addr)
+		}
+	}
+
 	// Score the user message for urgency, sentiment, escalation signals, etc.
 	messageScore := ScoreUserMessage(userMessage, config)
 
@@ -2661,6 +2687,18 @@ func (s *Service) buildSystemPrompt(ctx context.Context, config *AudienceConfig,
 	// =========================================================================
 	if contactInstruction.Section0Addition != "" {
 		sb.WriteString(contactInstruction.Section0Addition)
+	}
+
+	// =========================================================================
+	// SECTION 0.5a: BELIEF REVISION FACTS (memstate)
+	// =========================================================================
+	if isMemstateEnabled() && session != nil && session.Facts != nil {
+		if factPrompt := session.Facts.Prompt("", 500); factPrompt != "" {
+			sb.WriteString("=== FACTS EXTRACTED FROM CUSTOMER ===\n\n")
+			sb.WriteString("The following facts were extracted from the customer across this session. Use these as ground truth; do not re-ask for them.\n\n")
+			sb.WriteString(factPrompt)
+			sb.WriteString("\n\n")
+		}
 	}
 
 	// =========================================================================
@@ -3450,12 +3488,25 @@ func getContactState(session *store.AgentSession, validatedPhone string) Contact
 	if info == nil {
 		return state
 	}
-	state.Name = info.Name
-	state.Phone = info.Phone
-	state.Email = info.Email
-	state.Address = info.Address
-	state.HasName = info.Name != ""
-	state.HasEmailOrPhone = info.Phone != "" || info.Email != ""
+	// Prefer session fields (updated by memstate) over first-match extraction
+	if session.CustomerName != "" {
+		state.Name = session.CustomerName
+	} else {
+		state.Name = info.Name
+	}
+	if session.CustomerPhone != "" {
+		state.Phone = session.CustomerPhone
+	} else {
+		state.Phone = info.Phone
+	}
+	if session.CustomerLocation != "" {
+		state.Address = session.CustomerLocation
+	} else {
+		state.Address = info.Address
+	}
+	state.Email = info.Email // always from extractCollectedInfo (no memstate tracking for email)
+	state.HasName = state.Name != ""
+	state.HasEmailOrPhone = state.Phone != "" || state.Email != ""
 	state.IsComplete = state.HasName && state.HasEmailOrPhone
 	return state
 }
@@ -3848,6 +3899,100 @@ func isCommonWord(s string) bool {
 		}
 	}
 	return false
+}
+
+// ============================================================================
+// MEMSTATE: Latest-field extraction for belief revision
+// ============================================================================
+
+// Package-level patterns — kept in sync with extractCollectedInfo patterns.
+var (
+	latestNamePatterns = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)(?:I'm|I am|my name is|call me)\s+([A-Za-z][a-z]+(?:\s+[A-Za-z][a-z]+)?)`),
+		regexp.MustCompile(`(?i)^([A-Za-z][a-z]+(?:\s+[A-Za-z][a-z]+)?)[,.]?\s+(?:here|speaking)`),
+	}
+	latestPhonePattern            = regexp.MustCompile(`\b(?:\+?1[-.\s]?)?\(?([2-9]\d{2})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})\b`)
+	latestPhoneCorrectionPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)(?:phone|number)\s+(?:is\s+)?(?:actually|should\s+be|still)\s+(\d{3}[-.\s]?\d{3}[-.\s]?\d{4})`),
+		regexp.MustCompile(`(?i)(?:correct|change|update)\s+(?:my\s+)?(?:phone|number)\s+to\s+(\d{3}[-.\s]?\d{3}[-.\s]?\d{4})`),
+		regexp.MustCompile(`(?i)(?:got|have)\s+(?:my\s+)?(?:phone|number)\s+wrong[^0-9]*(\d{3}[-.\s]?\d{3}[-.\s]?\d{4})`),
+		regexp.MustCompile(`(?i)(?:it's|its|it\s+is)\s+(?:still\s+)?(\d{3}[-.\s]?\d{3}[-.\s]?\d{4})`),
+	}
+	latestAddressPattern = regexp.MustCompile(`\b(\d+\s+[A-Za-z]+(?:\s+[A-Za-z]+)*(?:\s+(?:St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ln|Lane|Blvd|Boulevard|Way|Ct|Court|Pl|Place)\.?)?)(?:,?\s+([A-Za-z\s]+),?\s+([A-Z]{2})?\s*(\d{5}(?:-\d{4})?)?)?`)
+)
+
+// extractLatestName scans messages newest-first (user-role only) and returns
+// the most recently stated name. Uses explicit-marker patterns only —
+// standalone pattern #3 is excluded to prevent false positives from phrases
+// like "sounds good" under newest-first scanning.
+func extractLatestName(messages []store.AgentMessage) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != "user" {
+			continue
+		}
+		for _, re := range latestNamePatterns {
+			if m := re.FindStringSubmatch(messages[i].Content); len(m) > 1 {
+				name := strings.TrimSpace(m[1])
+				if !isCommonWord(name) && len(name) > 2 {
+					return name
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// extractLatestPhone scans messages newest-first (user-role only) and returns
+// the most recently stated phone. Correction patterns are checked first
+// (newest-first), then the main pattern. Tenant's own number is excluded.
+func extractLatestPhone(messages []store.AgentMessage, tenantPhone string) string {
+	tenantNorm := normalizePhoneDigits(tenantPhone)
+	// Check correction patterns first (newest-first)
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != "user" {
+			continue
+		}
+		for _, re := range latestPhoneCorrectionPatterns {
+			if m := re.FindStringSubmatch(messages[i].Content); len(m) > 1 {
+				num := normalizePhoneDigits(m[1])
+				if num != "" && !isPlaceholderPhoneDigits(num) && num != tenantNorm {
+					return m[1]
+				}
+			}
+		}
+	}
+	// Fall back to main pattern (newest-first)
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != "user" {
+			continue
+		}
+		if m := latestPhonePattern.FindStringSubmatch(messages[i].Content); len(m) > 0 {
+			full := m[0]
+			num := normalizePhoneDigits(full)
+			if num != "" && !isPlaceholderPhoneDigits(num) && num != tenantNorm {
+				return full
+			}
+		}
+	}
+	return ""
+}
+
+// extractLatestAddress scans messages newest-first (user-role only) and returns
+// the most recently stated address. Uses match[0] (full match) with a length
+// guard, mirroring extractCollectedInfo's safeguards.
+func extractLatestAddress(messages []store.AgentMessage) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != "user" {
+			continue
+		}
+		if m := latestAddressPattern.FindStringSubmatch(messages[i].Content); len(m) > 0 {
+			addr := strings.TrimSpace(m[0])
+			if len(addr) > 10 {
+				return addr
+			}
+		}
+	}
+	return ""
 }
 
 // ============================================================================
@@ -4455,10 +4600,10 @@ func (s *Service) SearchVectorDB(ctx context.Context, tenantID int32, audienceTy
 	}
 
 	queryObj := SearchQuery{
-		TenantID:     tenantID,
-		AudienceType: audienceType,
-		QueryText:    query,
-		TopK:         topK,
+		TenantID:      tenantID,
+		AudienceType:  audienceType,
+		QueryText:     query,
+		TopK:          topK,
 		SourceVersion: version,
 	}
 	if fileType != "" {
@@ -4685,13 +4830,13 @@ func (s *Service) captureLeadFromSession(ctx context.Context, config *AudienceCo
 	// Dispatch webhook event for lead capture
 	if created != nil {
 		payload, _ := json.Marshal(map[string]interface{}{
-			"lead_id":   created.ID,
-			"name":      created.Name,
-			"email":     created.Email,
-			"phone":     created.Phone,
-			"topic":     created.Topic,
-			"location":  created.Location,
-			"intent":    created.DetectedIntent,
+			"lead_id":    created.ID,
+			"name":       created.Name,
+			"email":      created.Email,
+			"phone":      created.Phone,
+			"topic":      created.Topic,
+			"location":   created.Location,
+			"intent":     created.DetectedIntent,
 			"session_id": session.ID,
 		})
 		s.dispatchEvent(ctx, config.TenantID, created.ID, "lead.captured", string(payload))

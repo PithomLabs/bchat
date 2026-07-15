@@ -266,6 +266,9 @@ type AgentSession struct {
 
 	// Not persisted; guards concurrent ChatExternal calls for the same session.
 	IdempotencyMu sync.Mutex `json:"-"`
+
+	// In-memory belief-revision facts (memstate). Nil when MEMSTATE_ENABLED is off.
+	Facts *SafeMemory `json:"-"`
 }
 
 // AgentMessage represents a single message in a chat session.
