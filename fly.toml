@@ -24,6 +24,7 @@ kill_timeout = "30s"
   LLM_VERIFIER_ENABLED = 'false'
   FORCE_REINDEX_ON_STARTUP = 'false'
   RAG_STARTUP_REINDEX_DISABLED = 'true'
+  MEMSTATE_ENABLED = 'true'
   TZ = 'UTC'
 
 # NO [[mounts]] section — Neon replaces the SQLite volume

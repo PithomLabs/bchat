@@ -38,9 +38,10 @@ const (
 var ErrMessageTooLong = errors.New("message too long")
 
 // isMemstateEnabled controls the in-memory belief-revision feature.
+// Enabled by default. Set MEMSTATE_ENABLED=false to disable.
 // Overridable in tests.
 var isMemstateEnabled = func() bool {
-	return os.Getenv("MEMSTATE_ENABLED") == "true"
+	return getEnvBool("MEMSTATE_ENABLED", true)
 }
 
 // newOpenRouterClient creates an OpenRouter client with a timeout.

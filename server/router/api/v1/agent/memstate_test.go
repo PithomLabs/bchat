@@ -84,9 +84,6 @@ func TestSupersessionDifferentTopic(t *testing.T) {
 // ============================================================================
 
 func TestFactsNilByDefault(t *testing.T) {
-	if isMemstateEnabled() {
-		t.Skip("MEMSTATE_ENABLED is true; testing nil guard is not applicable")
-	}
 	orig := isMemstateEnabled
 	isMemstateEnabled = func() bool { return false }
 	defer func() { isMemstateEnabled = orig }()
