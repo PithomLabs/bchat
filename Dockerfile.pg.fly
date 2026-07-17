@@ -123,6 +123,7 @@ ENV LLM_MODEL_REASONING="nvidia/nemotron-3-ultra-550b-a55b:free"
 ENV LLM_VERIFIER_ENABLED="false"
 
 ENV RAG_MAX_CHUNK_TOKENS="4096"
+ENV MEMSTATE_ENABLED="true"
 EXPOSE 5230
 
 ENTRYPOINT ["./entrypoint.sh", "./memos"]

@@ -165,10 +165,14 @@ func (d *DB) GetTenantConfig(ctx context.Context, find *store.FindTenantConfig) 
 }
 
 func (d *DB) UpsertTenantConfig(ctx context.Context, config *store.TenantConfig) (*store.TenantConfig, error) {
+	if config.Features == nil {
+		config.Features = map[string]interface{}{}
+	}
 	features, err := json.Marshal(config.Features)
 	if err != nil {
 		return nil, err
 	}
+	featuresStr := string(features)
 	now := time.Now()
 	if config.AdminMutationRateLimitRPM == 0 {
 		config.AdminMutationRateLimitRPM = 30
@@ -178,20 +182,20 @@ func (d *DB) UpsertTenantConfig(ctx context.Context, config *store.TenantConfig)
 			openrouter_api_key_encrypted,openrouter_api_key_nonce,features,retrieval_mode,
 			content_tokens,record_transcripts,admin_mutation_rate_limit_rpm,
 			vector_db_s3_override,updated_at,updated_by)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14)
 		ON CONFLICT(tenant_id) DO UPDATE SET
 			llm_model=EXCLUDED.llm_model,simulation_human_model=EXCLUDED.simulation_human_model,
 			reasoning_model=EXCLUDED.reasoning_model,
 			openrouter_api_key_encrypted=COALESCE(EXCLUDED.openrouter_api_key_encrypted,tenant_config.openrouter_api_key_encrypted),
 			openrouter_api_key_nonce=COALESCE(EXCLUDED.openrouter_api_key_nonce,tenant_config.openrouter_api_key_nonce),
-			features=EXCLUDED.features,retrieval_mode=EXCLUDED.retrieval_mode,
+			features=EXCLUDED.features::jsonb,retrieval_mode=EXCLUDED.retrieval_mode,
 			content_tokens=EXCLUDED.content_tokens,record_transcripts=EXCLUDED.record_transcripts,
 			admin_mutation_rate_limit_rpm=EXCLUDED.admin_mutation_rate_limit_rpm,
 			vector_db_s3_override=COALESCE(EXCLUDED.vector_db_s3_override,tenant_config.vector_db_s3_override),
 			updated_at=EXCLUDED.updated_at,updated_by=EXCLUDED.updated_by
 		RETURNING id
 	`, config.TenantID, config.LLMModel, config.SimulationHumanModel, config.ReasoningModel,
-		config.OpenRouterAPIKeyEncrypted, config.OpenRouterAPIKeyNonce, features, config.RetrievalMode,
+		config.OpenRouterAPIKeyEncrypted, config.OpenRouterAPIKeyNonce, featuresStr, config.RetrievalMode,
 		config.ContentTokens, config.RecordTranscripts, config.AdminMutationRateLimitRPM,
 		config.VectorDBS3Override, now.Unix(), config.UpdatedBy).Scan(&config.ID)
 	if err != nil {

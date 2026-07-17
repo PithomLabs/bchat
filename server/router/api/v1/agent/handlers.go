@@ -756,6 +756,7 @@ func (h *Handler) HandleGetTenantFullConfig(c echo.Context) error {
 			"slug":           tenant.Slug,
 			"companyName":    tenant.CompanyName,
 			"guid":           tenant.GUID,
+			"widgetKey":      tenant.WidgetKey,
 			"vertical":       tenant.Vertical,
 			"isActive":       tenant.IsActive,
 			"allowedDomains": allowedDomains,
@@ -803,6 +804,7 @@ func (h *Handler) HandleUpdateTenant(c echo.Context) error {
 		CompanyName    *string   `json:"company_name"`
 		Vertical       *string   `json:"vertical"`
 		AllowedDomains *[]string `json:"allowed_domains"` // nil = no change, empty array = clear
+		WidgetKey      *string   `json:"widget_key"`
 	}
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
@@ -826,6 +828,9 @@ func (h *Handler) HandleUpdateTenant(c echo.Context) error {
 			domainsJSON, _ := json.Marshal(*req.AllowedDomains)
 			tenant.AllowedDomains = string(domainsJSON)
 		}
+	}
+	if req.WidgetKey != nil {
+		tenant.WidgetKey = *req.WidgetKey
 	}
 
 	// Save

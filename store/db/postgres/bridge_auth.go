@@ -16,18 +16,15 @@ func (d *DB) CreateBridgeAuthKey(ctx context.Context, key *store.BridgeAuthKey) 
 		labelVal = *key.Label
 	}
 
-	result, err := d.db.ExecContext(ctx, `
+	var id int64
+	err := d.db.QueryRowContext(ctx, `
 		INSERT INTO bridge_auth_keys (
 			tenant_id, key_id, label, secret_key_encrypted, secret_key_nonce, status, created_at, updated_at, last_used_at, revoked_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, NULL)
-	`, key.TenantID, key.KeyID, labelVal, key.SecretKeyEncrypted, key.SecretKeyNonce, key.Status, key.CreatedAt, key.UpdatedAt)
+		RETURNING id
+	`, key.TenantID, key.KeyID, labelVal, key.SecretKeyEncrypted, key.SecretKeyNonce, key.Status, key.CreatedAt.Unix(), key.UpdatedAt.Unix()).Scan(&id)
 	if err != nil {
 		return nil, fmt.Errorf("create bridge auth key: %w", err)
-	}
-
-	id, err := result.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("get bridge auth key insert id: %w", err)
 	}
 	key.ID = id
 	return key, nil

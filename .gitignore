@@ -186,3 +186,7 @@ dist
 go.work
 
 .gut
+
+# Test artifacts
+.cookies.txt
+.test_output

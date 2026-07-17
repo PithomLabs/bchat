@@ -261,6 +261,11 @@ type Driver interface {
 	ListAgentRAGActiveVersions(ctx context.Context, tenantID int32) ([]*AgentRAGActiveVersion, error)
 	DeleteAgentRAGActiveVersion(ctx context.Context, tenantID int32, audienceType, fileType string) error
 
+	// Agent Workflow model related methods.
+	CreateAgentWorkflow(ctx context.Context, create *CreateAgentWorkflow) (*AgentWorkflow, error)
+	ListAgentWorkflows(ctx context.Context, find *FindAgentWorkflow) ([]*AgentWorkflow, error)
+	GetAgentWorkflow(ctx context.Context, find *FindAgentWorkflow) (*AgentWorkflow, error)
+
 	// Observation Log model related methods.
 	UpsertObservationLog(ctx context.Context, log *ObservationLog) (*ObservationLog, error)
 	GetObservationLog(ctx context.Context, sessionID string) (*ObservationLog, error)

@@ -6,9 +6,11 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 	"github.com/pkg/errors"
 	"golang.org/x/crypto/bcrypt"
@@ -549,4 +551,238 @@ func (s *APIV1Service) HandleSelectTenant(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"tenant_id": req.TenantID,
 	})
+}
+
+// HandleSignUp handles POST /api/v1/auth/signup with JSON body.
+// Bypasses gRPC-gateway which discards the body due to missing body:"*" in proto annotation.
+func (s *APIV1Service) HandleSignUp(c echo.Context) error {
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
+	}
+
+	ctx := c.Request().Context()
+	workspaceGeneralSetting, err := s.Store.GetWorkspaceGeneralSetting(ctx)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get workspace setting")
+	}
+	if workspaceGeneralSetting.DisallowUserRegistration {
+		return echo.NewHTTPError(http.StatusForbidden, "sign up is not allowed")
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to hash password")
+	}
+
+	create := &store.User{
+		Username:     req.Username,
+		Nickname:     req.Username,
+		PasswordHash: string(passwordHash),
+	}
+	if !base.UIDMatcher.MatchString(strings.ToLower(create.Username)) {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid username")
+	}
+
+	hostUserType := store.RoleHost
+	existedHostUsers, err := s.Store.ListUsers(ctx, &store.FindUser{Role: &hostUserType})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to list host users")
+	}
+	if len(existedHostUsers) == 0 {
+		create.Role = store.RoleHost
+	} else {
+		create.Role = store.RoleUser
+	}
+
+	user, err := s.Store.CreateUser(ctx, create)
+	if err != nil {
+		// Check if user already exists (unique constraint violation)
+		existingUser, findErr := s.Store.GetUser(ctx, &store.FindUser{Username: &req.Username})
+		if findErr == nil && existingUser != nil {
+			return echo.NewHTTPError(http.StatusConflict, "user already exists")
+		}
+		slog.Error("failed to create user", "error", err, "username", req.Username)
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to create user")
+	}
+
+	// Set cookie directly (bypass gRPC transport stream)
+	expireTime := time.Now().Add(AccessTokenDuration)
+	accessToken, err := GenerateAccessToken(user.Email, user.ID, nil, expireTime, []byte(s.Secret))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to generate token")
+	}
+	if err := s.UpsertAccessTokenToStore(ctx, user, accessToken, "user signup"); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to store token")
+	}
+	s.setCookieFromContext(c, accessToken, expireTime)
+
+	return c.JSON(http.StatusOK, convertUserProtoToJSON(convertUserFromStore(user)))
+}
+
+// HandleSignIn handles POST /api/v1/auth/signin with JSON body.
+func (s *APIV1Service) HandleSignIn(c echo.Context) error {
+	var req struct {
+		PasswordCredentials *struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		} `json:"password_credentials"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
+	}
+
+	if req.PasswordCredentials == nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "password_credentials required")
+	}
+
+	ctx := c.Request().Context()
+	user, err := s.Store.GetUser(ctx, &store.FindUser{Username: &req.PasswordCredentials.Username})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user")
+	}
+	if user == nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid credentials")
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.PasswordCredentials.Password)); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid credentials")
+	}
+
+	workspaceGeneralSetting, err := s.Store.GetWorkspaceGeneralSetting(ctx)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get workspace setting")
+	}
+	if workspaceGeneralSetting.DisallowPasswordAuth && user.Role == store.RoleUser {
+		return echo.NewHTTPError(http.StatusForbidden, "password signin is not allowed")
+	}
+
+	// Set cookie directly
+	expireTime := time.Now().Add(AccessTokenDuration)
+	accessToken, err := GenerateAccessToken(user.Email, user.ID, nil, expireTime, []byte(s.Secret))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to generate token")
+	}
+	if err := s.UpsertAccessTokenToStore(ctx, user, accessToken, "user login"); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to store token")
+	}
+	s.setCookieFromContext(c, accessToken, expireTime)
+
+	return c.JSON(http.StatusOK, convertUserProtoToJSON(convertUserFromStore(user)))
+}
+
+// HandleSignOut handles POST /api/v1/auth/signout with JSON body.
+func (s *APIV1Service) HandleSignOut(c echo.Context) error {
+	// Clear the cookie
+	cookie := &http.Cookie{
+		Name:     AccessTokenCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   -1,
+		SameSite: http.SameSiteLaxMode,
+	}
+	c.SetCookie(cookie)
+	return c.JSON(http.StatusOK, map[string]interface{}{})
+}
+
+// HandleGetAuthStatus handles POST /api/v1/auth/status with JSON body.
+func (s *APIV1Service) HandleGetAuthStatus(c echo.Context) error {
+	// Extract user from JWT cookie (same logic as auth middleware)
+	cookie, err := c.Cookie(AccessTokenCookieName)
+	if err != nil || cookie.Value == "" {
+		return c.JSON(http.StatusOK, map[string]interface{}{})
+	}
+
+	token, err := jwt.Parse(cookie.Value, func(token *jwt.Token) (interface{}, error) {
+		return []byte(s.Secret), nil
+	})
+	if err != nil || !token.Valid {
+		return c.JSON(http.StatusOK, map[string]interface{}{})
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return c.JSON(http.StatusOK, map[string]interface{}{})
+	}
+
+	// JWT sub field is the user ID as a string
+	sub, _ := claims["sub"].(string)
+	if sub == "" {
+		return c.JSON(http.StatusOK, map[string]interface{}{})
+	}
+
+	userID, err := strconv.ParseInt(sub, 10, 32)
+	if err != nil {
+		return c.JSON(http.StatusOK, map[string]interface{}{})
+	}
+	uid := int32(userID)
+
+	ctx := c.Request().Context()
+	user, err := s.Store.GetUser(ctx, &store.FindUser{ID: &uid})
+	if err != nil || user == nil {
+		return c.JSON(http.StatusOK, map[string]interface{}{})
+	}
+	return c.JSON(http.StatusOK, convertUserProtoToJSON(convertUserFromStore(user)))
+}
+
+// setCookieFromContext sets the access token cookie on an Echo context.
+func (s *APIV1Service) setCookieFromContext(c echo.Context, accessToken string, expireTime time.Time) {
+	cookie := &http.Cookie{
+		Name:     AccessTokenCookieName,
+		Value:    accessToken,
+		Path:     "/",
+		HttpOnly: true,
+		Expires:  expireTime,
+		SameSite: http.SameSiteLaxMode,
+	}
+	c.SetCookie(cookie)
+}
+
+// convertUserProtoToJSON converts a protobuf User to a JSON-friendly map.
+func convertUserProtoToJSON(u *v1pb.User) map[string]interface{} {
+	// Extract numeric ID from "users/{id}" format
+	userID := ""
+	if len(u.Name) > 6 && u.Name[:6] == "users/" {
+		userID = u.Name[6:]
+	}
+	m := map[string]interface{}{
+		"id":          userID,
+		"name":        u.Name,
+		"username":    u.Username,
+		"nickname":    u.Nickname,
+		"email":       u.Email,
+		"avatarUrl":   u.AvatarUrl,
+		"role":        u.Role.String(),
+		"createTime":  u.CreateTime.AsTime().Format(time.RFC3339),
+		"updateTime":  u.UpdateTime.AsTime().Format(time.RFC3339),
+	}
+	return m
+}
+
+// convertGRPCError converts a gRPC status error to an echo.HTTPError.
+func convertGRPCError(err error) error {
+	st, ok := status.FromError(err)
+	if !ok {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+	code := st.Code()
+	httpStatus := http.StatusInternalServerError
+	switch code {
+	case codes.Unauthenticated:
+		httpStatus = http.StatusUnauthorized
+	case codes.PermissionDenied:
+		httpStatus = http.StatusForbidden
+	case codes.InvalidArgument:
+		httpStatus = http.StatusBadRequest
+	case codes.NotFound:
+		httpStatus = http.StatusNotFound
+	case codes.AlreadyExists:
+		httpStatus = http.StatusConflict
+	case codes.Unavailable:
+		httpStatus = http.StatusServiceUnavailable
+	}
+	return echo.NewHTTPError(httpStatus, st.Message())
 }

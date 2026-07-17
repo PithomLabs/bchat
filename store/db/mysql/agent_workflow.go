@@ -2,6 +2,7 @@ package mysql
 
 import (
 	"context"
+	"errors"
 
 	"github.com/usememos/memos/store"
 )
@@ -10,16 +11,13 @@ import (
 // MySQL support can be added later if needed
 
 func (d *DB) CreateAgentWorkflow(ctx context.Context, create *store.CreateAgentWorkflow) (*store.AgentWorkflow, error) {
-	// TODO: Implement MySQL support for agent workflows
-	return nil, nil
+	return nil, errors.New("agent workflows not implemented for MySQL")
 }
 
 func (d *DB) ListAgentWorkflows(ctx context.Context, find *store.FindAgentWorkflow) ([]*store.AgentWorkflow, error) {
-	// TODO: Implement MySQL support for agent workflows
-	return nil, nil
+	return nil, errors.New("agent workflows not implemented for MySQL")
 }
 
 func (d *DB) GetAgentWorkflow(ctx context.Context, find *store.FindAgentWorkflow) (*store.AgentWorkflow, error) {
-	// TODO: Implement MySQL support for agent workflows
-	return nil, nil
+	return nil, errors.New("agent workflows not implemented for MySQL")
 }

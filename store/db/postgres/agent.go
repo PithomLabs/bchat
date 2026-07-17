@@ -1730,13 +1730,14 @@ func (d *DB) GetOrCreateAgentLearningMemory(ctx context.Context, tenantID int32)
 			tenant_id, common_issues, learned_behaviors, improvement_areas,
 			pending_suggestions, analysis_count, last_updated, version
 		) VALUES ($1, '[]', '[]', '[]', '[]', 0, $2, 1)
+		RETURNING id
 	`
 	now := time.Now()
-	result, err := d.db.ExecContext(ctx, stmt, tenantID, now)
+	var id int64
+	err = d.db.QueryRowContext(ctx, stmt, tenantID, now).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
-	id, _ := result.LastInsertId()
 	return &store.AgentLearningMemory{
 		ID:                 int32(id),
 		TenantID:           tenantID,
@@ -1932,13 +1933,13 @@ func (d *DB) GetOrCreateAgentScoringConfig(ctx context.Context, tenantID int32) 
 	stmt := `
 		INSERT INTO agent_scoring_config (tenant_id, version, config, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id
 	`
-	result, err := d.db.ExecContext(ctx, stmt, tenantID, "1.0", defaultConfig, now, now)
+	var id int64
+	err = d.db.QueryRowContext(ctx, stmt, tenantID, "1.0", defaultConfig, now, now).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
-
-	id, _ := result.LastInsertId()
 	return &store.AgentScoringConfig{
 		ID:        int32(id),
 		TenantID:  tenantID,
@@ -1975,15 +1976,13 @@ func (d *DB) CreateAgentQAPair(ctx context.Context, pair *store.AgentQAPair) (*s
 			tenant_id, question, expected_answer, source_section, source_chunk_id,
 			difficulty, category, is_active, created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING id
 	`
-	result, err := d.db.ExecContext(ctx, stmt,
+	var id int64
+	err := d.db.QueryRowContext(ctx, stmt,
 		pair.TenantID, pair.Question, pair.ExpectedAnswer, pair.SourceSection, pair.SourceChunkID,
 		pair.Difficulty, pair.Category, pair.IsActive, now, now,
-	)
-	if err != nil {
-		return nil, err
-	}
-	id, err := result.LastInsertId()
+	).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
@@ -2496,24 +2495,18 @@ func (d *DB) UpsertReindexCheckpoint(ctx context.Context, checkpoint *store.Rein
 			error_batch = excluded.error_batch,
 			updated_at = excluded.updated_at,
 			completed_at = excluded.completed_at
+		RETURNING id
 	`
 
-	result, err := d.db.ExecContext(ctx, stmt,
+	err := d.db.QueryRowContext(ctx, stmt,
 		checkpoint.TenantID, checkpoint.Audience, fileType, version, checkpoint.TotalChunks,
 		checkpoint.ProcessedChunks, checkpoint.CurrentBatch, checkpoint.TotalBatches,
 		checkpoint.BatchSize, checkpoint.Status, checkpoint.ErrorMessage,
 		checkpoint.LastMessage, checkpoint.ErrorBatch, checkpoint.StartedAt,
 		checkpoint.UpdatedAt, checkpoint.CompletedAt,
-	)
+	).Scan(&checkpoint.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to upsert reindex checkpoint: %w", err)
-	}
-
-	if checkpoint.ID == 0 {
-		id, err := result.LastInsertId()
-		if err == nil {
-			checkpoint.ID = int32(id)
-		}
 	}
 
 	return checkpoint, nil

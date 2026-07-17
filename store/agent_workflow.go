@@ -45,23 +45,14 @@ type AgentWorkflowStore interface {
 	GetAgentWorkflow(ctx context.Context, find *FindAgentWorkflow) (*AgentWorkflow, error)
 }
 
-// TODO: Implement Driver interface methods for AgentWorkflow
-// Currently commented out to unblock compilation - needs proper implementation
-
 func (s *Store) CreateAgentWorkflow(ctx context.Context, create *CreateAgentWorkflow) (*AgentWorkflow, error) {
-	// TODO: Restore after implementing Driver methods
-	// return s.driver.CreateAgentWorkflow(ctx, create)
-	return nil, nil
+	return s.driver.CreateAgentWorkflow(ctx, create)
 }
 
 func (s *Store) ListAgentWorkflows(ctx context.Context, find *FindAgentWorkflow) ([]*AgentWorkflow, error) {
-	// TODO: Restore after implementing Driver methods
-	// return s.driver.ListAgentWorkflows(ctx, find)
-	return nil, nil
+	return s.driver.ListAgentWorkflows(ctx, find)
 }
 
 func (s *Store) GetAgentWorkflow(ctx context.Context, find *FindAgentWorkflow) (*AgentWorkflow, error) {
-	// TODO: Restore after implementing Driver methods
-	// return s.driver.GetAgentWorkflow(ctx, find)
-	return nil, nil
+	return s.driver.GetAgentWorkflow(ctx, find)
 }

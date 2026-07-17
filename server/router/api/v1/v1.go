@@ -193,10 +193,15 @@ func (s *APIV1Service) RegisterGateway(ctx context.Context, echoServer *echo.Ech
 	s.RegisterAgentRoutes(echoServer)
 
 	// Register auth REST endpoints (unauthenticated) - restrictive CORS
-	authRESTGroup := echoServer.Group("/api/v1/auth")
-	authRESTGroup.Use(adminCORS)
-	authRESTGroup.POST("/tenants", s.HandleAuthTenants)
-	authRESTGroup.POST("/select-tenant", s.HandleSelectTenant)
+	// NOTE: These are registered as individual routes (not a group) to avoid
+	// shadowing the gRPC-gateway catch-all at /api/v1/* which handles auth:signup/signin/signout/status.
+	echoServer.POST("/api/v1/auth/tenants", s.HandleAuthTenants)
+	echoServer.POST("/api/v1/auth/select-tenant", s.HandleSelectTenant)
+	// REST auth handlers that bypass gRPC-gateway (proto annotation missing body:"*" causes body discard)
+	echoServer.POST("/api/v1/auth/signup", s.HandleSignUp)
+	echoServer.POST("/api/v1/auth/signin", s.HandleSignIn)
+	echoServer.POST("/api/v1/auth/signout", s.HandleSignOut)
+	echoServer.POST("/api/v1/auth/status", s.HandleGetAuthStatus)
 
 	handler := echo.WrapHandler(gwMux)
 	gwGroup.Any("/api/v1/*", handler)

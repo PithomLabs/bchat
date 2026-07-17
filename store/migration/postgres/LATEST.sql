@@ -183,7 +183,7 @@ CREATE TABLE agent_audiences (
 -- tenant_role_templates
 CREATE TABLE tenant_role_templates (
     id SERIAL PRIMARY KEY,
-    tenant_id INTEGER REFERENCES agent_tenants(id) ON DELETE CASCADE,
+    tenant_id INTEGER CHECK (tenant_id IS NULL OR tenant_id >= 1) REFERENCES agent_tenants(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     code TEXT NOT NULL,
     permissions TEXT NOT NULL DEFAULT '[]',
