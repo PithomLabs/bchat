@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/revrost/go-openrouter"
@@ -47,7 +48,7 @@ func newLLMClient(timeout time.Duration) *openrouter.Client {
 
 // ExtractContactInfoLLM uses an LLM to extract contact info from a message.
 // Returns nil if extraction fails or times out.
-func ExtractContactInfoLLM(ctx context.Context, messageContent string, conversationHistory []store.AgentMessage, currentDraft *LeadDraft) *ExtractionResult {
+func ExtractContactInfoLLM(ctx context.Context, messageContent string, conversationHistory []store.AgentMessage, currentDraft *LeadDraft, flagged bool) *ExtractionResult {
 	if !hasLLMConfig() {
 		return nil
 	}
@@ -75,6 +76,16 @@ Respond ONLY with valid JSON:
   "location": {"value": "string or null", "confidence": 0.0-1.0, "corrected": true/false},
   "declined": false
 }`
+
+	// N1 (F4): when the message was flagged as a possible prompt-injection in the
+	// chat pipeline, apply the same system-turn guardrail here so the extraction
+	// LLM does not blindly follow injected instructions.
+	if flagged {
+		var sb strings.Builder
+		sb.WriteString(systemPrompt)
+		appendInjectionGuardrail(&sb)
+		systemPrompt = sb.String()
+	}
 
 	// Build messages
 	messages := []openrouter.ChatCompletionMessage{
@@ -196,14 +207,15 @@ func hasLLMConfig() bool {
 var llmExtractionCache = make(map[string]*ExtractionResult)
 
 // ExtractContactInfoLLMCached wraps ExtractContactInfoLLM with caching.
-func ExtractContactInfoLLMCached(ctx context.Context, messageContent string, conversationHistory []store.AgentMessage, currentDraft *LeadDraft) *ExtractionResult {
-	// Simple hash-based cache key
-	cacheKey := fmt.Sprintf("%d", hashString(messageContent))
+func ExtractContactInfoLLMCached(ctx context.Context, messageContent string, conversationHistory []store.AgentMessage, currentDraft *LeadDraft, flagged bool) *ExtractionResult {
+	// Simple hash-based cache key (include flagged so a guarded prompt is not
+	// served from an unguarded cache entry).
+	cacheKey := fmt.Sprintf("%d:%t", hashString(messageContent), flagged)
 	if cached, ok := llmExtractionCache[cacheKey]; ok {
 		return cached
 	}
 
-	result := ExtractContactInfoLLM(ctx, messageContent, conversationHistory, currentDraft)
+	result := ExtractContactInfoLLM(ctx, messageContent, conversationHistory, currentDraft, flagged)
 	if result != nil {
 		llmExtractionCache[cacheKey] = result
 	}
@@ -224,7 +236,7 @@ func hashString(s string) uint32 {
 
 // ExtractContactInfoFull runs the full 3-layer extraction pipeline.
 // Returns the merged lead draft or nil if no useful info found.
-func ExtractContactInfoFull(ctx context.Context, messageContent string, conversationHistory []store.AgentMessage, tenantPhone string, existingDraft *LeadDraft) *LeadDraft {
+func ExtractContactInfoFull(ctx context.Context, messageContent string, conversationHistory []store.AgentMessage, tenantPhone string, existingDraft *LeadDraft, flagged bool) *LeadDraft {
 	// Process the single messageContent first, then iterate over conversation history
 	messages := conversationHistory
 	if messageContent != "" {
@@ -270,7 +282,7 @@ func ExtractContactInfoFull(ctx context.Context, messageContent string, conversa
 			regexConfident := draft.Name != "" || draft.Email != "" || draft.Phone != ""
 			shouldUseLLM := !regexConfident && len(lastMsg.Content) > 30 && !isSpamInput(lastMsg.Content)
 			if shouldUseLLM && hasLLMConfig() {
-				llmResult := ExtractContactInfoLLMCached(ctx, lastMsg.Content, messages, draft)
+				llmResult := ExtractContactInfoLLMCached(ctx, lastMsg.Content, messages, draft, flagged)
 				if llmResult != nil {
 					MergeExtractions(draft, llmResult)
 				}

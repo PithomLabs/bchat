@@ -208,6 +208,8 @@ CREATE TABLE agent_tenants (
     is_active INTEGER NOT NULL DEFAULT 1,
     processing_options TEXT,
     allowed_domains TEXT,
+    transcript_signing_key BLOB,
+    transcript_signing_key_nonce BLOB,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

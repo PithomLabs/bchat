@@ -66,7 +66,7 @@ func (d *DB) ListAgentTenants(ctx context.Context, find *store.FindAgentTenant) 
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, slug, company_name, guid, widget_key, vertical, is_active, processing_options, allowed_domains, created_at, updated_at
+		SELECT id, slug, company_name, guid, widget_key, vertical, is_active, processing_options, allowed_domains, transcript_signing_key, transcript_signing_key_nonce, created_at, updated_at
 		FROM agent_tenants
 		WHERE %s
 		ORDER BY created_at DESC
@@ -82,7 +82,7 @@ func (d *DB) ListAgentTenants(ctx context.Context, find *store.FindAgentTenant) 
 	for rows.Next() {
 		var t store.AgentTenant
 		var guid, widgetKey, vertical, processingOptions, allowedDomains sql.NullString
-		if err := rows.Scan(&t.ID, &t.Slug, &t.CompanyName, &guid, &widgetKey, &vertical, &t.IsActive, &processingOptions, &allowedDomains, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Slug, &t.CompanyName, &guid, &widgetKey, &vertical, &t.IsActive, &processingOptions, &allowedDomains, &t.TranscriptSigningKey, &t.TranscriptSigningKeyNonce, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if guid.Valid {
@@ -108,7 +108,8 @@ func (d *DB) ListAgentTenants(ctx context.Context, find *store.FindAgentTenant) 
 func (d *DB) UpdateAgentTenant(ctx context.Context, tenant *store.AgentTenant) (*store.AgentTenant, error) {
 	stmt := `
 		UPDATE agent_tenants
-		SET company_name = ?, vertical = ?, is_active = ?, processing_options = ?, allowed_domains = ?, widget_key = ?, updated_at = ?
+		SET company_name = ?, vertical = ?, is_active = ?, processing_options = ?, allowed_domains = ?, widget_key = ?,
+			transcript_signing_key = ?, transcript_signing_key_nonce = ?, updated_at = ?
 		WHERE id = ?
 	`
 	now := time.Now()
@@ -124,7 +125,7 @@ func (d *DB) UpdateAgentTenant(ctx context.Context, tenant *store.AgentTenant) (
 	if tenant.WidgetKey != "" {
 		widgetKey = tenant.WidgetKey
 	}
-	_, err := d.db.ExecContext(ctx, stmt, tenant.CompanyName, tenant.Vertical, tenant.IsActive, processingOptions, allowedDomains, widgetKey, now, tenant.ID)
+	_, err := d.db.ExecContext(ctx, stmt, tenant.CompanyName, tenant.Vertical, tenant.IsActive, processingOptions, allowedDomains, widgetKey, tenant.TranscriptSigningKey, tenant.TranscriptSigningKeyNonce, now, tenant.ID)
 	if err != nil {
 		return nil, err
 	}

@@ -3,9 +3,12 @@ package v1
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math"
 	"net/http"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -58,6 +61,18 @@ func NewAPIV1Service(secret string, profile *profile.Profile, store *store.Store
 	// Initialize agent service and handler
 	agentService := agent.NewService(store, profile)
 	agentHandler := agent.NewHandler(agentService, store)
+
+	// Ensure all tenants have transcript signing keys (generates for existing tenants on first run)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	agentService.EnsureTranscriptSigningKeys(ctx)
+	// Re-encrypt secrets with current key if backup key is present (Issue #5).
+	// Best-effort at startup: log but do not block server boot on partial failure.
+	if _, failed, reErr := agentService.ReEncryptOnStartup(ctx); reErr != nil {
+		slog.Error("startup re-encryption aborted", "error", reErr)
+	} else if failed > 0 {
+		slog.Warn("startup re-encryption completed with failures", "failed", failed)
+	}
 
 	apiv1Service := &APIV1Service{
 		Secret:           secret,
@@ -242,9 +257,24 @@ func (s *APIV1Service) RegisterGateway(ctx context.Context, echoServer *echo.Ech
 
 // RegisterAgentRoutes registers the agent chat API routes.
 func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
-	// Public CORS (permissive) for widget/chat from any origin
+	// Public CORS from PUBLIC_CORS_ORIGINS env var (default: * for backwards compatibility)
+	publicOrigins := getEnvSlice("PUBLIC_CORS_ORIGINS", []string{"*"})
+	if slices.Equal(publicOrigins, []string{"*"}) {
+		slog.Warn("PUBLIC_CORS_ORIGINS not set, defaulting to * (all origins). Set PUBLIC_CORS_ORIGINS for production.")
+	}
 	publicCORS := middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: []string{"*"},
+		AllowOriginFunc: func(origin string) (bool, error) {
+			for _, pattern := range publicOrigins {
+				if pattern == "*" || pattern == origin {
+					return true, nil
+				}
+				matched, _ := filepath.Match(pattern, origin)
+				if matched {
+					return true, nil
+				}
+			}
+			return false, nil
+		},
 		AllowMethods: []string{echo.GET, echo.POST, echo.PUT, echo.DELETE, echo.OPTIONS},
 		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization, "X-Widget-Key"},
 	})
@@ -276,9 +306,14 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	bridgeGroup.POST("/reply", s.agentHandler.HandleBridgeReply)
 	bridgeGroup.POST("/release", s.agentHandler.HandleBridgeRelease)
 
-	// Widget routes (public, no auth) - permissive CORS
+	// Widget routes (public, no auth) - permissive CORS for cross-origin script loading
 	widgetGroup := echoServer.Group("/widget")
-	widgetGroup.Use(publicCORS)
+	widgetPermissiveCORS := middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: []string{"*"},
+		AllowMethods: []string{echo.GET},
+		AllowHeaders: []string{echo.HeaderOrigin},
+	})
+	widgetGroup.Use(widgetPermissiveCORS)
 	widgetGroup.GET("/:slug/embed.js", s.agentHandler.HandleWidgetEmbed) // Built bundle
 	widgetGroup.GET("/:slug/iframe", s.agentHandler.HandleWidgetIframe)  // iframe HTML
 

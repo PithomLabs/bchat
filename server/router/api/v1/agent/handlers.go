@@ -526,16 +526,13 @@ func (h *Handler) HandleGetExternalTranscript(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
 	}
 
-	// Verify HMAC session token (uses WidgetKey, with GUID fallback for pre-migration tokens)
-	// Grace period: only attempt GUID fallback within 1 hour of tenant creation.
-	// Token TTL is 30min, so 1 hour covers all in-flight pre-migration sessions.
-	// After grace, only WidgetKey is accepted (GUID fallback dropped).
-	const guidGracePeriod = 1 * time.Hour
-	expiry, err := verifySessionToken(token, sessionID, expiryStr, tenant.WidgetKey)
-	if err != nil && tenant.GUID != "" && time.Since(tenant.CreatedAt) < guidGracePeriod {
-		// Grace: try old GUID key for tokens minted before widget_key rekey
-		expiry, err = verifySessionToken(token, sessionID, expiryStr, tenant.GUID)
+	// Verify HMAC session token using per-tenant transcript signing key
+	seed, seedErr := h.service.getTranscriptSigningSeed(ctx, tenant.ID)
+	if seedErr != nil {
+		slog.Error("failed to get transcript signing key", "tenant", tenant.Slug, "error", seedErr)
+		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
 	}
+	expiry, err := verifySessionToken(token, sessionID, expiryStr, seed)
 	if err != nil || time.Now().After(expiry) {
 		return echo.NewHTTPError(http.StatusForbidden, "Invalid or expired token")
 	}

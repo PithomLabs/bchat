@@ -453,9 +453,14 @@ func (s *APIV1Service) CreateUserAccessToken(ctx context.Context, request *v1pb.
 		return nil, status.Errorf(codes.PermissionDenied, "permission denied")
 	}
 
-	expiresAt := time.Time{}
+	// Default to 7-day expiry if none specified
+	expiresAt := time.Now().Add(AccessTokenDuration)
 	if request.ExpiresAt != nil {
 		expiresAt = request.ExpiresAt.AsTime()
+	}
+	// Cap at 30 days for production safety (no indefinite tokens)
+	if expiresAt.IsZero() || expiresAt.After(time.Now().Add(MaxNeverExpireDuration)) {
+		expiresAt = time.Now().Add(MaxNeverExpireDuration)
 	}
 
 	accessToken, err := GenerateAccessToken(currentUser.Username, currentUser.ID, nil, expiresAt, []byte(s.Secret))

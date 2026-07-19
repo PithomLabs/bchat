@@ -88,7 +88,7 @@ func TestBChatLiveHumanReplyAppearsInVisitorTranscript(t *testing.T) {
 	// Verify via public GET transcript endpoint DTO mapping
 	e := echo.New()
 	handler := NewHandler(service, ts)
-	req := httptest.NewRequest(http.MethodGet, testTranscriptURL(tenant.Slug, sessionID, tenant.WidgetKey), nil)
+	req := httptest.NewRequest(http.MethodGet, testTranscriptURL(tenant.Slug, sessionID, testSigningSeed), nil)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetParamNames("slug")
@@ -660,7 +660,7 @@ func TestBChatLiveDoesNotExposeClaimTokenToVisitor(t *testing.T) {
 	handler := NewHandler(service, ts)
 
 	// Test GET transcript response body doesn't leak claim_token
-	req := httptest.NewRequest(http.MethodGet, testTranscriptURL(tenant.Slug, sessionID, tenant.WidgetKey), nil)
+	req := httptest.NewRequest(http.MethodGet, testTranscriptURL(tenant.Slug, sessionID, testSigningSeed), nil)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetParamNames("slug")
@@ -819,6 +819,8 @@ func TestBChatLiveWidgetPollingToggle(t *testing.T) {
 }
 
 func TestBChatLiveEndToEndVisitorHumanReplyFlow(t *testing.T) {
+	withMockLLM(t, "This is a mock assistant reply for testing.")
+	t.Setenv("RAG_PIPELINE_ENABLED", "false")
 	ctx := context.Background()
 	ts, tenant, _, enc := setupMiddlewareTestStore(t, ctx, "live-e2e-flow", true)
 	defer ts.Close()
@@ -834,6 +836,7 @@ func TestBChatLiveEndToEndVisitorHumanReplyFlow(t *testing.T) {
 	prof := &profile.Profile{Mode: "dev", EncryptionMasterKey: "super-secure-master-key-12345"}
 	svc := NewService(ts, prof)
 	svc.encryptionService = enc
+	setupTestSigningKey(t, ctx, ts, tenant, svc)
 	handler := NewHandler(svc, ts)
 
 	e.POST("/api/v1/agent/:slug/chat/ext", handler.HandleChatExternal)
@@ -918,7 +921,7 @@ func TestBChatLiveEndToEndVisitorHumanReplyFlow(t *testing.T) {
 	require.Equal(t, "completed", respReply.WebChatDelivery.Status)
 
 	// 5. Visitor polls transcript (GET /chat/ext/transcript) and sees human reply
-	req5 := httptest.NewRequest(http.MethodGet, testTranscriptURL("live-e2e-flow", sessionID, tenant.WidgetKey), nil)
+	req5 := httptest.NewRequest(http.MethodGet, testTranscriptURL("live-e2e-flow", sessionID, testSigningSeed), nil)
 	rec5 := httptest.NewRecorder()
 	c5 := e.NewContext(req5, rec5)
 	c5.SetParamNames("slug")
@@ -997,7 +1000,7 @@ func TestBChatLiveTranscriptEndpointDoesNotReturnSessionIDOrInternalIDs(t *testi
 
 	e := echo.New()
 	handler := NewHandler(service, ts)
-	req := httptest.NewRequest(http.MethodGet, testTranscriptURL(tenant.Slug, sessionID, tenant.WidgetKey), nil)
+	req := httptest.NewRequest(http.MethodGet, testTranscriptURL(tenant.Slug, sessionID, testSigningSeed), nil)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetParamNames("slug")
@@ -1031,7 +1034,7 @@ func TestBChatLiveTranscriptEndpointDoesNotLogRawSessionID(t *testing.T) {
 
 	e := echo.New()
 	handler := NewHandler(service, ts)
-	req := httptest.NewRequest(http.MethodGet, testTranscriptURL(tenant.Slug, sessionID, tenant.WidgetKey), nil)
+	req := httptest.NewRequest(http.MethodGet, testTranscriptURL(tenant.Slug, sessionID, testSigningSeed), nil)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetParamNames("slug")

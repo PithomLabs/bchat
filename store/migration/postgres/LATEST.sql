@@ -153,6 +153,8 @@ CREATE TABLE agent_tenants (
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   processing_options TEXT,
   allowed_domains TEXT,
+  transcript_signing_key BYTEA,
+  transcript_signing_key_nonce BYTEA,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

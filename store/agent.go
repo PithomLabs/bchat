@@ -18,6 +18,8 @@ type AgentTenant struct {
 	IsActive          bool
 	ProcessingOptions string // JSON-encoded ProcessingOptions for Format for RAG
 	AllowedDomains    string // JSON array of allowed domains for widget embedding, empty = allow all
+	TranscriptSigningKey      []byte `json:"-"`
+	TranscriptSigningKeyNonce []byte `json:"-"`
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 }
@@ -269,6 +271,12 @@ type AgentSession struct {
 
 	// In-memory belief-revision facts (memstate). Nil when MEMSTATE_ENABLED is off.
 	Facts *SafeMemory `json:"-"`
+
+	// FlaggedInput is set when the latest user message matched a prompt-injection
+	// heuristic. It is in-memory only and is surfaced to the LLM via the system
+	// prompt (not prepended into the user turn) to avoid injecting directive text
+	// into attacker-controlled content (N1).
+	FlaggedInput bool `json:"-"`
 }
 
 // AgentMessage represents a single message in a chat session.

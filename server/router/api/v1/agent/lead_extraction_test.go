@@ -243,7 +243,7 @@ func TestExtractContactInfoFull(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	draft := ExtractContactInfoFull(ctx, "", messages, "", nil)
+	draft := ExtractContactInfoFull(ctx, "", messages, "", nil, false)
 	require.NotNil(t, draft)
 	require.Equal(t, "Izak Zuk", draft.Name)
 	require.Equal(t, "izk@izk.net", draft.Email)
@@ -258,7 +258,7 @@ func TestExtractContactInfoFull_Declined(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	draft := ExtractContactInfoFull(ctx, "", messages, "", nil)
+	draft := ExtractContactInfoFull(ctx, "", messages, "", nil, false)
 	require.NotNil(t, draft)
 	require.True(t, draft.Declined)
 }
@@ -270,7 +270,7 @@ func TestExtractContactInfoFull_Correction(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	draft := ExtractContactInfoFull(ctx, "", messages, "", nil)
+	draft := ExtractContactInfoFull(ctx, "", messages, "", nil, false)
 	require.NotNil(t, draft)
 	require.Equal(t, "James", draft.Name)
 	require.Equal(t, "james@email.com", draft.Email)

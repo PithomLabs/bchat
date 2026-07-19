@@ -65,7 +65,7 @@ func (d *DB) ListAgentTenants(ctx context.Context, find *store.FindAgentTenant) 
 		add("is_active = $%d", *find.IsActive)
 	}
 	rows, err := d.db.QueryContext(ctx, `
-		SELECT id, slug, company_name, guid, widget_key, vertical, is_active, processing_options, allowed_domains, created_at, updated_at
+		SELECT id, slug, company_name, guid, widget_key, vertical, is_active, processing_options, allowed_domains, transcript_signing_key, transcript_signing_key_nonce, created_at, updated_at
 		FROM agent_tenants WHERE `+strings.Join(where, " AND ")+` ORDER BY created_at DESC
 	`, args...)
 	if err != nil {
@@ -76,7 +76,7 @@ func (d *DB) ListAgentTenants(ctx context.Context, find *store.FindAgentTenant) 
 	for rows.Next() {
 		var tenant store.AgentTenant
 		var guid, widgetKey, vertical, processing, domains sql.NullString
-		if err := rows.Scan(&tenant.ID, &tenant.Slug, &tenant.CompanyName, &guid, &widgetKey, &vertical, &tenant.IsActive, &processing, &domains, &tenant.CreatedAt, &tenant.UpdatedAt); err != nil {
+		if err := rows.Scan(&tenant.ID, &tenant.Slug, &tenant.CompanyName, &guid, &widgetKey, &vertical, &tenant.IsActive, &processing, &domains, &tenant.TranscriptSigningKey, &tenant.TranscriptSigningKeyNonce, &tenant.CreatedAt, &tenant.UpdatedAt); err != nil {
 			return nil, err
 		}
 		tenant.GUID, tenant.WidgetKey, tenant.Vertical = guid.String, widgetKey.String, vertical.String
@@ -90,9 +90,10 @@ func (d *DB) UpdateAgentTenant(ctx context.Context, tenant *store.AgentTenant) (
 	now := time.Now()
 	_, err := d.db.ExecContext(ctx, `
 		UPDATE agent_tenants SET company_name=$1, vertical=$2, is_active=$3,
-			processing_options=NULLIF($4,''), allowed_domains=NULLIF($5,''), widget_key=NULLIF($6,''), updated_at=$7
-		WHERE id=$8
-	`, tenant.CompanyName, tenant.Vertical, tenant.IsActive, tenant.ProcessingOptions, tenant.AllowedDomains, tenant.WidgetKey, now, tenant.ID)
+			processing_options=NULLIF($4,''), allowed_domains=NULLIF($5,''), widget_key=NULLIF($6,''),
+			transcript_signing_key=$7, transcript_signing_key_nonce=$8, updated_at=$9
+		WHERE id=$10
+	`, tenant.CompanyName, tenant.Vertical, tenant.IsActive, tenant.ProcessingOptions, tenant.AllowedDomains, tenant.WidgetKey, tenant.TranscriptSigningKey, tenant.TranscriptSigningKeyNonce, now, tenant.ID)
 	if err != nil {
 		return nil, err
 	}

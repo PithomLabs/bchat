@@ -16,6 +16,20 @@ import (
 	teststore "github.com/usememos/memos/store/test"
 )
 
+const testSigningSeed = "test-transcript-signing-key-32b!"
+
+func setupTestSigningKey(t *testing.T, ctx context.Context, ts *store.Store, tenant *store.AgentTenant, service *Service) {
+	t.Helper()
+	encService := service.EncryptionService()
+	require.NotNil(t, encService, "encryption service must be initialized in test")
+	ciphertext, nonce, err := encService.Encrypt(testSigningSeed)
+	require.NoError(t, err)
+	tenant.TranscriptSigningKey = ciphertext
+	tenant.TranscriptSigningKeyNonce = nonce
+	_, err = ts.UpdateAgentTenant(ctx, tenant)
+	require.NoError(t, err)
+}
+
 func TestEmptySessionIDGeneratesUUID(t *testing.T) {
 	id, generated, err := NormalizeExternalSessionID("")
 	require.NoError(t, err)
@@ -404,7 +418,9 @@ func TestChatExternalClientMessageIDContentMismatch(t *testing.T) {
 
 func newBridgeChatTestService(t *testing.T, slug string) (context.Context, *store.Store, *Service, *store.AgentTenant) {
 	t.Helper()
-	t.Setenv("OPENROUTER_API_KEY", "")
+	// Route chat generation through an in-memory mock LLM so the chat path is
+	// exercisable without a live OpenRouter API key (see withMockLLM).
+	withMockLLM(t, "This is a mock assistant reply for testing.")
 	t.Setenv("RAG_PIPELINE_ENABLED", "false")
 	ctx := context.Background()
 	ts := teststore.NewTestingStore(ctx, t)
@@ -415,7 +431,12 @@ func newBridgeChatTestService(t *testing.T, slug string) (context.Context, *stor
 		EmergencyPhone: "", RateLimitRPM: 60,
 	})
 	require.NoError(t, err)
-	service := NewService(ts, &profile.Profile{Driver: "sqlite", Mode: "prod"})
+	service := NewService(ts, &profile.Profile{
+		Driver:              "sqlite",
+		Mode:                "prod",
+		EncryptionMasterKey: "test-encryption-master-key-1234567890ab",
+	})
+	setupTestSigningKey(t, ctx, ts, tenant, service)
 	return ctx, ts, service, tenant
 }
 
@@ -523,8 +544,8 @@ func (d *unsupportedBridgeDriver) UpdateBridgeHandoffRoutingModeCAS(ctx context.
 }
 
 func TestUnsupportedDBPathCreatesNoWarnings(t *testing.T) {
-	t.Setenv("OPENROUTER_API_KEY", "")
 	t.Setenv("RAG_PIPELINE_ENABLED", "false")
+	withMockLLM(t, "This is a mock assistant reply for testing.")
 	ctx := context.Background()
 	ts := teststore.NewTestingStore(ctx, t)
 	defer ts.Close()
