@@ -478,6 +478,7 @@ func (h *Handler) HandleChatExternal(c echo.Context) error {
 			})
 		}
 		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "not active") {
+			slog.Info("chat external: tenant/audience not found or inactive", "slug", slug, "error", err)
 			return echo.NewHTTPError(http.StatusForbidden, "Access denied")
 		}
 		slog.Error("chat external failed", "slug", slug, "error", err)

@@ -42,7 +42,7 @@ func (*FrontendService) Serve(_ context.Context, e *echo.Echo) {
 			reqPath := c.Request().URL.Path
 
 			// Skip API routes — let the next middleware handle them.
-			if util.HasPrefixes(reqPath, "/api", "/memos.api.v1") {
+			if util.HasPrefixes(reqPath, "/api", "/memos.api.v1", "/widget/") {
 				return next(c)
 			}
 

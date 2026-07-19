@@ -34,7 +34,7 @@ type Profile struct {
 	InstanceURL string
 	// OpenRouterAPIKey is the API key for OpenRouter AI chat service
 	OpenRouterAPIKey string
-	// LLMModel is the model identifier for the LLM (e.g., "openai/gpt-4o-mini")
+	// LLMModel is the model identifier for the LLM (e.g., "openrouter/free")
 	LLMModel string
 	// EncryptionMasterKey is the master key for encrypting tenant API keys (AES-256)
 	EncryptionMasterKey string

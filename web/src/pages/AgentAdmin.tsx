@@ -3565,7 +3565,7 @@ const LLMConfigSection = ({
         <FormControl>
           <FormLabel>Model</FormLabel>
           <Select
-            value={model || "openai/gpt-oss-120b:free"}
+            value={model || "openrouter/free"}
             onChange={(_, val) => setModel(val as string)}
             disabled={!canEdit}
           >
@@ -3715,7 +3715,7 @@ const ReasoningModelInput = ({
         </FormLabel>
         <Input
           size="sm"
-          placeholder="google/gemini-2.5-pro"
+          placeholder="openrouter/free"
           value={reasoningModel}
           onChange={(e) => setReasoningModel(e.target.value)}
         />

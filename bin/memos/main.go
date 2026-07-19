@@ -56,11 +56,18 @@ var (
 					slog.Warn("ENCRYPTION_MASTER_KEY is too short (< 16 chars). Encrypted tenant API keys may be insecure.",
 						"key_length", len(key))
 				}
-			} else {
-				slog.Warn("ENCRYPTION_MASTER_KEY is not set. Tenant API key encryption is disabled.")
-			}
+		} else {
+			slog.Warn("ENCRYPTION_MASTER_KEY is not set. Tenant API key encryption is disabled.")
+		}
 
-			if err := instanceProfile.Validate(); err != nil {
+		// Log OpenRouter API key status at startup
+		if instanceProfile.OpenRouterAPIKey != "" {
+			slog.Info("OpenRouter API key loaded", "prefix", instanceProfile.OpenRouterAPIKey[:10]+"...")
+		} else {
+			slog.Warn("OpenRouter API key is NOT set - chat will be unavailable")
+		}
+
+		if err := instanceProfile.Validate(); err != nil {
 				panic(err)
 			}
 
@@ -127,7 +134,7 @@ func init() {
 	rootCmd.PersistentFlags().String("dsn", "", "database source name(aka. DSN)")
 	rootCmd.PersistentFlags().String("instance-url", "", "the url of your memos instance")
 	rootCmd.PersistentFlags().String("openrouter-api-key", "", "OpenRouter API key for AI chat")
-	rootCmd.PersistentFlags().String("llm-model", "openai/gpt-4o-mini", "LLM model identifier for AI chat")
+	rootCmd.PersistentFlags().String("llm-model", "openrouter/free", "LLM model identifier for AI chat")
 	rootCmd.PersistentFlags().String("encryption-master-key", "", "Master key for encrypting tenant API keys")
 
 	if err := viper.BindPFlag("mode", rootCmd.PersistentFlags().Lookup("mode")); err != nil {

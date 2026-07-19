@@ -104,7 +104,7 @@ Respond ONLY with valid JSON:
 	messages = append(messages, openrouter.UserMessage(fmt.Sprintf("Extract contact info from this message:\n\n%s", messageContent)))
 
 	// Call LLM — respect precedence: env var > hardcoded default
-	model := getEnvOrDefault("LLM_MODEL", "openai/gpt-4o-mini")
+	model := getEnvOrDefault("LLM_MODEL", "openrouter/free")
 	if os.Getenv("OPENROUTER_API_KEY") == "" {
 		return nil
 	}

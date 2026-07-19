@@ -246,7 +246,7 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	publicCORS := middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"*"},
 		AllowMethods: []string{echo.GET, echo.POST, echo.PUT, echo.DELETE, echo.OPTIONS},
-		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization},
+		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization, "X-Widget-Key"},
 	})
 	// Admin CORS (restrictive) from ADMIN_CORS_ORIGINS env var
 	adminOrigins := getEnvSlice("ADMIN_CORS_ORIGINS", []string{})
@@ -260,6 +260,9 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	publicGroup := echoServer.Group("/api/v1/agent")
 	publicGroup.Use(publicCORS)
 	publicGroup.Use(middleware.BodyLimit("16KB"))
+	publicGroup.OPTIONS("/:slug/*", func(c echo.Context) error {
+		return c.NoContent(http.StatusNoContent)
+	})
 	publicGroup.GET("/playground/catalog", s.agentHandler.HandlePlaygroundCatalog)
 	publicGroup.POST("/:slug/chat/ext", s.agentHandler.HandleChatExternal)
 	publicGroup.GET("/:slug/chat/ext/transcript", s.agentHandler.HandleGetExternalTranscript)

@@ -42,7 +42,7 @@ type VerificationConfig struct {
 func DefaultVerificationConfig() *VerificationConfig {
 	return &VerificationConfig{
 		Enabled:      true,
-		Model:        "openai/gpt-4o-mini", // Fast and cheap for verification
+		Model:        "openrouter/free", // Fast and cheap for verification
 		Mode:         "enforce",            // Start with enforce mode
 		MaxLatencyMs: 3000,                 // 3 second max for verification
 		SkipOnError:  true,                 // Graceful degradation

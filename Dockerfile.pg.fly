@@ -116,8 +116,8 @@ ENV EMBEDDING_BATCH_SIZE="200"
 ENV EMBEDDING_TIMEOUT="180s"
 
 # LLM models
-ENV LLM_MODEL="poolside/laguna-m.1:free"
-ENV LLM_MODEL_REASONING="nvidia/nemotron-3-ultra-550b-a55b:free"
+ENV LLM_MODEL="openrouter/free"
+ENV LLM_MODEL_REASONING="openrouter/free"
 
 # Optional LLM verifier (disabled by default)
 ENV LLM_VERIFIER_ENABLED="false"

@@ -1430,7 +1430,7 @@ func (s *Service) getLLMConfig(ctx context.Context, tenantID int32) (model strin
 	if model == "" {
 		model = s.profile.LLMModel
 		if model == "" {
-			model = "openai/gpt-oss-120b:free"
+			model = "openrouter/free"
 		}
 	}
 	if apiKey == "" {
@@ -1497,7 +1497,7 @@ func (s *Service) verifyResponseWithLLM(ctx context.Context, response string, co
 	// Create verifier with fast model for verification
 	verifierConfig := &VerificationConfig{
 		Enabled:      true,
-		Model:        "openai/gpt-4o-mini", // Fast and cheap for verification
+		Model:        "openrouter/free", // Fast and cheap for verification
 		Mode:         "enforce",
 		MaxLatencyMs: 3000,
 		SkipOnError:  true,
@@ -2538,7 +2538,8 @@ func (s *Service) generateResponse(ctx context.Context, config *AudienceConfig, 
 	// Get LLM config with tenant-specific fallback
 	model, apiKey, err := s.requireLLMConfig(ctx, config.TenantID)
 	if err != nil {
-		return "I apologize, but the chat service is not currently available. Please call us directly.", nil
+		slog.Warn("chat: LLM config unavailable", "tenant", config.TenantID, "error", err)
+		return "", fmt.Errorf("chat service unavailable for tenant %d: %w", config.TenantID, err)
 	}
 
 	// Build system prompt (passing session for context retention)
@@ -3060,7 +3061,8 @@ func (s *Service) generateRAGResponse(
 	// Get LLM config
 	model, apiKey, err := s.requireLLMConfig(ctx, config.TenantID)
 	if err != nil {
-		return "I apologize, but the chat service is not currently available. Please call us directly.", nil
+		slog.Warn("chat: LLM config unavailable (RAG)", "tenant", config.TenantID, "error", err)
+		return "", fmt.Errorf("chat service unavailable for tenant %d: %w", config.TenantID, err)
 	}
 	ctx = WithEmbeddingOpenRouterAPIKey(ctx, apiKey)
 
@@ -4447,7 +4449,7 @@ func (s *Service) getReasoningModel(ctx context.Context, tenantID int32) string 
 	}
 
 	// 3. Hardcoded default
-	return "google/gemini-2.5-pro"
+	return "openrouter/free"
 }
 
 // GenerateAnnotatedKB uses an LLM to convert raw KB content into properly annotated KB.MD format.

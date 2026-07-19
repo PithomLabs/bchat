@@ -338,15 +338,7 @@ export interface AgentEvent {
 }
 
 // Available LLM models (free tier)
-export const LLM_MODEL_OPTIONS = [
-  { value: "openai/gpt-oss-120b:free", label: "GPT-OSS 120B (Default)" },
-  { value: "xiaomi/mimo-v2-flash:free", label: "Xiaomi MiMo v2 Flash" },
-  { value: "nvidia/nemotron-3-nano-30b-a3b:free", label: "NVIDIA Nemotron-3 Nano 30B" },
-  { value: "google/gemma-3-27b-it:free", label: "Google Gemma 3 27B" },
-  { value: "qwen/qwen3-coder:free", label: "Qwen 3 Coder" },
-  { value: "z-ai/glm-4.5-air:free", label: "Z-AI GLM 4.5 Air" },
-  { value: "nousresearch/hermes-3-llama-3.1-405b:free", label: "Hermes 3 LLaMA 405B" },
-];
+export const LLM_MODEL_OPTIONS = [];
 
 // Permission presets
 export const PERMISSION_PRESETS = {

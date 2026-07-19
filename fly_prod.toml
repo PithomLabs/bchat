@@ -31,9 +31,9 @@ primary_region = "sjc"
   EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L12-v2"
   LLM_VERIFIER_ENABLED = "false"
 
-  LLM_MODEL_REASONING = "openai/gpt-oss-120b:free"
+  LLM_MODEL_REASONING = "openrouter/free"
   EMBEDDING_TIMEOUT = "10m"
-  LLM_MODEL = "openai/gpt-oss-120b:free"
+  LLM_MODEL = "openrouter/free"
 [http_service]
   internal_port = 5230
   force_https = true

@@ -93,7 +93,7 @@ tasks:
       - |
         if [ -f .env ]; then
           echo "Loading environment from .env file..."
-          set -a && source .env && set +a
+          set -a && . .env && set +a
         fi
         ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
 
@@ -104,7 +104,7 @@ tasks:
       - |
         if [ -f .env ]; then
           echo "Loading environment from .env file..."
-          set -a && source .env && set +a
+          set -a && . .env && set +a
         fi
         RAG_PIPELINE_ENABLED=true EMBEDDING_MODEL=qwen/qwen3-embedding-8b EMBEDDING_BATCH_SIZE=32 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
 
@@ -115,7 +115,7 @@ tasks:
       - |
         if [ -f .env ]; then
           echo "Loading environment from .env file..."
-          set -a && source .env && set +a
+          set -a && . .env && set +a
         fi
         RAG_PIPELINE_ENABLED=true \
         EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L12-v2 \

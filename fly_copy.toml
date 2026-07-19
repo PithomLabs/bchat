@@ -21,8 +21,8 @@ primary_region = 'sjc'
   
   LANCEDB_STORAGE_PROVIDER = 's3'
   LANCEDB_S3_FORCE_PATH_STYLE = 'false'
-  LLM_MODEL = "poolside/laguna-m.1:free"
-  LLM_MODEL_REASONING = "nvidia/nemotron-3-ultra-550b-a55b:free"
+  LLM_MODEL = "openrouter/free"
+  LLM_MODEL_REASONING = "openrouter/free"
   LLM_VERIFIER_ENABLED = 'false'
   MEMOS_MODE = 'prod'
   MEMOS_PORT = '5230'
