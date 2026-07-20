@@ -211,11 +211,51 @@ func (d *DB) DeleteTenantConfig(ctx context.Context, tenantID int32) error {
 }
 
 func (d *DB) GetSystemSecret(ctx context.Context) (*store.SystemSecret, error) {
-	return nil, nil
+	query := `
+		SELECT id, encryption_salt, key_version, created_at, rotated_at
+		FROM system_secret
+		WHERE id = 1
+	`
+	var secret store.SystemSecret
+	var createdAtUnix int64
+	var rotatedAtUnix sql.NullInt64
+
+	err := d.db.QueryRowContext(ctx, query).Scan(
+		&secret.ID, &secret.EncryptionSalt, &secret.KeyVersion, &createdAtUnix, &rotatedAtUnix,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	secret.CreatedAt = time.Unix(createdAtUnix, 0)
+	if rotatedAtUnix.Valid {
+		t := time.Unix(rotatedAtUnix.Int64, 0)
+		secret.RotatedAt = &t
+	}
+	return &secret, nil
 }
 
 func (d *DB) UpsertSystemSecret(ctx context.Context, secret *store.SystemSecret) (*store.SystemSecret, error) {
-	return nil, nil
+	now := time.Now()
+	stmt := `
+		INSERT INTO system_secret (id, encryption_salt, key_version, created_at)
+		VALUES (1, $1, $2, $3)
+		ON CONFLICT(id) DO UPDATE SET
+			encryption_salt = EXCLUDED.encryption_salt,
+			key_version = EXCLUDED.key_version,
+			rotated_at = $4
+		RETURNING id
+	`
+	if err := d.db.QueryRowContext(ctx, stmt,
+		secret.EncryptionSalt, secret.KeyVersion, now.Unix(), now.Unix(),
+	).Scan(&secret.ID); err != nil {
+		return nil, err
+	}
+	secret.CreatedAt = now
+	return secret, nil
 }
 
 func (d *DB) CreateTenantRoleTemplate(ctx context.Context, template *store.TenantRoleTemplate) (*store.TenantRoleTemplate, error) {
