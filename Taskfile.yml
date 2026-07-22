@@ -43,16 +43,36 @@ tasks:
     cmds:
       - cd web && nub run release
 
+  version:info:
+    desc: Show computed version from migration filesystem (informational, read-only)
+    cmds:
+      - ./scripts/bump-version.sh
+
+  migrate:new:
+    desc: "Create new migration file templates for both drivers (usage: task migrate:new NAME=add_widget_config)"
+    cmds:
+      - ./scripts/create-migration.sh "{{.NAME}}"
+
+  validate:parity:
+    desc: Validate SQLite and Postgres migration parity
+    cmds:
+      - ./scripts/validate-parity.sh
+
+  test:scripts:
+    desc: Run automation script tests
+    cmds:
+      - ./scripts/test/run-tests.sh
+
   build:backend:
     desc: Build the Go binary
-    deps: [validate:migrations]
+    deps: [validate:migrations, validate:parity, test:scripts]
     cmds:
       - mkdir -p build
       - go build -o build/memos ./bin/memos/main.go
 
   build:backend:rag:
     desc: Build the Go binary with LanceDB RAG support
-    deps: [build:frontend, setup:lancedb, validate:migrations]
+    deps: [build:frontend, setup:lancedb, validate:migrations, validate:parity, test:scripts]
     env:
       CGO_ENABLED: "1"
       CGO_CFLAGS: "-I{{.ROOT_DIR}}/include"

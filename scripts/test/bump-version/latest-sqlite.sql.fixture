@@ -1,0 +1,17 @@
+-- LATEST.sql fixture for parity testing
+-- This is a simplified version for testing the validator
+
+CREATE TABLE IF NOT EXISTS "agent" (
+    "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+    "tenant_id" INTEGER NOT NULL,
+    "name" TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY ("tenant_id") REFERENCES "agent_tenant"("id") ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS "agent_tenant" (
+    "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+    "name" TEXT NOT NULL DEFAULT '',
+    "is_active" INTEGER CHECK ("is_active" IN (0, 1)) NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS "idx_agent_tenant" ON "agent"("tenant_id");

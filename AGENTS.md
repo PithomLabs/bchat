@@ -525,19 +525,19 @@ DeleteMyNewType(ctx context.Context, id string) error
 
 ### Database Migrations
 
-Location: `store/migration/sqlite/`
+**Primary workflow:** `task migrate:new NAME=add_widget_config`
+
+Creates SQLite and Postgres migration file templates. Write SQL for each driver manually.
+See `docs/DOCS_DATABASE_MIGRATION_GUIDE.md` and `docs/TYPE_MAPPING.md` for full reference.
+
+Location: `store/migration/sqlite/<version>/` and `store/migration/postgres/<version>/`
 
 Naming: `NN__snake_case_description.sql`
 
-```sql
-CREATE TABLE IF NOT EXISTS my_table (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER NOT NULL,
-    FOREIGN KEY (tenant_id) REFERENCES agent_tenant(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_my_table_tenant ON my_table(tenant_id);
-```
+Validation commands:
+- `task validate:parity` — cross-driver schema + file-list parity
+- `task validate:schema` — schema validation tests
+- `./scripts/validate-migrations.sh` — LATEST.sql drift check
 
 ### Frontend Pattern (React + MobX)
 

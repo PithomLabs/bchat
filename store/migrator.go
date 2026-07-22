@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -19,7 +20,7 @@ import (
 )
 
 //go:embed migration
-var migrationFS embed.FS
+var MigrationFS embed.FS
 
 //go:embed seed
 var seedFS embed.FS
@@ -37,6 +38,11 @@ const (
 func (s *Store) Migrate(ctx context.Context) error {
 	if err := s.preMigrate(ctx); err != nil {
 		return errors.Wrap(err, "failed to pre-migrate")
+	}
+
+	// Validate version consistency (warn-only; build gate is the real enforcement)
+	if err := s.validateSchemaVersionConsistency(); err != nil {
+		return errors.Wrap(err, "failed to validate schema version consistency")
 	}
 
 	// Validate data integrity before migration
@@ -68,13 +74,14 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 		sort.Sort(version.SortVersion(migrationHistoryVersions))
 		latestMigrationHistoryVersion := migrationHistoryVersions[len(migrationHistoryVersions)-1]
+
 		schemaVersion, err := s.GetCurrentSchemaVersion()
 		if err != nil {
 			return errors.Wrap(err, "failed to get current schema version")
 		}
 
 		if version.IsVersionGreaterThan(schemaVersion, latestMigrationHistoryVersion) {
-			filePaths, err := fs.Glob(migrationFS, fmt.Sprintf("%s*/*.sql", s.getMigrationBasePath()))
+			filePaths, err := fs.Glob(MigrationFS, fmt.Sprintf("%s*/*.sql", s.getMigrationBasePath()))
 			if err != nil {
 				return errors.Wrap(err, "failed to read migration files")
 			}
@@ -93,15 +100,35 @@ func (s *Store) Migrate(ctx context.Context) error {
 				if err != nil {
 					return errors.Wrap(err, "failed to get schema version of migrate script")
 				}
-				if version.IsVersionGreaterThan(fileSchemaVersion, latestMigrationHistoryVersion) && version.IsVersionGreaterOrEqualThan(schemaVersion, fileSchemaVersion) {
-					bytes, err := migrationFS.ReadFile(filePath)
-					if err != nil {
-						return errors.Wrapf(err, "failed to read minor version migration file: %s", filePath)
+				// Skip migrations already applied. migration_history stores only the batch
+				// target version, not every individual file version. Any file whose version
+				// is <= the latest applied version was already executed — either during
+				// incremental migration or when the database was first created via LATEST.sql.
+				if !version.IsVersionGreaterThan(fileSchemaVersion, latestMigrationHistoryVersion) {
+					continue
+				}
+				// Dead code after Plan 5+6: fileSchemaVersion is always <= schemaVersion (FS max).
+				// Retained as defense-in-depth.
+				if !version.IsVersionGreaterOrEqualThan(schemaVersion, fileSchemaVersion) {
+					msg := "migration file skipped: schema version too low"
+					slog.Warn(msg,
+						"file", filePath,
+						"file_version", fileSchemaVersion,
+						"schema_version", schemaVersion,
+						"latest_applied", latestMigrationHistoryVersion)
+					if s.profile.Mode == "prod" && os.Getenv("MIGRATE_SKIP_ERROR") == "" {
+						return errors.Errorf("%s: file=%s file_version=%s schema_version=%s",
+							msg, filePath, fileSchemaVersion, schemaVersion)
 					}
-					stmt := string(bytes)
-					if err := s.execute(ctx, tx, stmt); err != nil {
-						return errors.Wrapf(err, "migrate error: %s", stmt)
-					}
+					continue
+				}
+				bytes, err := MigrationFS.ReadFile(filePath)
+				if err != nil {
+					return errors.Wrapf(err, "failed to read minor version migration file: %s", filePath)
+				}
+				stmt := string(bytes)
+				if err := s.execute(ctx, tx, stmt); err != nil {
+					return errors.Wrapf(err, "migrate error: %s", stmt)
 				}
 			}
 
@@ -139,7 +166,7 @@ func (s *Store) preMigrate(ctx context.Context) error {
 			slog.Warn("failed to find migration history in pre-migrate", slog.String("error", err.Error()))
 		}
 		filePath := s.getMigrationBasePath() + LatestSchemaFileName
-		bytes, err := migrationFS.ReadFile(filePath)
+		bytes, err := MigrationFS.ReadFile(filePath)
 		if err != nil {
 			return errors.Errorf("failed to read latest schema file: %s", err)
 		}
@@ -220,19 +247,54 @@ func (s *Store) seed(ctx context.Context) error {
 	return tx.Commit()
 }
 
+// GetCurrentSchemaVersion scans ALL migration subdirectories in the embedded FS
+// to find the highest version file. The filesystem is the single source of truth.
+//
+// NOTE: This function does NOT call itself recursively. The */*.sql glob does NOT
+// match LATEST.sql (which sits at the base path, not inside a subdirectory).
+// getSchemaVersionOfMigrateScript() calls GetCurrentSchemaVersion() when it
+// encounters LATEST.sql, but that path is never reached from this glob.
 func (s *Store) GetCurrentSchemaVersion() (string, error) {
-	currentVersion := version.GetCurrentVersion(s.profile.Mode)
-	minorVersion := version.GetMinorVersion(currentVersion)
-	filePaths, err := fs.Glob(migrationFS, fmt.Sprintf("%s%s/*.sql", s.getMigrationBasePath(), minorVersion))
+	filePaths, err := fs.Glob(MigrationFS, fmt.Sprintf("%s*/*.sql", s.getMigrationBasePath()))
 	if err != nil {
-		return "", errors.Wrap(err, "failed to read migration files")
+		return "", errors.Wrap(err, "failed to glob migration files")
 	}
-
-	sort.Strings(filePaths)
 	if len(filePaths) == 0 {
-		return fmt.Sprintf("%s.0", minorVersion), nil
+		return "", errors.Errorf("no migration files found in %s", s.getMigrationBasePath())
 	}
-	return s.getSchemaVersionOfMigrateScript(filePaths[len(filePaths)-1])
+	sort.Strings(filePaths) // fs.Glob does not guarantee sorted order
+
+	var maxVersion string
+	for _, filePath := range filePaths {
+		fileVer, err := s.getSchemaVersionOfMigrateScript(filePath)
+		if err != nil {
+			continue // skip files that can't be parsed (e.g., LATEST.sql at base path)
+		}
+		if maxVersion == "" || version.IsVersionGreaterThan(fileVer, maxVersion) {
+			maxVersion = fileVer
+		}
+	}
+	if maxVersion == "" {
+		return "", errors.Errorf("could not determine schema version from migration files")
+	}
+	return maxVersion, nil
+}
+
+func (s *Store) validateSchemaVersionConsistency() error {
+	fsVersion, err := s.GetCurrentSchemaVersion()
+	if err != nil {
+		return errors.Wrap(err, "failed to get FS schema version")
+	}
+	codeVersion := version.GetCurrentVersion(s.profile.Mode)
+	codeMinor := version.GetMinorVersion(codeVersion)
+	fsMinor := version.GetMinorVersion(fsVersion)
+
+	if version.IsVersionGreaterThan(fsMinor, codeMinor) {
+		slog.Warn("migration FS has directories newer than code version; bump Version/DevVersion",
+			"fs_minor", fsMinor, "code_minor", codeMinor,
+			"fs_version", fsVersion, "code_version", codeVersion)
+	}
+	return nil // warn-only at runtime; build-time gate catches this earlier
 }
 
 func (s *Store) getSchemaVersionOfMigrateScript(filePath string) (string, error) {
@@ -292,7 +354,7 @@ func (s *Store) normalizedMigrationHistoryList(ctx context.Context) error {
 	}
 
 	schemaVersionMap := map[string]string{}
-	filePaths, err := fs.Glob(migrationFS, fmt.Sprintf("%s*/*.sql", s.getMigrationBasePath()))
+	filePaths, err := fs.Glob(MigrationFS, fmt.Sprintf("%s*/*.sql", s.getMigrationBasePath()))
 	if err != nil {
 		return errors.Wrap(err, "failed to read migration files")
 	}

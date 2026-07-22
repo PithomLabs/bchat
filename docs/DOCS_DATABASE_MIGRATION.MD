@@ -1,3 +1,9 @@
+> **DEPRECATED:** This document is superseded by [DOCS_DATABASE_MIGRATION_GUIDE.md](./DOCS_DATABASE_MIGRATION_GUIDE.md).
+> It is retained for historical reference on the fly.io incident and LATEST.sql validation options.
+> For current migration procedures, see the new guide.
+
+---
+
 # Database Migration System Deep Dive
 
 **Status:** Complete

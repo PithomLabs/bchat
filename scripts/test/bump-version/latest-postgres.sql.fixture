@@ -1,0 +1,17 @@
+-- LATEST.sql fixture for parity testing (Postgres)
+-- Matches the SQLite fixture above
+
+CREATE TABLE IF NOT EXISTS "agent" (
+    "id" SERIAL PRIMARY KEY,
+    "tenant_id" BIGINT NOT NULL,
+    "name" TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY ("tenant_id") REFERENCES "agent_tenant"("id") ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS "agent_tenant" (
+    "id" SERIAL PRIMARY KEY,
+    "name" TEXT NOT NULL DEFAULT '',
+    "is_active" BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+CREATE INDEX IF NOT EXISTS "idx_agent_tenant" ON "agent"("tenant_id");

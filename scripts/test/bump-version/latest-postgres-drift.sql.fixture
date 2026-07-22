@@ -1,0 +1,22 @@
+-- LATEST.sql fixture for drifted parity testing
+-- This file has a table that the SQLite fixture does NOT have
+
+CREATE TABLE IF NOT EXISTS "agent" (
+    "id" SERIAL PRIMARY KEY,
+    "tenant_id" BIGINT NOT NULL,
+    "name" TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY ("tenant_id") REFERENCES "agent_tenant"("id") ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS "agent_tenant" (
+    "id" SERIAL PRIMARY KEY,
+    "name" TEXT NOT NULL DEFAULT '',
+    "is_active" BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+CREATE TABLE IF NOT EXISTS "extra_table_drift" (
+    "id" SERIAL PRIMARY KEY,
+    "data" TEXT
+);
+
+CREATE INDEX IF NOT EXISTS "idx_agent_tenant" ON "agent"("tenant_id");
