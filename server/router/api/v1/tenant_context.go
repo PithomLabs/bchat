@@ -104,3 +104,72 @@ func ApplyTicketTenantFilter(c echo.Context, s *store.Store, find *store.FindTic
 		}
 	}
 }
+
+// ApplyAgentTenantFilter applies tenant filtering to any agent Find struct.
+// This is the defense-in-depth SQL safety net for agent data.
+// Agent Find structs only have TenantID (not TenantIDs), since they operate
+// in a single-tenant context resolved via slug.
+// Note: FindAgentTenant and FindAgentWorkflow don't have TenantID fields
+// because they're used to look up the tenant/workflow before tenant context is established.
+func ApplyAgentTenantFilter(c echo.Context, s *store.Store, find interface{}) {
+	tenantID := getTenantFromContext(c)
+	if tenantID != nil {
+		// Use type switch to set TenantID on supported Find structs
+		switch f := find.(type) {
+		case *store.FindAgentAudience:
+			f.TenantID = tenantID
+		case *store.FindAgentService:
+			f.TenantID = tenantID
+		case *store.FindAgentExclusion:
+			f.TenantID = tenantID
+		case *store.FindAgentCoverage:
+			f.TenantID = tenantID
+		case *store.FindAgentFAQ:
+			f.TenantID = tenantID
+		case *store.FindAgentSafetyProtocol:
+			f.TenantID = tenantID
+		case *store.FindAgentKBSection:
+			f.TenantID = tenantID
+		case *store.FindAgentIntent:
+			f.TenantID = tenantID
+		case *store.FindAgentRule:
+			f.TenantID = tenantID
+		case *store.FindAgentMessage:
+			f.TenantID = tenantID
+		case *store.FindAgentSession:
+			f.TenantID = tenantID
+		case *store.FindAgentSourceFile:
+			f.TenantID = tenantID
+		case *store.FindAgentRAGActiveVersion:
+			f.TenantID = tenantID
+		case *store.FindAgentRateLimit:
+			f.TenantID = tenantID
+		case *store.FindAgentSimulationTranscript:
+			f.TenantID = tenantID
+		case *store.FindAgentTenantScript:
+			f.TenantID = tenantID
+		case *store.FindAgentAnalysisResult:
+			f.TenantID = tenantID
+		case *store.FindAgentLearningMemory:
+			f.TenantID = tenantID
+		case *store.FindAgentComplianceAudit:
+			f.TenantID = tenantID
+		case *store.FindAgentScoringConfig:
+			f.TenantID = tenantID
+		case *store.FindAgentQAPair:
+			f.TenantID = tenantID
+		case *store.FindAgentTranscript:
+			f.TenantID = tenantID
+		case *store.FindAgentLead:
+			f.TenantID = tenantID
+		case *store.FindAgentIntegration:
+			f.TenantID = tenantID
+		case *store.FindAgentEvent:
+			f.TenantID = tenantID
+		}
+		return
+	}
+	// Note: Agent Find structs don't have TenantIDs field (only TenantID).
+	// Scoped admin multi-tenant queries are not needed for agent data
+	// since middleware resolves single tenant via slug.
+}

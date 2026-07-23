@@ -514,6 +514,15 @@ func (db *MemoryVectorDB) Search(ctx context.Context, query SearchQuery) (*Searc
 	}
 
 	// Filter and score chunks
+	// First pass: collect raw scores for BM25 min-max normalization
+	type rawScored struct {
+		id          string
+		chunk       DocumentChunk
+		vectorScore float64
+		bm25Raw     float64
+	}
+	var rawScoredChunks []rawScored
+
 	for id, chunk := range db.chunks {
 		// Apply filters
 		if chunk.TenantID != query.TenantID {
@@ -541,31 +550,58 @@ func (db *MemoryVectorDB) Search(ctx context.Context, query SearchQuery) (*Searc
 		// Calculate similarity score
 		if len(chunk.Embedding) > 0 {
 			vectorScore := cosineSimilarity(queryEmbedding, chunk.Embedding)
-
-			var finalScore float64
-			var bm25Score float64
-
+			var bm25Raw float64
 			if query.UseHybridSearch && bm25Scorer != nil {
-				// Calculate BM25 score
-				bm25Score = bm25Scorer.Score(query.QueryText, id)
-				// Linear combination of vector and BM25 scores
-				finalScore = vectorWeight*vectorScore + textWeight*bm25Score
-			} else {
-				finalScore = vectorScore
+				bm25Raw = bm25Scorer.ScoreRaw(query.QueryText, id)
 			}
+			rawScoredChunks = append(rawScoredChunks, rawScored{
+				id:          id,
+				chunk:       chunk,
+				vectorScore: vectorScore,
+				bm25Raw:     bm25Raw,
+			})
+		}
+	}
 
-			// Apply temporal weighting if enabled
-			if query.UseTemporalWeighting && !chunk.IndexedAt.IsZero() {
-				temporalWeight := calculateTemporalWeight(chunk.IndexedAt, query.ReferenceTime, query.TemporalDecay)
+	// Second pass: min-max normalize BM25 scores, then combine with vector scores
+	if query.UseHybridSearch && bm25Scorer != nil && len(rawScoredChunks) > 0 {
+		rawScores := make([]float64, len(rawScoredChunks))
+		for i, r := range rawScoredChunks {
+			rawScores[i] = r.bm25Raw
+		}
+		normalized := normalizeBM25Scores(rawScores)
+
+		for i, r := range rawScoredChunks {
+			finalScore := vectorWeight*r.vectorScore + textWeight*normalized[i]
+
+			if query.UseTemporalWeighting && !r.chunk.IndexedAt.IsZero() {
+				temporalWeight := calculateTemporalWeight(r.chunk.IndexedAt, query.ReferenceTime, query.TemporalDecay)
 				finalScore = finalScore * temporalWeight
 			}
 
 			if finalScore >= query.MinScore {
 				scored = append(scored, scoredChunk{
-					chunk:       chunk,
+					chunk:       r.chunk,
 					score:       finalScore,
-					vectorScore: vectorScore,
-					bm25Score:   bm25Score,
+					vectorScore: r.vectorScore,
+					bm25Score:   normalized[i],
+				})
+			}
+		}
+	} else {
+		for _, r := range rawScoredChunks {
+			finalScore := r.vectorScore
+
+			if query.UseTemporalWeighting && !r.chunk.IndexedAt.IsZero() {
+				temporalWeight := calculateTemporalWeight(r.chunk.IndexedAt, query.ReferenceTime, query.TemporalDecay)
+				finalScore = finalScore * temporalWeight
+			}
+
+			if finalScore >= query.MinScore {
+				scored = append(scored, scoredChunk{
+					chunk:       r.chunk,
+					score:       finalScore,
+					vectorScore: r.vectorScore,
 				})
 			}
 		}
@@ -873,8 +909,15 @@ func (s *BM25Scorer) AddDocument(id, text string) {
 }
 
 // Score calculates the BM25 score for a query against a document.
-// Returns a normalized score between 0 and 1.
+// Returns a normalized score between 0 and 1 using min-max normalization.
 func (s *BM25Scorer) Score(query, docID string) float64 {
+	return s.ScoreRaw(query, docID)
+}
+
+// ScoreRaw calculates the raw BM25 score (unnormalized) for a query against a document.
+// Callers should use min-max normalization across all scored documents before combining
+// with other score types (e.g., cosine similarity) to ensure comparable ranges.
+func (s *BM25Scorer) ScoreRaw(query, docID string) float64 {
 	docTokens, exists := s.docs[docID]
 	if !exists || s.totalDocs == 0 {
 		return 0
@@ -911,10 +954,38 @@ func (s *BM25Scorer) Score(query, docID string) float64 {
 		score += idf * numerator / denominator
 	}
 
-	// Normalize score to 0-1 range using sigmoid-like function
-	// This ensures BM25 scores are comparable to cosine similarity scores
-	normalized := score / (score + 1)
-	return normalized
+	return score
+}
+
+// normalizeBM25Scores applies min-max normalization to a slice of raw BM25 scores,
+// mapping them to [0, 1]. Returns zeros if all scores are identical.
+func normalizeBM25Scores(scores []float64) []float64 {
+	if len(scores) == 0 {
+		return scores
+	}
+	min, max := scores[0], scores[0]
+	for _, s := range scores[1:] {
+		if s < min {
+			min = s
+		}
+		if s > max {
+			max = s
+		}
+	}
+	range_ := max - min
+	if range_ == 0 {
+		// All scores identical — return 1.0 for all (perfect match to themselves)
+		result := make([]float64, len(scores))
+		for i := range result {
+			result[i] = 1.0
+		}
+		return result
+	}
+	result := make([]float64, len(scores))
+	for i, s := range scores {
+		result[i] = (s - min) / range_
+	}
+	return result
 }
 
 // tokenize splits text into lowercase tokens, removing common punctuation.

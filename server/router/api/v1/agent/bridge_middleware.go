@@ -225,6 +225,9 @@ func RequireBridgeHMAC(dbStore *store.Store, enc *crypto.EncryptionService) echo
 				slog.Error("failed to update bridge auth key last used time", "error", err, "tenant_id", tenant.ID, "key_id", keyID)
 			}
 
+			// 12. Set tenant context for downstream handlers
+			c.Set("tenant-id", tenant.ID)
+
 			return next(c)
 		}
 	}

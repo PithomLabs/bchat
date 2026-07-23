@@ -585,7 +585,12 @@ func (s *APIV1Service) UpsertAccessTokenToStore(ctx context.Context, user *store
 	// Enforce max 10 tokens — evict oldest (first after iat-sort).
 	const maxTokens = 10
 	if len(userAccessTokens) > maxTokens {
+		evicted := userAccessTokens[:len(userAccessTokens)-maxTokens]
 		userAccessTokens = userAccessTokens[len(userAccessTokens)-maxTokens:]
+		// Remove evicted tokens from lookup table
+		for _, t := range evicted {
+			_ = s.Store.DeleteUserAccessTokenLookup(ctx, t.AccessToken)
+		}
 	}
 
 	if _, err := s.Store.UpsertUserSetting(ctx, &storepb.UserSetting{
@@ -598,6 +603,12 @@ func (s *APIV1Service) UpsertAccessTokenToStore(ctx context.Context, user *store
 		},
 	}); err != nil {
 		return errors.Wrap(err, "failed to upsert user setting")
+	}
+
+	// Insert into lookup table for O(1) access
+	if err := s.Store.InsertUserAccessTokenLookup(ctx, user.ID, accessToken, description); err != nil {
+		slog.Warn("failed to insert access token into lookup table", "user_id", user.ID, "error", err)
+		// Non-fatal: protobuf storage is authoritative; lookup is a fast-path optimization
 	}
 	return nil
 }

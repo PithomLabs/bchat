@@ -163,6 +163,12 @@ func NewService(s *store.Store, p *profile.Profile) *Service {
 			"text_weight", vectorDBConfig.HybridTextWeight)
 	}
 
+	// P0: Mock embedding production guard - disable RAG in production mode
+	if p.Mode == "prod" && vectorDBConfig.Enabled && vectorDBConfig.EmbeddingConfig != nil && vectorDBConfig.EmbeddingConfig.Provider == "mock" {
+		slog.Error("MOCK EMBEDDING DETECTED IN PRODUCTION — RAG pipeline disabled. All tenants will use long_context mode. Set EMBEDDING_PROVIDER=openrouter to enable RAG.")
+		vectorDB = NewNoOpVectorDB()
+	}
+
 	// Initialize observer buffer for async observation pre-computation
 	omConfig := GetOMConfig()
 	if omConfig.Enabled && omConfig.BufferTokens > 0 {
@@ -3411,7 +3417,7 @@ func (s *Service) recalcContentTokens(ctx context.Context, tc *store.TenantConfi
 		return
 	}
 	tc.ContentTokens = int32(totalTokens)
-	if totalTokens >= DefaultTokenThreshold {
+	if totalTokens >= GetRetrievalTokenThreshold(tc.RetrievalTokenThreshold) {
 		tc.RetrievalMode = "rag"
 	} else {
 		tc.RetrievalMode = "long_context"

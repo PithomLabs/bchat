@@ -93,6 +93,7 @@ func TestBChatLiveHumanReplyAppearsInVisitorTranscript(t *testing.T) {
 	c := e.NewContext(req, rec)
 	c.SetParamNames("slug")
 	c.SetParamValues(tenant.Slug)
+	c.Set("tenant-id", tenant.ID)
 
 	err = handler.HandleGetExternalTranscript(c)
 	require.NoError(t, err)
@@ -665,6 +666,7 @@ func TestBChatLiveDoesNotExposeClaimTokenToVisitor(t *testing.T) {
 	c := e.NewContext(req, rec)
 	c.SetParamNames("slug")
 	c.SetParamValues(tenant.Slug)
+	c.Set("tenant-id", tenant.ID)
 
 	err = handler.HandleGetExternalTranscript(c)
 	require.NoError(t, err)
@@ -853,6 +855,7 @@ func TestBChatLiveEndToEndVisitorHumanReplyFlow(t *testing.T) {
 	c1 := e.NewContext(req1, rec1)
 	c1.SetParamNames("slug")
 	c1.SetParamValues("live-e2e-flow")
+	c1.Set("tenant-id", tenant.ID)
 	err = handler.HandleChatExternal(c1)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, rec1.Code)
@@ -891,6 +894,7 @@ func TestBChatLiveEndToEndVisitorHumanReplyFlow(t *testing.T) {
 	c3 := e.NewContext(req3, rec3)
 	c3.SetParamNames("slug")
 	c3.SetParamValues("live-e2e-flow")
+	c3.Set("tenant-id", tenant.ID)
 	err = handler.HandleChatExternal(c3)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, rec3.Code)
@@ -926,6 +930,7 @@ func TestBChatLiveEndToEndVisitorHumanReplyFlow(t *testing.T) {
 	c5 := e.NewContext(req5, rec5)
 	c5.SetParamNames("slug")
 	c5.SetParamValues("live-e2e-flow")
+	c5.Set("tenant-id", tenant.ID)
 	err = handler.HandleGetExternalTranscript(c5)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, rec5.Code)
@@ -963,6 +968,7 @@ func TestBChatLiveEndToEndVisitorHumanReplyFlow(t *testing.T) {
 	c6 := e.NewContext(req6, rec6)
 	c6.SetParamNames("slug")
 	c6.SetParamValues("live-e2e-flow")
+	c6.Set("tenant-id", tenant.ID)
 	err = handler.HandleChatExternal(c6)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, rec6.Code)
@@ -1005,6 +1011,7 @@ func TestBChatLiveTranscriptEndpointDoesNotReturnSessionIDOrInternalIDs(t *testi
 	c := e.NewContext(req, rec)
 	c.SetParamNames("slug")
 	c.SetParamValues(tenant.Slug)
+	c.Set("tenant-id", tenant.ID)
 
 	require.NoError(t, handler.HandleGetExternalTranscript(c))
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -1039,6 +1046,7 @@ func TestBChatLiveTranscriptEndpointDoesNotLogRawSessionID(t *testing.T) {
 	c := e.NewContext(req, rec)
 	c.SetParamNames("slug")
 	c.SetParamValues(tenant.Slug)
+	c.Set("tenant-id", tenant.ID)
 
 	err = handler.HandleGetExternalTranscript(c)
 	require.Error(t, err)

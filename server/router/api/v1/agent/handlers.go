@@ -61,15 +61,11 @@ func (h *Handler) GetService() *Service {
 // Requires: ADMIN role OR chat:test permission
 func (h *Handler) HandleValidateTenant(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
-	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
-	if err != nil || tenant == nil {
-		return echo.NewHTTPError(http.StatusNotFound, map[string]interface{}{
-			"valid":   false,
-			"message": "Tenant not found",
-		})
+	// Get tenant from context (set by TenantBindingMiddleware)
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
 	}
 
 	if !tenant.IsActive {
@@ -109,7 +105,6 @@ func (h *Handler) HandleValidateTenant(c echo.Context) error {
 // HandleBridgeTakeover starts or promotes a human handoff for a session.
 func (h *Handler) HandleBridgeTakeover(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	var req BridgeTakeoverRequest
 	if err := c.Bind(&req); err != nil {
@@ -122,15 +117,9 @@ func (h *Handler) HandleBridgeTakeover(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, store.ErrBridgeAuthMalformedRequest.Error())
 	}
 
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
 	if err != nil {
-		if errors.Is(err, store.ErrBridgeUnsupportedDatabase) {
-			return echo.NewHTTPError(http.StatusNotImplemented, store.ErrBridgeUnsupportedDatabase.Error())
-		}
-		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
-	}
-	if tenant == nil {
-		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
+		return err
 	}
 
 	now := time.Now()
@@ -218,7 +207,6 @@ var clientMessageIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 // HandleBridgeReply validates and persists a reply message for an active human handoff.
 func (h *Handler) HandleBridgeReply(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	var req BridgeReplyRequest
 	if err := c.Bind(&req); err != nil {
@@ -237,15 +225,9 @@ func (h *Handler) HandleBridgeReply(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, store.ErrBridgeAuthMalformedRequest.Error())
 	}
 
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
 	if err != nil {
-		if errors.Is(err, store.ErrBridgeUnsupportedDatabase) {
-			return echo.NewHTTPError(http.StatusNotImplemented, store.ErrBridgeUnsupportedDatabase.Error())
-		}
-		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
-	}
-	if tenant == nil {
-		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
+		return err
 	}
 
 	result, err := h.store.CreateBridgeHandoffReplyAndOutboxIfActive(ctx, &store.CreateBridgeHandoffReply{
@@ -319,7 +301,6 @@ func (h *Handler) HandleBridgeReply(c echo.Context) error {
 // HandleBridgeRelease transitions an active human handoff to closed.
 func (h *Handler) HandleBridgeRelease(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	var req BridgeReleaseRequest
 	if err := c.Bind(&req); err != nil {
@@ -335,15 +316,9 @@ func (h *Handler) HandleBridgeRelease(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, store.ErrBridgeAuthMalformedRequest.Error())
 	}
 
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
 	if err != nil {
-		if errors.Is(err, store.ErrBridgeUnsupportedDatabase) {
-			return echo.NewHTTPError(http.StatusNotImplemented, store.ErrBridgeUnsupportedDatabase.Error())
-		}
-		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
-	}
-	if tenant == nil {
-		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
+		return err
 	}
 
 	activeHandoff, err := h.store.FindActiveBridgeHandoff(ctx, tenant.ID, req.SessionID)
@@ -410,37 +385,35 @@ func (h *Handler) HandleBridgeRelease(c echo.Context) error {
 // POST /api/v1/agent/:slug/chat/ext
 func (h *Handler) HandleChatExternal(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant to check domain allowlist
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
-	if err != nil || tenant == nil || !tenant.IsActive {
-		slog.Info("chat external: tenant not found or inactive", "slug", slug)
-		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
 	}
 
 	// Edge gate: validate widget key (fail-closed)
-	if tenant.WidgetKey == "" {
-		slog.Error("chat external: tenant has no widget key", "slug", slug)
-		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
-	}
-	widgetKey := c.Request().Header.Get("X-Widget-Key")
-	if widgetKey == "" {
-		widgetKey = c.QueryParam("widget_key")
-	}
-	if widgetKey == "" || subtle.ConstantTimeCompare([]byte(widgetKey), []byte(tenant.WidgetKey)) != 1 {
-		slog.Info("chat external: invalid widget key", "slug", slug)
-		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
-	}
-
-	// Check domain allowlist if enabled
-	if tenant.AllowedDomains != "" {
-		origin := c.Request().Header.Get("Origin")
-		if !h.isDomainAllowed(tenant.AllowedDomains, origin, "") {
-			slog.Info("chat external: domain not allowed", "slug", slug, "origin", origin)
+		if tenant.WidgetKey == "" {
+			slog.Error("chat external: tenant has no widget key", "slug", tenant.Slug)
 			return echo.NewHTTPError(http.StatusForbidden, "Access denied")
 		}
-	}
+	widgetKey := c.Request().Header.Get("X-Widget-Key")
+		if widgetKey == "" {
+			widgetKey = c.QueryParam("widget_key")
+		}
+		if widgetKey == "" || subtle.ConstantTimeCompare([]byte(widgetKey), []byte(tenant.WidgetKey)) != 1 {
+			slog.Info("chat external: invalid widget key", "slug", tenant.Slug)
+			return echo.NewHTTPError(http.StatusForbidden, "Access denied")
+		}
+
+		// Check domain allowlist if enabled
+		if tenant.AllowedDomains != "" {
+			origin := c.Request().Header.Get("Origin")
+			if !h.isDomainAllowed(tenant.AllowedDomains, origin, "") {
+				slog.Info("chat external: domain not allowed", "slug", tenant.Slug, "origin", origin)
+				return echo.NewHTTPError(http.StatusForbidden, "Access denied")
+			}
+		}
 
 	// Get client IP for rate limiting
 	clientIP := c.RealIP()
@@ -462,7 +435,7 @@ func (h *Handler) HandleChatExternal(c echo.Context) error {
 	}
 
 	// Process chat
-	response, err := h.service.ChatExternal(ctx, slug, clientIP, userAgent, req)
+	response, err := h.service.ChatExternal(ctx, tenant.Slug, clientIP, userAgent, req)
 	if err != nil {
 		if errors.Is(err, store.ErrInvalidExternalSessionID) {
 			return echo.NewHTTPError(http.StatusBadRequest, "Invalid session_id")
@@ -478,10 +451,10 @@ func (h *Handler) HandleChatExternal(c echo.Context) error {
 			})
 		}
 		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "not active") {
-			slog.Info("chat external: tenant/audience not found or inactive", "slug", slug, "error", err)
+			slog.Info("chat external: tenant/audience not found or inactive", "slug", tenant.Slug, "error", err)
 			return echo.NewHTTPError(http.StatusForbidden, "Access denied")
 		}
-		slog.Error("chat external failed", "slug", slug, "error", err)
+		slog.Error("chat external failed", "slug", tenant.Slug, "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Chat service unavailable")
 	}
 
@@ -504,7 +477,6 @@ type VisitorBridgeState struct {
 // GET /api/v1/agent/:slug/chat/ext/transcript?session_id=...&token=...&expiry=...
 func (h *Handler) HandleGetExternalTranscript(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 	sessionID := c.QueryParam("session_id")
 	token := c.QueryParam("token")
 	expiryStr := c.QueryParam("expiry")
@@ -521,7 +493,10 @@ func (h *Handler) HandleGetExternalTranscript(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid session_id")
 	}
 
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil || !tenant.IsActive {
 		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
 	}
@@ -597,7 +572,6 @@ func (h *Handler) HandleGetExternalTranscript(c echo.Context) error {
 // Requires: ADMIN role OR chat:test permission
 func (h *Handler) HandleChatInternal(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get user ID from context (set by auth middleware)
 	userID, ok := c.Get("user-id").(int32)
@@ -606,9 +580,9 @@ func (h *Handler) HandleChatInternal(c echo.Context) error {
 	}
 
 	// Get tenant for permission check
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
-	if err != nil || tenant == nil {
-		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
 	}
 
 	// Check admin role OR chat:test permission
@@ -640,12 +614,12 @@ func (h *Handler) HandleChatInternal(c echo.Context) error {
 	}
 
 	// Process chat
-	response, err := h.service.ChatInternal(ctx, slug, userID, req)
+	response, err := h.service.ChatInternal(ctx, tenant.Slug, userID, req)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "not active") {
 			return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
 		}
-		slog.Error("chat internal failed", "slug", slug, "userID", userID, "error", err)
+		slog.Error("chat internal failed", "slug", tenant.Slug, "userID", userID, "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Chat service unavailable")
 	}
 
@@ -702,10 +676,12 @@ func (h *Handler) HandleListTenants(c echo.Context) error {
 // Requires: ADMIN role OR tenant:read permission
 func (h *Handler) HandleGetTenantFullConfig(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant first (needed for permission check)
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -778,10 +754,12 @@ func (h *Handler) HandleGetTenantFullConfig(c echo.Context) error {
 // Requires: ADMIN role OR tenant:write permission
 func (h *Handler) HandleUpdateTenant(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant first (needed for permission check)
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -866,7 +844,6 @@ func (h *Handler) HandleUpdateTenant(c echo.Context) error {
 // Requires: ADMIN role OR files:restore OR tenant:read permission
 func (h *Handler) HandleGetFileVersions(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 	audienceType := c.Param("audienceType")
 	fileType := c.Param("fileType")
 
@@ -879,7 +856,10 @@ func (h *Handler) HandleGetFileVersions(c echo.Context) error {
 	}
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -922,12 +902,14 @@ func (h *Handler) HandleGetFileVersions(c echo.Context) error {
 // Requires: ADMIN role OR files:restore permission
 func (h *Handler) HandleRestoreFileVersion(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 	audienceType := c.Param("audienceType")
 	fileType := c.Param("fileType")
 
 	// Get tenant first (needed for permission check)
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -1004,7 +986,6 @@ func (h *Handler) HandleRestoreFileVersion(c echo.Context) error {
 // Requires: ADMIN role OR tenant:read permission
 func (h *Handler) HandleGetSourceFileContent(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 	audienceType := c.QueryParam("audience_type")
 	fileType := c.QueryParam("file_type")
 
@@ -1013,7 +994,10 @@ func (h *Handler) HandleGetSourceFileContent(c echo.Context) error {
 	}
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -1047,10 +1031,12 @@ func (h *Handler) HandleGetSourceFileContent(c echo.Context) error {
 // Requires: ADMIN role OR files:upload permission
 func (h *Handler) HandleImportSingleFile(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant first (needed for permission check)
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -1124,13 +1110,15 @@ func (h *Handler) HandleImportSingleFile(c echo.Context) error {
 	}
 
 	totalTokens := EstimateTokens(kbContent) + EstimateTokens(policyContent)
+	tenantConfig, _ := h.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &tenant.ID})
+	var threshold int32
+	if tenantConfig != nil {
+		threshold = tenantConfig.RetrievalTokenThreshold
+	}
 	retrievalMode := "long_context"
-	if totalTokens >= DefaultTokenThreshold {
+	if totalTokens >= GetRetrievalTokenThreshold(threshold) {
 		retrievalMode = "rag"
 	}
-
-	// Update tenant config with retrieval mode and token count
-	tenantConfig, _ := h.store.GetTenantConfig(ctx, &store.FindTenantConfig{TenantID: &tenant.ID})
 	if tenantConfig == nil {
 		tenantConfig = &store.TenantConfig{TenantID: tenant.ID}
 	}
@@ -1141,7 +1129,7 @@ func (h *Handler) HandleImportSingleFile(c echo.Context) error {
 	}
 
 	slog.Info("file imported",
-		"tenant", slug,
+		"tenant", tenant.Slug,
 		"audience", audienceType,
 		"fileType", fileType,
 		"totalTokens", totalTokens,
@@ -1166,10 +1154,12 @@ func (h *Handler) HandleImportSingleFile(c echo.Context) error {
 // Note: Skipped entirely if tenant uses long_context mode (RAG not needed).
 func (h *Handler) HandleReindexTenant(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -1269,10 +1259,12 @@ func reindexHTTPError(err error) *echo.HTTPError {
 // Requires: ADMIN role OR api:config permission
 func (h *Handler) HandleReindexStatus(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -1446,7 +1438,6 @@ func (h *Handler) HandleOnboard(c echo.Context) error {
 // POST /api/v1/agent/:slug/import
 func (h *Handler) HandleImport(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Check admin role
 	if !h.isAdmin(c) {
@@ -1454,7 +1445,10 @@ func (h *Handler) HandleImport(c echo.Context) error {
 	}
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -1620,7 +1614,6 @@ func (h *Handler) importFiles(ctx context.Context, tenantID int32, audienceType,
 // GET /api/v1/agent/:slug/export
 func (h *Handler) HandleExport(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Check admin role
 	if !h.isAdmin(c) {
@@ -1628,7 +1621,10 @@ func (h *Handler) HandleExport(c echo.Context) error {
 	}
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -1670,11 +1666,15 @@ func (h *Handler) HandleExport(c echo.Context) error {
 // GET /api/v1/agent/:slug/config
 func (h *Handler) HandleGetConfig(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Check admin role
 	if !h.isAdmin(c) {
 		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role")
+	}
+
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
 	}
 
 	audienceType := c.QueryParam("audience")
@@ -1682,7 +1682,7 @@ func (h *Handler) HandleGetConfig(c echo.Context) error {
 		audienceType = "external"
 	}
 
-	config, err := h.service.LoadConfig(ctx, slug, audienceType)
+	config, err := h.service.LoadConfig(ctx, tenant.Slug, audienceType)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusNotFound, err.Error())
 	}
@@ -1694,7 +1694,6 @@ func (h *Handler) HandleGetConfig(c echo.Context) error {
 // DELETE /api/v1/agent/:slug
 func (h *Handler) HandleDeleteTenant(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Check admin role — use isSuperAdmin for global tenant management
 	if !h.isSuperAdmin(c) {
@@ -1702,7 +1701,10 @@ func (h *Handler) HandleDeleteTenant(c echo.Context) error {
 	}
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -1732,10 +1734,12 @@ func (h *Handler) HandleDeleteTenant(c echo.Context) error {
 // GET /api/v1/agent/:slug/widget.js
 func (h *Handler) HandleWidget(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil || !tenant.IsActive {
 		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
 	}
@@ -1754,7 +1758,7 @@ func (h *Handler) HandleWidget(c echo.Context) error {
 	if tenant.GUID != "" {
 		combinedName = fmt.Sprintf("%s-%s", tenant.CompanyName, tenant.GUID)
 	}
-	script := generateWidgetLoaderScript(baseURL, slug, combinedName, tenant.WidgetKey)
+	script := generateWidgetLoaderScript(baseURL, tenant.Slug, combinedName, tenant.WidgetKey)
 
 	c.Response().Header().Set("Content-Type", "application/javascript")
 	c.Response().Header().Set("Cache-Control", "public, max-age=3600")
@@ -2055,11 +2059,12 @@ func (h *Handler) isDomainAllowed(allowedDomainsJSON, origin, referer string) bo
 // GET /widget/:slug/embed.js
 func (h *Handler) HandleWidgetEmbed(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
-	// Find tenant by slug
-	tenant, err := h.findTenantBySlug(ctx, slug)
-	if err != nil || tenant == nil {
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
+	if !tenant.IsActive {
 		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
 	}
 
@@ -2112,11 +2117,12 @@ window.AgentChatConfig.widgetKey=window.AgentChatConfig.widgetKey||%q;
 // GET /widget/:slug/iframe
 func (h *Handler) HandleWidgetIframe(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
-	// Find tenant by slug
-	tenant, err := h.findTenantBySlug(ctx, slug)
-	if err != nil || tenant == nil {
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
+	if !tenant.IsActive {
 		return echo.NewHTTPError(http.StatusNotFound, "Agent not found")
 	}
 
@@ -2434,10 +2440,12 @@ type SetLLMConfigRequest struct {
 // GET /api/v1/agent/:slug/llm-config
 func (h *Handler) HandleGetLLMConfig(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -2454,7 +2462,7 @@ func (h *Handler) HandleGetLLMConfig(c echo.Context) error {
 	}
 
 	response := LLMConfigResponse{
-		TenantSlug:           slug,
+		TenantSlug:           tenant.Slug,
 		LLMModel:             "",
 		SimulationHumanModel: "",
 		ReasoningModel:       "",
@@ -2477,10 +2485,12 @@ func (h *Handler) HandleGetLLMConfig(c echo.Context) error {
 // PUT /api/v1/agent/:slug/llm-config
 func (h *Handler) HandleSetLLMConfig(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -2522,22 +2532,21 @@ func (h *Handler) HandleSetLLMConfig(c echo.Context) error {
 		}
 
 		if h.service.encryptionService == nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "Encryption not configured. Set ENCRYPTION_MASTER_KEY environment variable.")
-		}
+					return echo.NewHTTPError(http.StatusInternalServerError, "Encryption not configured. Set ENCRYPTION_MASTER_KEY environment variable.")
+				}
 
-		ciphertext, nonce, err := h.service.encryptionService.Encrypt(req.OpenRouterAPIKey)
-		if err != nil {
-			slog.Error("failed to encrypt tenant API key", "tenant", slug, "error", err)
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to encrypt API key")
-		}
-		config.OpenRouterAPIKeyEncrypted = ciphertext
-		config.OpenRouterAPIKeyNonce = nonce
-	}
-
-	// Upsert config
-	config, err = h.store.UpsertTenantConfig(ctx, config)
-	if err != nil {
-		slog.Error("failed to save tenant config", "tenant", slug, "error", err)
+				ciphertext, nonce, err := h.service.encryptionService.Encrypt(req.OpenRouterAPIKey)
+				if err != nil {
+					slog.Error("failed to encrypt tenant API key", "tenant", tenant.Slug, "error", err)
+					return echo.NewHTTPError(http.StatusInternalServerError, "Failed to encrypt API key")
+				}
+				config.OpenRouterAPIKeyEncrypted = ciphertext
+				config.OpenRouterAPIKeyNonce = nonce
+			}
+			// Upsert config
+			config, err = h.store.UpsertTenantConfig(ctx, config)
+			if err != nil {
+				slog.Error("failed to save tenant config", "tenant", tenant.Slug, "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to save config")
 	}
 
@@ -2550,7 +2559,7 @@ func (h *Handler) HandleSetLLMConfig(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, LLMConfigResponse{
-		TenantSlug:           slug,
+		TenantSlug:           tenant.Slug,
 		LLMModel:             config.LLMModel,
 		SimulationHumanModel: config.SimulationHumanModel,
 		HasAPIKey:            len(config.OpenRouterAPIKeyEncrypted) > 0,
@@ -2583,9 +2592,11 @@ type GrantPermissionRequest struct {
 // GET /api/v1/agent/:slug/permissions
 func (h *Handler) HandleListPermissions(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -2641,9 +2652,11 @@ func (h *Handler) HandleListPermissions(c echo.Context) error {
 // POST /api/v1/agent/:slug/permissions
 func (h *Handler) HandleGrantPermission(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -2714,10 +2727,12 @@ func (h *Handler) HandleGrantPermission(c echo.Context) error {
 // DELETE /api/v1/agent/:slug/permissions/:userId
 func (h *Handler) HandleRevokePermission(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 	userIDStr := c.Param("userId")
 
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -2752,9 +2767,11 @@ func (h *Handler) HandleRevokePermission(c echo.Context) error {
 // GET /api/v1/agent/:slug/role-templates
 func (h *Handler) HandleListRoleTemplates(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -2819,9 +2836,11 @@ func (h *Handler) HandleListRoleTemplates(c echo.Context) error {
 // POST /api/v1/agent/:slug/role-templates
 func (h *Handler) HandleCreateRoleTemplate(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -2861,7 +2880,7 @@ func (h *Handler) HandleCreateRoleTemplate(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create role template")
 	}
 
-	h.service.InvalidateConfigCache(slug)
+	h.service.InvalidateConfigCache(tenant.Slug)
 
 	return c.JSON(http.StatusCreated, created)
 }
@@ -2993,13 +3012,15 @@ func (h *Handler) HandleDeleteRoleTemplate(c echo.Context) error {
 // POST /api/v1/agent/:slug/role-templates/:id/assign
 func (h *Handler) HandleAssignRoleTemplate(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 	templateID, err := strconv.ParseInt(c.Param("id"), 10, 32)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid template ID")
 	}
 
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -3075,10 +3096,12 @@ func (h *Handler) HandleAssignRoleTemplate(c echo.Context) error {
 // GET /api/v1/agent/:slug/users/:userId/roles
 func (h *Handler) HandleListUserRoles(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 	userIDStr := c.Param("userId")
 
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -3245,10 +3268,12 @@ func (h *Handler) HandleGetSpecificUserTenants(c echo.Context) error {
 // Requires: ADMIN role OR chat:logs permission
 func (h *Handler) HandleListSessions(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -3306,11 +3331,13 @@ func (h *Handler) HandleListSessions(c echo.Context) error {
 // Requires: ADMIN role OR chat:logs permission
 func (h *Handler) HandleGetSession(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 	sessionID := c.Param("sessionId")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -3376,10 +3403,12 @@ func (h *Handler) HandleGetSession(c echo.Context) error {
 // Requires: ADMIN role OR chat:test permission
 func (h *Handler) HandleStartSimulation(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -3406,13 +3435,13 @@ func (h *Handler) HandleStartSimulation(c echo.Context) error {
 	}
 
 	// Load config
-	config, err := h.service.LoadConfig(ctx, slug, "internal")
+	config, err := h.service.LoadConfig(ctx, tenant.Slug, "internal")
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to load config: "+err.Error())
 	}
 
 	// Create simulation session
-	state := h.service.GetSimulationSessions().Create(tenant.ID, userID, slug, req.InitialPrompt, req.PersonaHint)
+	state := h.service.GetSimulationSessions().Create(tenant.ID, userID, tenant.Slug, req.InitialPrompt, req.PersonaHint)
 
 	// Start simulation in background goroutine
 	go func() {
@@ -3440,7 +3469,7 @@ func (h *Handler) HandleStartSimulation(c echo.Context) error {
 	return c.JSON(http.StatusOK, SimulationStartResponse{
 		SessionID: state.ID,
 		Status:    "running",
-		StreamURL: fmt.Sprintf("/api/v1/agent/%s/simulate/%s/stream", slug, state.ID),
+		StreamURL: fmt.Sprintf("/api/v1/agent/%s/simulate/%s/stream", tenant.Slug, state.ID),
 	})
 }
 
@@ -3448,13 +3477,12 @@ func (h *Handler) HandleStartSimulation(c echo.Context) error {
 // GET /api/v1/agent/:slug/simulate/:sessionId/stream
 // Requires: ADMIN role OR chat:test permission
 func (h *Handler) HandleSimulationStream(c echo.Context) error {
-	slug := c.Param("slug")
 	sessionID := c.Param("sessionId")
 
-	// Get tenant
-	tenant, err := h.store.GetAgentTenant(c.Request().Context(), &store.FindAgentTenant{Slug: &slug})
-	if err != nil || tenant == nil {
-		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	// Get tenant from context (set by TenantBindingMiddleware)
+	tenant, err := getTenantOrFail(c.Request().Context(), h.store, c)
+	if err != nil {
+		return err
 	}
 
 	// Check permission
@@ -3537,13 +3565,12 @@ func (h *Handler) HandleSimulationStream(c echo.Context) error {
 // POST /api/v1/agent/:slug/simulate/:sessionId/control
 // Requires: ADMIN role OR chat:test permission
 func (h *Handler) HandleSimulationControl(c echo.Context) error {
-	slug := c.Param("slug")
 	sessionID := c.Param("sessionId")
 
-	// Get tenant
-	tenant, err := h.store.GetAgentTenant(c.Request().Context(), &store.FindAgentTenant{Slug: &slug})
-	if err != nil || tenant == nil {
-		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	// Get tenant from context (set by TenantBindingMiddleware)
+	tenant, err := getTenantOrFail(c.Request().Context(), h.store, c)
+	if err != nil {
+		return err
 	}
 
 	// Check permission
@@ -3593,10 +3620,12 @@ func (h *Handler) HandleSimulationControl(c echo.Context) error {
 // Requires: ADMIN role OR chat:logs permission
 func (h *Handler) HandleListSimulations(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -3644,11 +3673,13 @@ func (h *Handler) HandleListSimulations(c echo.Context) error {
 // Requires: ADMIN role OR chat:logs permission
 func (h *Handler) HandleGetSimulation(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 	simulationID := c.Param("simulationId")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -3732,10 +3763,12 @@ type ConversationSummary struct {
 // - chat:logs permission: includes chat sessions
 func (h *Handler) HandleGetConversations(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -3846,11 +3879,13 @@ func (h *Handler) HandleGetConversations(c echo.Context) error {
 // Permission check based on conversation type.
 func (h *Handler) HandleGetConversation(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 	conversationID := c.Param("conversationId")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -3961,10 +3996,12 @@ func (h *Handler) HandleGetConversation(c echo.Context) error {
 // Permission: tenant:write or tenant:admin
 func (h *Handler) HandleImportScript(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -4027,7 +4064,7 @@ func (h *Handler) HandleImportScript(c echo.Context) error {
 	}
 
 	// Invalidate config cache
-	h.service.InvalidateConfigCache(slug)
+	h.service.InvalidateConfigCache(tenant.Slug)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message":  "Script imported successfully",
@@ -4043,10 +4080,12 @@ func (h *Handler) HandleImportScript(c echo.Context) error {
 // Permission: tenant:read
 func (h *Handler) HandleGetScript(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -4084,10 +4123,12 @@ func (h *Handler) HandleGetScript(c echo.Context) error {
 // Permission: tenant:write or tenant:admin
 func (h *Handler) HandleDeleteScript(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -4103,7 +4144,7 @@ func (h *Handler) HandleDeleteScript(c echo.Context) error {
 	}
 
 	// Invalidate config cache
-	h.service.InvalidateConfigCache(slug)
+	h.service.InvalidateConfigCache(tenant.Slug)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message": "Script deleted successfully",
@@ -4119,10 +4160,12 @@ func (h *Handler) HandleDeleteScript(c echo.Context) error {
 // Permission: chat:test
 func (h *Handler) HandleAnalyzeTranscript(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -4166,10 +4209,12 @@ func (h *Handler) HandleAnalyzeTranscript(c echo.Context) error {
 // Permission: chat:test
 func (h *Handler) HandleGetAnalysisHistory(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -4209,10 +4254,12 @@ func (h *Handler) HandleGetAnalysisHistory(c echo.Context) error {
 // Permission: tenant:admin
 func (h *Handler) HandleGetLearning(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -4237,10 +4284,12 @@ func (h *Handler) HandleGetLearning(c echo.Context) error {
 // Permission: tenant:admin
 func (h *Handler) HandleRegenerateLearning(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -4258,7 +4307,7 @@ func (h *Handler) HandleRegenerateLearning(c echo.Context) error {
 	}
 
 	// Invalidate config cache
-	h.service.InvalidateConfigCache(slug)
+	h.service.InvalidateConfigCache(tenant.Slug)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message": "Learning memory regenerated",
@@ -4271,10 +4320,12 @@ func (h *Handler) HandleRegenerateLearning(c echo.Context) error {
 // Permission: tenant:admin
 func (h *Handler) HandleApproveSuggestion(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -4305,7 +4356,7 @@ func (h *Handler) HandleApproveSuggestion(c echo.Context) error {
 	}
 
 	// Invalidate config cache
-	h.service.InvalidateConfigCache(slug)
+	h.service.InvalidateConfigCache(tenant.Slug)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message": "Suggestion approved",
@@ -4318,10 +4369,12 @@ func (h *Handler) HandleApproveSuggestion(c echo.Context) error {
 // Permission: tenant:admin
 func (h *Handler) HandleDismissSuggestion(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -4361,11 +4414,13 @@ func (h *Handler) HandleDismissSuggestion(c echo.Context) error {
 // Permission: tenant:admin
 func (h *Handler) HandleRemoveLearnedBehavior(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 	behaviorID := c.Param("behaviorId")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -4383,7 +4438,7 @@ func (h *Handler) HandleRemoveLearnedBehavior(c echo.Context) error {
 	}
 
 	// Invalidate config cache
-	h.service.InvalidateConfigCache(slug)
+	h.service.InvalidateConfigCache(tenant.Slug)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message": "Behavior removed",
@@ -4396,11 +4451,13 @@ func (h *Handler) HandleRemoveLearnedBehavior(c echo.Context) error {
 // Permission: tenant:admin
 func (h *Handler) HandleToggleLearnedBehavior(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 	behaviorID := c.Param("behaviorId")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -4418,7 +4475,7 @@ func (h *Handler) HandleToggleLearnedBehavior(c echo.Context) error {
 	}
 
 	// Invalidate config cache
-	h.service.InvalidateConfigCache(slug)
+	h.service.InvalidateConfigCache(tenant.Slug)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message": "Behavior toggled",
@@ -4431,10 +4488,12 @@ func (h *Handler) HandleToggleLearnedBehavior(c echo.Context) error {
 // Permission: tenant:admin
 func (h *Handler) HandleClearLearning(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -4451,7 +4510,7 @@ func (h *Handler) HandleClearLearning(c echo.Context) error {
 	}
 
 	// Invalidate config cache
-	h.service.InvalidateConfigCache(slug)
+	h.service.InvalidateConfigCache(tenant.Slug)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message": "Learning memory cleared",
@@ -4464,10 +4523,12 @@ func (h *Handler) HandleClearLearning(c echo.Context) error {
 // Permission: tenant:admin
 func (h *Handler) HandleApplyLearnings(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -4503,7 +4564,7 @@ func (h *Handler) HandleApplyLearnings(c echo.Context) error {
 	}
 
 	// Invalidate config cache
-	h.service.InvalidateConfigCache(slug)
+	h.service.InvalidateConfigCache(tenant.Slug)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"applied_count":     appliedCount,
@@ -4920,7 +4981,6 @@ func truncateString(s string, maxLen int) string {
 // Requires: ADMIN role
 func (h *Handler) HandleTenantRAGSearch(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Check admin role
 	if !h.isAdmin(c) {
@@ -4928,7 +4988,10 @@ func (h *Handler) HandleTenantRAGSearch(c echo.Context) error {
 	}
 
 	// Get tenant by slug
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -5034,7 +5097,6 @@ func (h *Handler) HandleTenantRAGSearch(c echo.Context) error {
 // Requires: ADMIN role
 func (h *Handler) HandleGenerateKB(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Check admin role
 	if !h.isAdmin(c) {
@@ -5042,7 +5104,10 @@ func (h *Handler) HandleGenerateKB(c echo.Context) error {
 	}
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -5066,15 +5131,15 @@ func (h *Handler) HandleGenerateKB(c echo.Context) error {
 	}
 
 	// Generate annotated KB using LLM
-	slog.Info("Generating annotated KB.MD", "tenant", slug, "content_length", len(kbFile.Content))
+	slog.Info("Generating annotated KB.MD", "tenant", tenant.Slug, "content_length", len(kbFile.Content))
 
 	annotatedKB, err := h.service.GenerateAnnotatedKB(ctx, tenant.ID, tenant.CompanyName, kbFile.Content)
 	if err != nil {
-		slog.Error("Failed to generate annotated KB", "tenant", slug, "error", err)
+		slog.Error("Failed to generate annotated KB", "tenant", tenant.Slug, "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate KB: "+err.Error())
 	}
 
-	slog.Info("Generated annotated KB.MD", "tenant", slug, "output_length", len(annotatedKB))
+	slog.Info("Generated annotated KB.MD", "tenant", tenant.Slug, "output_length", len(annotatedKB))
 
 	return c.JSON(http.StatusOK, map[string]string{
 		"content": annotatedKB,
@@ -5086,7 +5151,6 @@ func (h *Handler) HandleGenerateKB(c echo.Context) error {
 // Requires: ADMIN role
 func (h *Handler) HandleGeneratePolicy(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Check admin role
 	if !h.isAdmin(c) {
@@ -5094,7 +5158,10 @@ func (h *Handler) HandleGeneratePolicy(c echo.Context) error {
 	}
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -5118,15 +5185,15 @@ func (h *Handler) HandleGeneratePolicy(c echo.Context) error {
 	}
 
 	// Generate annotated Policy using LLM
-	slog.Info("Generating annotated POLICY.MD", "tenant", slug, "content_length", len(policyFile.Content))
+	slog.Info("Generating annotated POLICY.MD", "tenant", tenant.Slug, "content_length", len(policyFile.Content))
 
 	annotatedPolicy, err := h.service.GenerateAnnotatedPolicy(ctx, tenant.ID, tenant.CompanyName, policyFile.Content)
 	if err != nil {
-		slog.Error("Failed to generate annotated Policy", "tenant", slug, "error", err)
+		slog.Error("Failed to generate annotated Policy", "tenant", tenant.Slug, "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate Policy: "+err.Error())
 	}
 
-	slog.Info("Generated annotated POLICY.MD", "tenant", slug, "output_length", len(annotatedPolicy))
+	slog.Info("Generated annotated POLICY.MD", "tenant", tenant.Slug, "output_length", len(annotatedPolicy))
 
 	return c.JSON(http.StatusOK, map[string]string{
 		"content": annotatedPolicy,
@@ -5152,7 +5219,6 @@ type FormatForRAGResponse struct {
 // Requires: ADMIN role
 func (h *Handler) HandleFormatForRAG(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Check admin role
 	if !h.isAdmin(c) {
@@ -5160,7 +5226,10 @@ func (h *Handler) HandleFormatForRAG(c echo.Context) error {
 	}
 
 	// Get tenant (verify it exists)
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -5210,7 +5279,7 @@ func (h *Handler) HandleFormatForRAG(c echo.Context) error {
 	}
 
 	slog.Info("Processing content for RAG",
-		"tenant", slug,
+		"tenant", tenant.Slug,
 		"file_type", req.FileType,
 		"content_length", len(req.Content),
 		"options", opts,
@@ -5221,7 +5290,7 @@ func (h *Handler) HandleFormatForRAG(c echo.Context) error {
 	result := processor.Process(req.Content, req.FileType)
 
 	slog.Info("Content processed for RAG",
-		"tenant", slug,
+		"tenant", tenant.Slug,
 		"original_tokens", result.Stats.OriginalTokens,
 		"processed_tokens", result.Stats.ProcessedTokens,
 		"chunks_created", result.Stats.ChunksCreated,
@@ -5240,7 +5309,6 @@ func (h *Handler) HandleFormatForRAG(c echo.Context) error {
 // Requires: ADMIN role
 func (h *Handler) HandleSaveProcessingOptions(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Check admin role
 	if !h.isAdmin(c) {
@@ -5248,7 +5316,10 @@ func (h *Handler) HandleSaveProcessingOptions(c echo.Context) error {
 	}
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -5272,7 +5343,7 @@ func (h *Handler) HandleSaveProcessingOptions(c echo.Context) error {
 	}
 
 	slog.Info("Saved processing options for tenant",
-		"tenant", slug,
+		"tenant", tenant.Slug,
 		"options", optsJSON,
 	)
 
@@ -5287,7 +5358,6 @@ func (h *Handler) HandleSaveProcessingOptions(c echo.Context) error {
 // Requires: ADMIN role
 func (h *Handler) HandleGetProcessingOptions(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Check admin role
 	if !h.isAdmin(c) {
@@ -5295,7 +5365,10 @@ func (h *Handler) HandleGetProcessingOptions(c echo.Context) error {
 	}
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -5306,9 +5379,9 @@ func (h *Handler) HandleGetProcessingOptions(c echo.Context) error {
 		opts, err = deserializeProcessingOptions(tenant.ProcessingOptions)
 		if err != nil {
 			slog.Warn("Failed to deserialize processing options, using defaults",
-				"tenant", slug,
-				"error", err,
-			)
+						"tenant", tenant.Slug,
+						"error", err,
+					)
 			opts = DefaultProcessingOptions()
 		}
 	} else {
@@ -5329,13 +5402,15 @@ func (h *Handler) HandleGetProcessingOptions(c echo.Context) error {
 // For large KB files, it chunks the content first and generates pairs from sampled chunks.
 func (h *Handler) HandleGenerateQAPairs(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	if !h.isAdmin(c) {
 		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
 	}
 
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -5572,13 +5647,15 @@ Generate exactly %d Q&A pairs. Output valid JSON only.`, maxPairs, batchContent,
 // HandleListQAPairs returns all Q&A pairs for a tenant.
 func (h *Handler) HandleListQAPairs(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	if !h.isAdmin(c) {
 		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
 	}
 
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -5597,13 +5674,15 @@ func (h *Handler) HandleListQAPairs(c echo.Context) error {
 // HandleCreateQAPair creates a single Q&A pair.
 func (h *Handler) HandleCreateQAPair(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	if !h.isAdmin(c) {
 		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
 	}
 
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -5627,14 +5706,16 @@ func (h *Handler) HandleCreateQAPair(c echo.Context) error {
 // HandleUpdateQAPair updates a Q&A pair.
 func (h *Handler) HandleUpdateQAPair(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 	idStr := c.Param("id")
 
 	if !h.isAdmin(c) {
 		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
 	}
 
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -5664,7 +5745,6 @@ func (h *Handler) HandleUpdateQAPair(c echo.Context) error {
 // HandleDeleteQAPair deletes a Q&A pair.
 func (h *Handler) HandleDeleteQAPair(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 	idStr := c.Param("id")
 
 	if !h.isAdmin(c) {
@@ -5672,7 +5752,10 @@ func (h *Handler) HandleDeleteQAPair(c echo.Context) error {
 	}
 
 	// Verify tenant exists
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -5693,14 +5776,16 @@ func (h *Handler) HandleDeleteQAPair(c echo.Context) error {
 // HandleTestQAPair tests retrieval for a single Q&A pair.
 func (h *Handler) HandleTestQAPair(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 	idStr := c.Param("id")
 
 	if !h.isAdmin(c) {
 		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
 	}
 
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -5727,13 +5812,15 @@ func (h *Handler) HandleTestQAPair(c echo.Context) error {
 // HandleTestAllQAPairs tests retrieval for all Q&A pairs.
 func (h *Handler) HandleTestAllQAPairs(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	if !h.isAdmin(c) {
 		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
 	}
 
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -5888,14 +5975,16 @@ func extractKeywords(text string) []string {
 // POST /api/v1/agent/:slug/rag/search
 func (h *Handler) HandleRAGSearch(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 	start := time.Now()
 
 	if !h.isAdmin(c) {
 		return echo.NewHTTPError(http.StatusForbidden, "Admin role required")
 	}
 
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -5998,9 +6087,11 @@ func (h *Handler) HandleRAGSearch(c echo.Context) error {
 // Requires: ADMIN role or api:config permission.
 func (h *Handler) HandleSetActiveVersion(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -6071,9 +6162,11 @@ func (h *Handler) HandleSetActiveVersion(c echo.Context) error {
 // Requires: ADMIN role or api:config permission.
 func (h *Handler) HandleListActiveVersions(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -6108,9 +6201,11 @@ func (h *Handler) HandleListActiveVersions(c echo.Context) error {
 // Requires: ADMIN role or api:config permission.
 func (h *Handler) HandleListIndexedVersions(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -6158,10 +6253,12 @@ func (h *Handler) HandleListIndexedVersions(c echo.Context) error {
 // GET /api/v1/agent/:slug/transcripts
 func (h *Handler) HandleListTranscripts(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -6191,11 +6288,13 @@ func (h *Handler) HandleListTranscripts(c echo.Context) error {
 // GET /api/v1/agent/:slug/transcripts/:id
 func (h *Handler) HandleGetTranscript(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 	transcriptID := c.Param("id")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -6225,11 +6324,13 @@ func (h *Handler) HandleGetTranscript(c echo.Context) error {
 // DELETE /api/v1/agent/:slug/transcripts/:id
 func (h *Handler) HandleDeleteTranscript(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 	transcriptID := c.Param("id")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -6261,8 +6362,10 @@ func (h *Handler) HandleDeleteTranscript(c echo.Context) error {
 // GET /api/v1/agent/:slug/leads
 func (h *Handler) HandleListLeads(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -6302,9 +6405,11 @@ func (h *Handler) HandleListLeads(c echo.Context) error {
 // GET /api/v1/agent/:slug/leads/:id
 func (h *Handler) HandleGetLead(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 	leadID := c.Param("id")
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -6329,7 +6434,6 @@ func (h *Handler) HandleGetLead(c echo.Context) error {
 // PATCH /api/v1/agent/:slug/leads/:id/status
 func (h *Handler) HandleUpdateLeadStatus(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 	leadID := c.Param("id")
 	var req struct {
 		Status string `json:"status"`
@@ -6341,7 +6445,10 @@ func (h *Handler) HandleUpdateLeadStatus(c echo.Context) error {
 	if !isValidLeadStatus(req.Status) {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid lead status")
 	}
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -6371,8 +6478,10 @@ func (h *Handler) HandleUpdateLeadStatus(c echo.Context) error {
 // GET /api/v1/agent/:slug/leads/export
 func (h *Handler) HandleExportLeads(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -6448,10 +6557,12 @@ func isValidLeadStatus(status string) bool {
 // GET /api/v1/agent/:slug/settings
 func (h *Handler) HandleGetTenantSettings(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}
@@ -6483,7 +6594,6 @@ func (h *Handler) HandleGetTenantSettings(c echo.Context) error {
 // PUT /api/v1/agent/:slug/settings
 func (h *Handler) HandleUpdateTenantSettings(c echo.Context) error {
 	ctx := c.Request().Context()
-	slug := c.Param("slug")
 
 	// Parse request
 	var req struct {
@@ -6494,7 +6604,10 @@ func (h *Handler) HandleUpdateTenantSettings(c echo.Context) error {
 	}
 
 	// Get tenant
-	tenant, err := h.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &slug})
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
 	if err != nil || tenant == nil {
 		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
 	}

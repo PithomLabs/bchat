@@ -29,14 +29,22 @@ func TenantBindingMiddleware(s *store.Store) echo.MiddlewareFunc {
 				return echo.NewHTTPError(http.StatusForbidden, "access denied")
 			}
 
+			slug := c.Param("slug")
+
 			// Super users bypass tenant binding:
 			// - RoleHost (instance owner/super-admin)
 			// - RoleAdmin with empty AllowedTenantIDs (global admin)
 			if user.Role == store.RoleHost || (user.Role == store.RoleAdmin && len(user.AllowedTenantIDs) == 0) {
+				// For super users, still set tenant context if slug is provided
+				if slug != "" {
+					tenant, err := s.GetAgentTenant(c.Request().Context(), &store.FindAgentTenant{Slug: &slug})
+					if err == nil && tenant != nil {
+						setTenantInContext(c, tenant.ID)
+					}
+				}
 				return next(c)
 			}
 
-			slug := c.Param("slug")
 			if slug == "" {
 				return next(c) // No slug in URL, skip check
 				// NOTE: No-slug routes (e.g. HandleUpdateRoleTemplate) self-check
@@ -65,6 +73,9 @@ func TenantBindingMiddleware(s *store.Store) echo.MiddlewareFunc {
 					return echo.NewHTTPError(http.StatusForbidden, "access denied to this tenant")
 				}
 			}
+
+			// Set resolved tenant ID in context for downstream handlers
+			setTenantInContext(c, tenant.ID)
 
 			return next(c)
 		}

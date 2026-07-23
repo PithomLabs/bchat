@@ -140,10 +140,30 @@ func EstimateTokens(content string) int {
 	return len(content) / 4
 }
 
+// GetRetrievalTokenThreshold returns the RAG activation threshold for a tenant.
+// Fallback chain: tenant config → env var → hardcoded default (30K).
+func GetRetrievalTokenThreshold(tenantThreshold int32) int {
+	if tenantThreshold > 0 {
+		return int(tenantThreshold)
+	}
+	if v := os.Getenv("RAG_ACTIVATION_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return DefaultTokenThreshold
+}
+
 // ShouldUseRAG determines if RAG mode should be used based on content size.
 func ShouldUseRAG(kbContent, policyContent string) bool {
+	return ShouldUseRAGWithThreshold(kbContent, policyContent, 0)
+}
+
+// ShouldUseRAGWithThreshold determines if RAG mode should be used based on content size
+// and a per-tenant threshold override. A threshold of 0 uses the default.
+func ShouldUseRAGWithThreshold(kbContent, policyContent string, threshold int32) bool {
 	totalTokens := EstimateTokens(kbContent) + EstimateTokens(policyContent)
-	return totalTokens >= DefaultTokenThreshold
+	return totalTokens >= GetRetrievalTokenThreshold(threshold)
 }
 
 // sanitizeUTF8 removes invalid UTF-8 sequences from content.

@@ -95,7 +95,7 @@ func getMigrationDirs(t *testing.T) []string {
 
 func TestMigrationLoopSkipsAlreadyApplied(t *testing.T) {
 	ctx := context.Background()
-	ts := NewTestingStore(ctx, t) // DB is at current FS version, history = ["0.33.2"]
+	ts := NewTestingStore(ctx, t) // DB is at current FS version
 
 	// Simulate a database that was at 0.31.3 before Plan 5's GetCurrentSchemaVersion fix
 	// surfaced the dormant skip-logic bug.
@@ -120,7 +120,9 @@ func TestMigrationLoopSkipsAlreadyApplied(t *testing.T) {
 		versions = append(versions, v)
 	}
 	require.NoError(t, rows.Err())
-	require.Contains(t, versions, "0.33.2", "0.33.x migrations should have been applied")
+	schemaVersion, err := ts.GetCurrentSchemaVersion()
+	require.NoError(t, err)
+	require.Contains(t, versions, schemaVersion, "latest migrations should have been applied")
 }
 
 func TestNonIdempotentMigrationsNeverRerun(t *testing.T) {

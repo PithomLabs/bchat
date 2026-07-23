@@ -41,6 +41,8 @@ type TenantConfig struct {
 	VectorDBS3Override        string // JSON-encoded TenantS3Override for per-tenant S3 storage
 	UpdatedAt                 time.Time
 	UpdatedBy                 *int32
+	// P0: Per-tenant RAG activation threshold (0 = use default 30K)
+	RetrievalTokenThreshold int32
 }
 
 // FindTenantConfig contains filters for finding tenant configs.

@@ -466,40 +466,20 @@ func (s *APIV1Service) HandleSelectTenant(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "selection_token and tenant_id are required")
 	}
 
-	// Find user by selection token
+	// Find user by selection token using direct lookup (O(1) instead of N+1)
 	// The selection token is stored as "selection:<token>" in the access token
-	// We need to find which user owns this token
+	accessTokenValue := "selection:" + req.SelectionToken
 	ctx := c.Request().Context()
-	users, err := s.Store.ListUsers(ctx, &store.FindUser{})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to list users")
-	}
-
-	var matchedUser *store.User
-	var tokenCreatedAt time.Time
-	for _, user := range users {
-		tokens, err := s.Store.GetUserAccessTokens(ctx, user.ID)
-		if err != nil {
-			continue
-		}
-		for _, token := range tokens {
-			if token.AccessToken == "selection:"+req.SelectionToken {
-				matchedUser = user
-				// Parse timestamp from description
-				var tsRaw int64
-				if _, err := fmt.Sscanf(token.Description, "tenant-selection-token:%d", &tsRaw); err == nil {
-					tokenCreatedAt = time.Unix(tsRaw, 0)
-				}
-				break
-			}
-		}
-		if matchedUser != nil {
-			break
-		}
-	}
-
-	if matchedUser == nil {
+	matchedUser, description, err := s.Store.FindUserByAccessToken(ctx, accessTokenValue)
+	if err != nil || matchedUser == nil {
 		return echo.NewHTTPError(http.StatusUnauthorized, "invalid or expired selection token")
+	}
+
+	// Parse timestamp from description to check expiry
+	var tokenCreatedAt time.Time
+	var tsRaw int64
+	if _, err := fmt.Sscanf(description, "tenant-selection-token:%d", &tsRaw); err == nil {
+		tokenCreatedAt = time.Unix(tsRaw, 0)
 	}
 
 	// Check if selection token was created within 5 minutes

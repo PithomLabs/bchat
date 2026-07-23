@@ -463,7 +463,9 @@ CREATE TABLE tenant_config (
     admin_mutation_rate_limit_rpm INTEGER NOT NULL DEFAULT 30,
     vector_db_s3_override TEXT DEFAULT '',
     updated_at BIGINT NOT NULL DEFAULT (strftime('%s', 'now')),
-    updated_by INTEGER REFERENCES user(id) ON DELETE SET NULL
+    updated_by INTEGER REFERENCES user(id) ON DELETE SET NULL,
+    -- P0: Per-tenant RAG activation threshold (0 = use default 30K)
+    retrieval_token_threshold INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX idx_tenant_config_tenant ON tenant_config(tenant_id);
@@ -1083,3 +1085,13 @@ CREATE TABLE IF NOT EXISTS agent_events (
 CREATE INDEX IF NOT EXISTS idx_agent_events_tenant ON agent_events(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_agent_events_status ON agent_events(status);
 CREATE INDEX IF NOT EXISTS idx_agent_events_claimed ON agent_events(claimed_at);
+
+-- user_access_token_lookup (P0: O(1) token lookup for selection token flow)
+CREATE TABLE IF NOT EXISTS user_access_token_lookup (
+    token_hash TEXT NOT NULL PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_ts BIGINT NOT NULL DEFAULT (strftime('%s', 'now')),
+    FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_user_access_token_lookup_user_id ON user_access_token_lookup(user_id);

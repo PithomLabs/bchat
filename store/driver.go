@@ -56,6 +56,11 @@ type Driver interface {
 	UpsertUserSetting(ctx context.Context, upsert *UserSetting) (*UserSetting, error)
 	ListUserSettings(ctx context.Context, find *FindUserSetting) ([]*UserSetting, error)
 
+	// UserAccessToken lookup methods (P0: O(1) token lookup for selection token flow).
+	InsertUserAccessTokenLookup(ctx context.Context, userID int32, accessToken, description string) error
+	DeleteUserAccessTokenLookup(ctx context.Context, accessToken string) error
+	FindUserByAccessToken(ctx context.Context, accessToken string) (*User, string, error)
+
 	// IdentityProvider model related methods.
 	CreateIdentityProvider(ctx context.Context, create *IdentityProvider) (*IdentityProvider, error)
 	ListIdentityProviders(ctx context.Context, find *FindIdentityProvider) ([]*IdentityProvider, error)

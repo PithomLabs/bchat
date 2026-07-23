@@ -1264,26 +1264,40 @@ func (db *LanceVectorDB) hybridSearch(ctx context.Context, queryText string, que
 		_ = i
 	}
 
-	// Process FTS results
+	// Process FTS results — collect raw scores for min-max normalization
+	var ftsRawScores []float64
+	type ftsEntry struct {
+		chunkID string
+		raw     float64
+	}
+	var ftsEntries []ftsEntry
+
 	for i, row := range ftsResults {
 		chunk := db.rowToDocumentChunk(row)
 
-		// FTS score from LanceDB (if available)
-		var ftsScore float64 = 1.0
+		// Collect raw FTS score (no normalization yet)
+		var rawScore float64
 		if score, ok := row["_score"].(float64); ok {
-			// Normalize FTS score to 0-1 range
-			ftsScore = score / (score + 1)
+			rawScore = score
 		} else if score, ok := row["_score"].(float32); ok {
-			ftsScore = float64(score) / (float64(score) + 1)
+			rawScore = float64(score)
 		} else {
 			// Use rank-based score if no _score available
-			ftsScore = 1.0 / float64(i+1)
+			rawScore = 1.0 / float64(i+1)
 		}
+
+		ftsRawScores = append(ftsRawScores, rawScore)
+		ftsEntries = append(ftsEntries, ftsEntry{chunkID: chunk.ID, raw: rawScore})
 
 		if _, exists := docMap[chunk.ID]; !exists {
 			docMap[chunk.ID] = &scoredDoc{chunk: chunk}
 		}
-		docMap[chunk.ID].ftsScore = ftsScore
+	}
+
+	// Min-max normalize FTS scores to [0, 1] so they're comparable to cosine similarity
+	normalizedFTS := normalizeBM25Scores(ftsRawScores)
+	for i, entry := range ftsEntries {
+		docMap[entry.chunkID].ftsScore = normalizedFTS[i]
 	}
 
 	// Calculate hybrid scores using linear combination

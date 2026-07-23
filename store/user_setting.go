@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/pkg/errors"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -128,8 +129,15 @@ func (s *Store) RemoveUserAccessToken(ctx context.Context, userID int32, token s
 			},
 		},
 	})
+	if err != nil {
+		return err
+	}
 
-	return err
+	// Remove from lookup table
+	if delErr := s.DeleteUserAccessTokenLookup(ctx, token); delErr != nil {
+		slog.Warn("failed to remove access token from lookup table", "user_id", userID, "error", delErr)
+	}
+	return nil
 }
 
 func convertUserSettingFromRaw(raw *UserSetting) (*storepb.UserSetting, error) {
@@ -194,4 +202,19 @@ func convertUserSettingToRaw(userSetting *storepb.UserSetting) (*UserSetting, er
 		return nil, errors.Errorf("unsupported user setting key: %v", userSetting.Key)
 	}
 	return raw, nil
+}
+
+// InsertUserAccessTokenLookup inserts a token into the lookup table.
+func (s *Store) InsertUserAccessTokenLookup(ctx context.Context, userID int32, accessToken, description string) error {
+	return s.driver.InsertUserAccessTokenLookup(ctx, userID, accessToken, description)
+}
+
+// DeleteUserAccessTokenLookup removes a token from the lookup table.
+func (s *Store) DeleteUserAccessTokenLookup(ctx context.Context, accessToken string) error {
+	return s.driver.DeleteUserAccessTokenLookup(ctx, accessToken)
+}
+
+// FindUserByAccessToken finds a user by their access token using the lookup table.
+func (s *Store) FindUserByAccessToken(ctx context.Context, accessToken string) (*User, string, error) {
+	return s.driver.FindUserByAccessToken(ctx, accessToken)
 }

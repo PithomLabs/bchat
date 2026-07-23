@@ -484,10 +484,14 @@ When adding a new tenant-scoped feature, follow this checklist:
   1. `POST /api/v1/auth/tenants` → Returns tenant list + selection token
   2. `POST /api/v1/auth/select-tenant` → Returns JWT with `tenant_id`
 
+### REST SignIn — Nil Tenant (By Design)
+`POST /api/v1/auth/signin` (REST) always generates a JWT with `tenant_id: nil`, even for single-tenant users. This is **by design** — REST sign-in creates an unscoped session. The tenant must be selected separately via `POST /api/v1/auth/select-tenant`. This ensures the multi-tenant selection flow is consistent regardless of user type.
+
 ### Selection Token
 - Random 32-byte string stored in `user_access_token`
 - 5-minute expiry enforced via timestamp in description
 - Single-use (deleted after successful selection)
+- **P0 fix:** Token lookup uses O(1) hash-indexed table (`user_access_token_lookup`) instead of N+1 user scan
 
 ---
 
