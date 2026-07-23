@@ -290,13 +290,14 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	publicGroup := echoServer.Group("/api/v1/agent")
 	publicGroup.Use(publicCORS)
 	publicGroup.Use(middleware.BodyLimit("16KB"))
+	publicGroup.Use(agent.ResolveSlugTenantMiddleware(s.Store))
 	publicGroup.OPTIONS("/:slug/*", func(c echo.Context) error {
 		return c.NoContent(http.StatusNoContent)
 	})
 	publicGroup.GET("/playground/catalog", s.agentHandler.HandlePlaygroundCatalog)
 	publicGroup.POST("/:slug/chat/ext", s.agentHandler.HandleChatExternal)
 	publicGroup.GET("/:slug/chat/ext/transcript", s.agentHandler.HandleGetExternalTranscript)
-	publicGroup.POST("/:slug/playground/run", s.agentHandler.HandlePlaygroundRun)
+	publicGroup.POST("/:slug/playground/run", s.agentHandler.HandlePlaygroundRun) // TODO: can use context instead of direct lookup after ResolveSlugTenantMiddleware
 	publicGroup.GET("/:slug/widget.js", s.agentHandler.HandleWidget) // Legacy - inline JS
 
 	// Bridge routes (HMAC authenticated)
@@ -314,6 +315,7 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 		AllowHeaders: []string{echo.HeaderOrigin},
 	})
 	widgetGroup.Use(widgetPermissiveCORS)
+	widgetGroup.Use(agent.ResolveSlugTenantMiddleware(s.Store))
 	widgetGroup.GET("/:slug/embed.js", s.agentHandler.HandleWidgetEmbed) // Built bundle
 	widgetGroup.GET("/:slug/iframe", s.agentHandler.HandleWidgetIframe)  // iframe HTML
 

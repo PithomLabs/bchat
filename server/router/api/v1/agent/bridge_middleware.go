@@ -226,7 +226,7 @@ func RequireBridgeHMAC(dbStore *store.Store, enc *crypto.EncryptionService) echo
 			}
 
 			// 12. Set tenant context for downstream handlers
-			c.Set("tenant-id", tenant.ID)
+			c.Set(tenantContextKey, tenant.ID)
 
 			return next(c)
 		}

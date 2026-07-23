@@ -78,7 +78,7 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 		c.SetParamNames("slug")
 		c.SetParamValues(tenant.Slug)
 		c.Set("user-id", adminUser.ID)
-		c.Set("tenant-id", tenant.ID)
+		c.Set(tenantContextKey, tenant.ID)
 
 		err := handler.HandleListRoleTemplates(c)
 		require.NoError(err)
@@ -111,7 +111,7 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 		c.SetParamNames("slug")
 		c.SetParamValues(tenant.Slug)
 		c.Set("user-id", regularUser.ID)
-		c.Set("tenant-id", tenant.ID)
+		c.Set(tenantContextKey, tenant.ID)
 
 		err = handler.HandleListRoleTemplates(c)
 		require.NoError(err)
@@ -138,7 +138,7 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 		c.SetParamNames("slug")
 		c.SetParamValues(tenant.Slug)
 		c.Set("user-id", adminUser.ID)
-		c.Set("tenant-id", tenant.ID)
+		c.Set(tenantContextKey, tenant.ID)
 
 		err := handler.HandleCreateRoleTemplate(c)
 		require.NoError(err)
@@ -160,7 +160,7 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 		c.SetParamNames("slug", "id")
 		c.SetParamValues(tenant.Slug, "1")
 		c.Set("user-id", adminUser.ID)
-		c.Set("tenant-id", tenant.ID)
+		c.Set(tenantContextKey, tenant.ID)
 
 		err := handler.HandleAssignRoleTemplate(c)
 		require.NoError(err)
@@ -182,7 +182,7 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 		c.SetParamNames("slug", "id")
 		c.SetParamValues(tenant.Slug, "1")
 		c.Set("user-id", adminUser.ID)
-		c.Set("tenant-id", tenant.ID)
+		c.Set(tenantContextKey, tenant.ID)
 
 		err := handler.HandleAssignRoleTemplate(c)
 		require.NoError(err)
@@ -202,7 +202,7 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 		c.SetParamNames("slug", "userId")
 		c.SetParamValues(tenant.Slug, strconv.Itoa(int(user.ID)))
 		c.Set("user-id", adminUser.ID)
-		c.Set("tenant-id", tenant.ID)
+		c.Set(tenantContextKey, tenant.ID)
 
 		err := handler.HandleListUserRoles(c)
 		require.NoError(err)
@@ -236,7 +236,7 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 		c.SetParamNames("slug")
 		c.SetParamValues(tenant.Slug)
 		c.Set("user-id", tenantAdmin.ID)
-		c.Set("tenant-id", tenant.ID)
+		c.Set(tenantContextKey, tenant.ID)
 
 		err = handler.HandleListRoleTemplates(c)
 		require.NoError(err)
@@ -289,7 +289,7 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 		c.SetParamNames("slug", "userId")
 		c.SetParamValues(tenant.Slug, strconv.Itoa(int(viewerUser.ID)))
 		c.Set("user-id", adminUser.ID)
-		c.Set("tenant-id", tenant.ID)
+		c.Set(tenantContextKey, tenant.ID)
 
 		err = handler.HandleRevokePermission(c)
 		require.NoError(err)
@@ -337,7 +337,7 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 		c.SetParamNames("slug", "userId")
 		c.SetParamValues(tenant.Slug, strconv.Itoa(int(templateUser.ID)))
 		c.Set("user-id", adminUser.ID)
-		c.Set("tenant-id", tenant.ID)
+		c.Set(tenantContextKey, tenant.ID)
 
 		err = handler.HandleListUserRoles(c)
 		require.NoError(err)
@@ -398,7 +398,7 @@ func TestRoleTemplateEndpoints(t *testing.T) {
 		c.SetParamNames("slug")
 		c.SetParamValues(tenant.Slug)
 		c.Set("user-id", adminUser.ID)
-		c.Set("tenant-id", tenant.ID)
+		c.Set(tenantContextKey, tenant.ID)
 
 		err = handler.HandleGrantPermission(c)
 		require.NoError(err)

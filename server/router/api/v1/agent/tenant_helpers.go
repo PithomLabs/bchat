@@ -8,10 +8,14 @@ import (
 	"github.com/usememos/memos/store"
 )
 
+// tenantContextKey is the Echo context key for tenant ID.
+// Must match v1.getTenantIDContextKey() in server/router/api/v1/ticket_service.go.
+const tenantContextKey = "tenant-id"
+
 // getTenantFromContext extracts the tenant ID from the echo context.
 // Returns nil if no tenant is set.
 func getTenantFromContext(c echo.Context) *int32 {
-	if v, ok := c.Get("tenant-id").(int32); ok {
+	if v, ok := c.Get(tenantContextKey).(int32); ok {
 		return &v
 	}
 	return nil
