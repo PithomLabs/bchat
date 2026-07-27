@@ -24,7 +24,7 @@ func newMockLLMServer(t *testing.T, reply string) *httptest.Server {
 				"index": 0,
 				"message": map[string]any{
 					"role":    "assistant",
-					"content": map[string]any{"text": reply},
+					"content": reply,
 				},
 				"finish_reason": "stop",
 			}},

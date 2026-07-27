@@ -21,8 +21,8 @@ This document provides a comprehensive reference for all environment variables u
 |----------|--------------|
 | **Core** | `OPENROUTER_API_KEY`, `LLM_MODEL` |
 | **Embedding** | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_BATCH_SIZE`, `RAG_MAX_CHUNK_TOKENS`, `EMBEDDING_TIMEOUT` |
-| **RAG** | `RAG_PIPELINE_ENABLED`, `REINDEX_RAG`, `HYBRID_SEARCH_ENABLED` |
-| **Observational Memory** | `OM_ENABLED`, `OM_OBSERVER_TOKEN_THRESHOLD`, `OM_TOKEN_THRESHOLD` |
+| **RAG** | `RAG_PIPELINE_ENABLED`, `FORCE_REINDEX_ON_STARTUP`, `HYBRID_SEARCH_ENABLED` |
+| **Observational Memory** | `OM_ENABLED`, `OM_OBSERVER_TOKEN_THRESHOLD`, `OM_TOKEN_THRESHOLD`, `OM_SCOPE` |
 | **Hybrid OM + RAG** | `HYBRID_OM_RAG_ENABLED`, `HYBRID_OM_RAG_TEMPORAL_DECAY`, `HYBRID_OM_RAG_TTL_DAYS` |
 | **Storage** | `LANCEDB_STORAGE_PROVIDER`, `LANCEDB_LOCAL_PATH` |
 
@@ -261,6 +261,8 @@ export EMBEDDING_TIMEOUT=180s
 
 **Format:** Accepts Go duration strings (e.g., `60s`, `3m`, `1h30m`).
 
+**Cap:** Values above 5 minutes are clamped to `5m` (`MaxEmbeddingTimeout`).
+
 **Use cases:**
 - Increase for large batch operations with slow network
 - Decrease for faster failure detection in testing
@@ -278,7 +280,7 @@ HTTP round-trips, which is the dominant factor in reindex speed.
 |----------|-------|
 | Type | Integer |
 | Default | `200` |
-| Range | `1` to `200` (hard cap) |
+| Range | `10` to `200` (min 10 enforced, hard cap 200) |
 
 ```bash
 export EMBEDDING_BATCH_SIZE=200
@@ -287,7 +289,7 @@ export EMBEDDING_BATCH_SIZE=200
 **Recommended Values:**
 - `openai/text-embedding-3-small`: `200` (max — fastest reindex; default)
 - `qwen/qwen3-embedding-8b`: `32` (Verified working)
-- Debugging/Instability: `1`
+- Debugging/Instability: `10` (minimum allowed)
 
 **Note:** Lower values increase stability but reduce speed. If you encounter "No successful provider responses" or timeouts, try reducing this value. Keep at `200` for production reindexing speed.
 
@@ -570,6 +572,62 @@ Delay in milliseconds between retry attempts.
 export OM_RETRY_DELAY_MS=1000
 ```
 
+### OM_SCOPE
+
+Determines the memory scope for Observational Memory.
+
+| Property | Value |
+|----------|-------|
+| Type | String |
+| Default | `thread` |
+| Options | `thread`, `resource` |
+
+```bash
+export OM_SCOPE=resource
+```
+
+- `thread` — Memory scoped to individual conversation threads
+- `resource` — Memory scoped to the resource (e.g., user), shared across threads
+
+### OM_BUFFER_TOKENS
+
+Fraction of the token threshold that triggers the buffer zone. When unobserved tokens exceed `threshold * buffer_tokens`, the buffer activates.
+
+| Property | Value |
+|----------|-------|
+| Type | Float |
+| Default | `0.2` (20% of threshold) |
+
+```bash
+export OM_BUFFER_TOKENS=0.2
+```
+
+### OM_BUFFER_ACTIVATION
+
+Fraction of the token threshold at which the buffer activates. When unobserved tokens exceed `threshold * buffer_activation`, the buffer state transitions to active.
+
+| Property | Value |
+|----------|-------|
+| Type | Float |
+| Default | `0.8` (80% of threshold) |
+
+```bash
+export OM_BUFFER_ACTIVATION=0.8
+```
+
+### OM_BLOCK_AFTER
+
+Safety multiplier on the token threshold. If unobserved tokens exceed `threshold * block_after`, the observer is force-triggered as a safety measure.
+
+| Property | Value |
+|----------|-------|
+| Type | Float |
+| Default | `1.2` (120% of threshold) |
+
+```bash
+export OM_BLOCK_AFTER=1.2
+```
+
 ---
 
 ## Hybrid OM + RAG Configuration
@@ -793,13 +851,13 @@ S3-compatible endpoint URL.
 | Property | Value |
 |----------|-------|
 | Type | URL (hostname only) |
-| Default | `fly.storage.tigris.dev` |
+| Default | `""` (falls back to `AWS_ENDPOINT_URL_S3`, then `t3.storage.dev`) |
 
 ```bash
-export LANCEDB_S3_ENDPOINT=fly.storage.tigris.dev
+export LANCEDB_S3_ENDPOINT=t3.storage.dev
 ```
 
-**Note:** Only used when `LANCEDB_STORAGE_PROVIDER=s3`.
+**Note:** Only used when `LANCEDB_STORAGE_PROVIDER=s3`. The Tigrisdata endpoint was previously `fly.storage.tigris.dev` but has been updated to `t3.storage.dev`.
 
 ---
 

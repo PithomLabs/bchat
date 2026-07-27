@@ -1,0 +1,32 @@
+# LongMemEval Per-Type Benchmark Run Commands
+# Set your API key first:
+# export OPENROUTER_API_KEY=sk-or-v1-xxx
+
+# SingleHop (~17 min, 64 questions)
+BENCHMARK_LONGMEMEVAL=true OPENROUTER_API_KEY=$OPENROUTER_API_KEY \
+  go test ./server/router/api/v1/agent/ -run TestBenchmarkSingleHop -v -timeout=30m -count=1
+
+# Preference (~8 min, 30 questions)
+BENCHMARK_LONGMEMEVAL=true OPENROUTER_API_KEY=$OPENROUTER_API_KEY \
+  go test ./server/router/api/v1/agent/ -run TestBenchmarkPreference -v -timeout=15m -count=1
+
+# KnowledgeUpdate (~19 min, 72 questions)
+BENCHMARK_LONGMEMEVAL=true OPENROUTER_API_KEY=$OPENROUTER_API_KEY \
+  go test ./server/router/api/v1/agent/ -run TestBenchmarkKnowledgeUpdate -v -timeout=30m -count=1
+
+# Abstention (~3 min, 12 questions)
+BENCHMARK_LONGMEMEVAL=true OPENROUTER_API_KEY=$OPENROUTER_API_KEY \
+  go test ./server/router/api/v1/agent/ -run TestBenchmarkAbstention -v -timeout=10m -count=1
+
+# Aggregate summary (run after all types)
+go test ./server/router/api/v1/agent/ -run TestBenchmarkAggregate -v -count=1
+
+# Full benchmark (all types, ~47 min)
+BENCHMARK_LONGMEMEVAL=true OPENROUTER_API_KEY=$OPENROUTER_API_KEY \
+  go test ./server/router/api/v1/agent/ \
+  -run "TestBenchmark(SingleHop|Preference|KnowledgeUpdate|Abstention)" \
+  -v -timeout=60m -count=1
+
+# Fresh run (clear existing JSONL results)
+BENCHMARK_FRESH=true BENCHMARK_LONGMEMEVAL=true OPENROUTER_API_KEY=$OPENROUTER_API_KEY \
+  go test ./server/router/api/v1/agent/ -run TestBenchmarkSingleHop -v -timeout=30m -count=1
