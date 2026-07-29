@@ -168,10 +168,12 @@ func convertBenchmarkTurns(turns []BenchmarkTurn) []store.AgentMessage {
 	return msgs
 }
 
-// generateAnswerDryRun calls openrouter/free to generate an answer from the observation log.
+// generateAnswerDryRun calls the configured model to generate an answer from the observation log.
+// Override with BENCHMARK_ANSWER_MODEL env var (default: openrouter/free).
 func generateAnswerDryRun(t *testing.T, ctx context.Context, apiKey, obsLog, question string) (string, string, error) {
 	t.Helper()
 	client := newOpenRouterClient(apiKey)
+	answerModel := getEnvOrDefault("BENCHMARK_ANSWER_MODEL", "openrouter/free")
 
 	prompt := fmt.Sprintf(`You are an AI assistant answering a question based on your memory of past conversations.
 
@@ -184,7 +186,7 @@ func generateAnswerDryRun(t *testing.T, ctx context.Context, apiKey, obsLog, que
 Answer concisely. If the memory does not contain enough information to answer, say "I don't have enough information to answer this question."`, obsLog, question)
 
 	resp, err := client.CreateChatCompletion(ctx, openrouter.ChatCompletionRequest{
-		Model: "openrouter/free",
+		Model: answerModel,
 		Messages: []openrouter.ChatCompletionMessage{
 			openrouter.SystemMessage("You are a helpful assistant. Answer questions based on memory."),
 			openrouter.UserMessage(prompt),
@@ -549,6 +551,9 @@ func TestBenchmarkLongMemEvalDryRun(t *testing.T) {
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 	require.NotEmpty(t, apiKey, "OPENROUTER_API_KEY required")
 
+	answerModel := getEnvOrDefault("BENCHMARK_ANSWER_MODEL", "openrouter/free")
+	t.Logf("Answer model: %s", answerModel)
+
 	if os.Getenv("BENCHMARK_FRESH") == "true" {
 		clearBenchmarkJSONLs()
 		t.Log("Cleared existing JSONL files (BENCHMARK_FRESH=true)")
@@ -774,6 +779,9 @@ func runPerTypeBenchmark(t *testing.T, qType, sessionPrefix string, filterFn fun
 	}
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 	require.NotEmpty(t, apiKey)
+
+	answerModel := getEnvOrDefault("BENCHMARK_ANSWER_MODEL", "openrouter/free")
+	t.Logf("Answer model: %s", answerModel)
 
 	if os.Getenv("BENCHMARK_FRESH") == "true" {
 		clearBenchmarkJSONLs()

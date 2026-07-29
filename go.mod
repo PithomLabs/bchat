@@ -10,6 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.17.67
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.17.77
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.80.0
+	github.com/cockroachdb/cockroach-go/v2 v2.4.3
 	github.com/go-sql-driver/mysql v1.9.2
 	github.com/google/cel-go v0.25.0
 	github.com/google/uuid v1.6.0

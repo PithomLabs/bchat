@@ -1,0 +1,38 @@
+# =============================================================================
+# Local CockroachDB Container for BCHAT Development
+# =============================================================================
+# Start:   docker compose -f scripts/docker-compose.cockroach.yml up -d
+# Stop:    docker compose -f scripts/docker-compose.cockroach.yml down
+# Status:  docker compose -f scripts/docker-compose.cockroach.yml ps
+# Logs:    docker compose -f scripts/docker-compose.cockroach.yml logs -f
+# Reset:   docker compose -f scripts/docker-compose.cockroach.yml down -v && docker compose -f scripts/docker-compose.cockroach.yml up -d
+#
+# Credentials:
+#   URL:      postgresql://bchat_user:bchat_pass@localhost:26257/bchat?sslmode=disable
+#   Host:     localhost
+#   Port:     26257
+#   Database: bchat
+#   User:     bchat_user
+#   Password: bchat_pass
+#   DB Console: http://localhost:8080
+# =============================================================================
+
+services:
+  cockroach:
+    image: cockroachdb/cockroach:v25.2.21
+    container_name: bchat-crdb
+    restart: unless-stopped
+    command: start-single-node --insecure --advertise-addr=localhost
+    ports:
+      - "26257:26257"
+      - "8080:8080"
+    volumes:
+      - bchat_crdb_data:/cockroach/cockroach-data
+    healthcheck:
+      test: ["CMD", "cockroach", "node", "status", "--insecure", "--host=localhost", "--port=26257"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  bchat_crdb_data:

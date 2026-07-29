@@ -97,6 +97,9 @@ type VectorDBConfig struct {
 	// Embedding configuration
 	EmbeddingConfig *EmbeddingConfig
 
+	// CockroachDB configuration (for vector storage)
+	CockroachDSN string // Connection string for CockroachDB
+
 	// RAG feature flag
 	Enabled bool
 
@@ -125,6 +128,7 @@ func NewVectorDBConfigFromEnv() *VectorDBConfig {
 		S3ForcePathStyle:    getEnvOrDefault("LANCEDB_S3_FORCE_PATH_STYLE", "false") == "true",
 		S3AllowHTTP:         getEnvOrDefault("LANCEDB_S3_ALLOW_HTTP", "false") == "true",
 		S3Prefix:            getEnvOrDefault("LANCEDB_S3_PREFIX", "lancedb"),
+		CockroachDSN:        os.Getenv("COCKROACH_DSN"),
 		EmbeddingConfig:     NewEmbeddingConfigFromEnv(),
 		Enabled:             os.Getenv("RAG_PIPELINE_ENABLED") == "true",
 		HybridSearchEnabled: os.Getenv("HYBRID_SEARCH_ENABLED") == "true",
@@ -281,6 +285,9 @@ func NewVectorDB(config *VectorDBConfig) (VectorDB, error) {
 	case "s3":
 		slog.Info("Using S3 LanceDB storage", "endpoint", config.S3Endpoint, "bucket", config.S3Bucket)
 		return newPool(config, embedSvc)
+	case "cockroach":
+		slog.Info("Using CockroachDB native vector storage")
+		return NewCockroachVectorDB(config, embedSvc)
 	default:
 		return NewMemoryVectorDB(embedSvc), nil
 	}

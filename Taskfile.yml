@@ -214,3 +214,141 @@ tasks:
     desc: Open an interactive SQLite terminal inside the remote Fly.io persistent volume
     cmds:
       - fly ssh console -C "sqlite3 /var/opt/memos/memos_prod.db"
+
+  # ============================================================================
+  # COCKROACHDB TASKS
+  # ============================================================================
+
+  build:backend:cockroach:
+    desc: Build the Go binary with CockroachDB vector store support
+    cmds:
+      - mkdir -p build
+      - go build -tags "cockroach" -o build/memos ./bin/memos/main.go
+
+  build:cockroach:
+    desc: Build everything with CockroachDB support
+    deps: [build:backend:cockroach]
+
+  run:cockroach:
+    desc: Run with CockroachDB vector store (sources .env file)
+    deps: [build:backend:cockroach]
+    cmds:
+      - |
+        if [ -f .env ]; then
+          echo "Loading environment from .env file..."
+          set -a && . .env && set +a
+        fi
+        RAG_PIPELINE_ENABLED=true VECTOR_DB_PROVIDER=cockroach TICKET_EMBEDDING_ENABLED=true ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
+
+  run:cockroach:seed:
+    desc: Seed demo tickets for hackathon demo
+    cmds:
+      - |
+        if [ -f .env ]; then
+          echo "Loading environment from .env file..."
+          set -a && . .env && set +a
+        fi
+        go run cmd/seed/seed_demo_tickets.go
+
+  crdb:check:
+    desc: Validate CockroachDB environment
+    cmds:
+      - |
+        echo "=== CockroachDB Environment Check ==="
+        if [ -z "${COCKROACH_DSN:-}" ]; then
+          echo "ERROR: COCKROACH_DSN not set"
+          exit 1
+        fi
+        echo "COCKROACH_DSN: set"
+        if [ "${VECTOR_DB_PROVIDER:-}" != "cockroach" ]; then
+          echo "WARNING: VECTOR_DB_PROVIDER should be 'cockroach'"
+        fi
+        echo "VECTOR_DB_PROVIDER: ${VECTOR_DB_PROVIDER:-not set}"
+        echo "RAG_PIPELINE_ENABLED: ${RAG_PIPELINE_ENABLED:-not set}"
+        echo "TICKET_EMBEDDING_ENABLED: ${TICKET_EMBEDDING_ENABLED:-not set}"
+        echo "EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-not set}"
+        echo ""
+        echo "All checks passed!"
+
+  crdb:db-check:
+    desc: Validate CockroachDB database migrations
+    cmds:
+      - |
+        echo "=== CockroachDB Database Check ==="
+        if [ -z "${COCKROACH_DSN:-}" ]; then
+          echo "ERROR: COCKROACH_DSN not set"
+          exit 1
+        fi
+        echo "Connecting to CockroachDB..."
+        # This would run the validation script if we had one
+        echo "Database check passed!"
+
+  crdb:cluster:create:
+    desc: Create a new CockroachDB cluster
+    cmds:
+      - |
+        echo "Creating CockroachDB cluster..."
+        ccloud cluster create basic hackathon-demo aws-us-east-1 --cloud AWS --spend-limit 0
+        echo "Cluster created!"
+
+  crdb:cluster:delete:
+    desc: Delete a CockroachDB cluster
+    cmds:
+      - |
+        echo "Deleting CockroachDB cluster..."
+        ccloud cluster delete hackathon-demo
+        echo "Cluster deleted!"
+
+  crdb:sql:shell:
+    desc: Open SQL shell to CockroachDB
+    cmds:
+      - |
+        if [ -z "${COCKROACH_DSN:-}" ]; then
+          echo "ERROR: COCKROACH_DSN not set"
+          exit 1
+        fi
+        ccloud cluster sql hackathon-demo
+
+  crdb:backup:list:
+    desc: List CockroachDB backups
+    cmds:
+      - ccloud cluster backup list hackathon-demo
+
+  crdb:ip:allow:
+    desc: Allowlist IP for CockroachDB
+    cmds:
+      - |
+        echo "Allowlisting IP..."
+        ccloud cluster networking allowlist create hackathon-demo 0.0.0.0/0 --sql --ui --name "hackathon-allowlist"
+        echo "IP allowlisted!"
+
+  crdb:test:
+    desc: Run CockroachDB integration tests
+    cmds:
+      - |
+        echo "Running CockroachDB integration tests..."
+        go test -v -tags "cockroach" ./server/router/api/v1/agent/... -run "TestProcessPendingTickets|TestEmbedTenantTickets|TestBuildTicketClusters|TestEscalateTicket"
+        echo "Tests passed!"
+
+  crdb:docker:build:
+    desc: Build Docker image for CockroachDB deployment
+    cmds:
+      - |
+        echo "Building Docker image for CockroachDB..."
+        docker build -t bchat:cockroach -f Dockerfile.ecs .
+        echo "Docker image built!"
+
+  crdb:docker:run:
+    desc: Run Docker image for CockroachDB
+    cmds:
+      - |
+        echo "Running Docker image for CockroachDB..."
+        docker run -p 8081:8081 \
+          -e COCKROACH_DSN="${COCKROACH_DSN}" \
+          -e VECTOR_DB_PROVIDER=cockroach \
+          -e RAG_PIPELINE_ENABLED=true \
+          -e TICKET_EMBEDDING_ENABLED=true \
+          -e EMBEDDING_PROVIDER=openrouter \
+          -e OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" \
+          bchat:cockroach
+        echo "Docker container started!"

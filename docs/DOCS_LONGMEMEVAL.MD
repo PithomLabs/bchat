@@ -194,6 +194,7 @@ This reads all JSONL files and produces a combined pass rate. Run after per-type
 | `BENCHMARK_LONGMEMEVAL` | Yes | (none) | Gate — must be `true` to run |
 | `OPENROUTER_API_KEY` | Yes | (none) | API key for answer and judge LLMs |
 | `BENCHMARK_FRESH` | No | `false` | Clear JSONL files before running |
+| `BENCHMARK_ANSWER_MODEL` | No | `openrouter/free` | Override answer LLM (e.g., `xiaomi/mimo-v2.5`, `openai/gpt-4o-mini`) |
 | `OM_SCOPE` | No | `resource` | Set internally by test |
 | `OM_ENABLED` | No | `true` | Set internally by test |
 
@@ -259,6 +260,28 @@ The answer LLM uses `openrouter/free`, which dynamically routes requests to diff
 | Fixed model | Reproducible, isolates OM pipeline | Doesn't reflect production variance |
 
 For bchat, `openrouter/free` is the right choice because the goal is to ensure accurate answers across different LLMs that tenants will use.
+
+### Testing a Specific Model
+
+Override the answer model with `BENCHMARK_ANSWER_MODEL` to test a specific LLM:
+
+```bash
+# Test with a specific model
+BENCHMARK_ANSWER_MODEL=xiaomi/mimo-v2.5 \
+  go test ./server/router/api/v1/agent/ -run TestBenchmarkLongMemEvalDryRun -v -count=1
+
+# Test with a paid model
+BENCHMARK_ANSWER_MODEL=openai/gpt-4o-mini \
+  go test ./server/router/api/v1/agent/ -run TestBenchmarkSingleHop -v -count=1 -timeout=30m
+
+# Full benchmark with fixed model
+BENCHMARK_ANSWER_MODEL=xiaomi/mimo-v2.5 \
+  go test ./server/router/api/v1/agent/ \
+  -run "TestBenchmark(SingleHop|Preference|KnowledgeUpdate|Abstention)" \
+  -v -count=1 -timeout=120m
+```
+
+The actual model used is logged at the start of each test and recorded in JSONL results. The judge model (`openai/gpt-4o`) is not configurable.
 
 ### Context Is NOT Lost with Dynamic Routing
 

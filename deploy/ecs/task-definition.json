@@ -1,0 +1,73 @@
+{
+  "family": "bchat-ecs",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "bchat",
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/bchat:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8081,
+          "hostPort": 8081,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "MODE",
+          "value": "prod"
+        },
+        {
+          "name": "VECTOR_DB_PROVIDER",
+          "value": "cockroach"
+        },
+        {
+          "name": "COCKROACH_DSN",
+          "value": ""
+        },
+        {
+          "name": "OPENROUTER_API_KEY",
+          "value": ""
+        },
+        {
+          "name": "EMBEDDING_PROVIDER",
+          "value": "openrouter"
+        },
+        {
+          "name": "TICKET_EMBEDDING_ENABLED",
+          "value": "true"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "COCKROACH_DSN",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:bchat/cockroach-dsn"
+        },
+        {
+          "name": "OPENROUTER_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:bchat/openrouter-api-key"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/bchat",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      },
+      "healthCheck": {
+        "command": ["CMD-SHELL", "wget -qO- http://localhost:8081/api/v1/status || exit 1"],
+        "interval": 30,
+        "timeout": 3,
+        "startPeriod": 5,
+        "retries": 3
+      }
+    }
+  ]
+}

@@ -461,6 +461,43 @@ func (h *Handler) HandleChatExternal(c echo.Context) error {
 	return c.JSON(http.StatusOK, response)
 }
 
+// HandleEscalateTicket handles ticket escalation via vector search.
+// POST /api/v1/agent/:slug/escalate
+func (h *Handler) HandleEscalateTicket(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	// Get tenant from context
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
+
+	// Bind request
+	var req EscalateTicketRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
+	}
+
+	if req.Title == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "title is required")
+	}
+	if req.Description == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "description is required")
+	}
+	if len(req.Description) > 10000 {
+		return echo.NewHTTPError(http.StatusBadRequest, "description must be under 10000 characters")
+	}
+
+	// Call escalation service
+	resp, err := h.service.EscalateTicket(ctx, tenant.Slug, req)
+	if err != nil {
+		slog.Error("ticket escalation failed", "slug", tenant.Slug, "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Escalation service unavailable")
+	}
+
+	return c.JSON(http.StatusOK, resp)
+}
+
 type VisitorMessage struct {
 	Role      string    `json:"role"`
 	Content   string    `json:"content"`
@@ -1299,6 +1336,15 @@ type OnboardRequest struct {
 	TenantSlug  string `form:"tenant_slug" json:"tenant_slug"`
 	CompanyName string `form:"company_name" json:"company_name"`
 	Vertical    string `form:"vertical" json:"vertical"`
+}
+
+// EscalateTicketRequest represents a ticket escalation request.
+type EscalateTicketRequest struct {
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	Priority    string   `json:"priority"`
+	Tags        []string `json:"tags"`
+	SessionID   string   `json:"session_id"`
 }
 
 // OnboardResponse represents the onboarding response.

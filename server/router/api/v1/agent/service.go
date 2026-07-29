@@ -156,6 +156,19 @@ func NewService(s *store.Store, p *profile.Profile) *Service {
 	svc.vectorDB = vectorDB
 	svc.vectorDBConfig = vectorDBConfig
 
+	// Wire database for CockroachDB vector store (post-construction wiring)
+	if cockroachDB, ok := vectorDB.(*CockroachVectorDB); ok {
+		// Only reuse shared pool when COCKROACH_DSN is not explicitly set
+		// or when it matches the main app DSN. If COCKROACH_DSN is different,
+		// NewCockroachVectorDB already opened its own dedicated pool.
+		if vectorDBConfig.CockroachDSN == "" || vectorDBConfig.CockroachDSN == p.DSN {
+			cockroachDB.SetDB(s.GetDriver().GetDB())
+			slog.Info("CockroachDB vector store initialized with shared connection pool")
+		} else {
+			slog.Info("CockroachDB vector store using dedicated connection pool")
+		}
+	}
+
 	// Log hybrid search configuration
 	if vectorDBConfig.HybridSearchEnabled {
 		slog.Info("Hybrid search enabled",
@@ -177,6 +190,20 @@ func NewService(s *store.Store, p *profile.Profile) *Service {
 			"buffer_tokens_fraction", omConfig.BufferTokens,
 			"activation_fraction", omConfig.BufferActivation,
 			"block_after_fraction", omConfig.BlockAfter)
+	}
+
+	// Start ticket embedding cron job (every 5 minutes)
+	if os.Getenv("TICKET_EMBEDDING_ENABLED") == "true" {
+		go func() {
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+			for range ticker.C {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				svc.processPendingTickets(ctx)
+				cancel()
+			}
+		}()
+		slog.Info("Ticket embedding cron job started (every 5 minutes)")
 	}
 
 	// Startup RAG reindex control.
@@ -5485,4 +5512,74 @@ func (s *Service) processEventPoller(ctx context.Context) {
 
 func strPtr(s string) *string {
 	return &s
+}
+
+// EscalateTicketResponse represents a ticket escalation response.
+type EscalateTicketResponse struct {
+	TicketID     int32  `json:"ticket_id"`
+	Status       string `json:"status"`
+	SimilarCount int    `json:"similar_count"`
+}
+
+// EscalateTicket handles ticket escalation via vector search.
+func (s *Service) EscalateTicket(ctx context.Context, tenantSlug string, req EscalateTicketRequest) (*EscalateTicketResponse, error) {
+	// Get tenant by slug
+	tenant, err := s.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &tenantSlug})
+	if err != nil || tenant == nil {
+		return nil, fmt.Errorf("tenant not found: %s", tenantSlug)
+	}
+
+	// Create ticket in database
+	priority := store.TicketPriorityMedium
+	if req.Priority == "high" {
+		priority = store.TicketPriorityHigh
+	} else if req.Priority == "low" {
+		priority = store.TicketPriorityLow
+	}
+
+	// Build description with memo link prefix if not already present
+	description := req.Description
+	if len(description) < 3 || description[:3] != "/m/" {
+		description = "/m/" + description
+	}
+
+	ticket := &store.Ticket{
+		Title:       req.Title,
+		Description: description,
+		Status:      store.TicketStatusOpen,
+		Priority:    priority,
+		TenantID:    &tenant.ID,
+		Tags:        req.Tags,
+	}
+
+	createdTicket, err := s.store.CreateTicket(ctx, ticket)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create ticket: %w", err)
+	}
+
+	// Search for similar tickets via vector DB
+	s.vectorDBMu.RLock()
+	vectorDB := s.vectorDB
+	s.vectorDBMu.RUnlock()
+
+	similarCount := 0
+	if vectorDB != nil {
+		query := fmt.Sprintf("%s %s", req.Title, req.Description)
+		result, err := vectorDB.Search(ctx, SearchQuery{
+			QueryText:    query,
+			TenantID:     tenant.ID,
+			ContentTypes: []string{"ticket"},
+			TopK:         5,
+			MinScore:     0.5,
+		})
+		if err == nil {
+			similarCount = result.Total
+		}
+	}
+
+	return &EscalateTicketResponse{
+		TicketID:     createdTicket.ID,
+		Status:       "created",
+		SimilarCount: similarCount,
+	}, nil
 }
