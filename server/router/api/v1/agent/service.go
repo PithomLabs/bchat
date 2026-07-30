@@ -5583,3 +5583,114 @@ func (s *Service) EscalateTicket(ctx context.Context, tenantSlug string, req Esc
 		SimilarCount: similarCount,
 	}, nil
 }
+
+// InferResolutionForNewTicket searches for similar past tickets and bug history
+// corpus, then auto-populates internal_notes with a merged resolution suggestion.
+func (s *Service) InferResolutionForNewTicket(ctx context.Context, ticket *store.Ticket) {
+	if ticket.TenantID == nil {
+		return
+	}
+
+	s.vectorDBMu.RLock()
+	vectorDB := s.vectorDB
+	s.vectorDBMu.RUnlock()
+
+	if vectorDB == nil {
+		return
+	}
+
+	queryText := fmt.Sprintf("%s %s", ticket.Title, ticket.Description)
+	tenantID := *ticket.TenantID
+
+	// Search 1: similar tickets in the same tenant
+	ticketResult, ticketErr := vectorDB.Search(ctx, SearchQuery{
+		QueryText:    queryText,
+		TenantID:     tenantID,
+		ContentTypes: []string{"ticket"},
+		TopK:         3,
+		MinScore:     0.7,
+	})
+	if ticketErr != nil {
+		slog.Error("failed to search for similar tickets", "error", ticketErr, "ticket_id", ticket.ID)
+	}
+
+	// Search 2: relevant bug history corpus
+	bugResult, bugErr := vectorDB.Search(ctx, SearchQuery{
+		QueryText:    queryText,
+		TenantID:     tenantID,
+		ContentTypes: []string{"bug_section"},
+		TopK:         3,
+		MinScore:     0.5,
+	})
+	if bugErr != nil {
+		slog.Error("failed to search bug history corpus", "error", bugErr, "ticket_id", ticket.ID)
+	}
+
+	// Build merged suggestion
+	var notes []string
+	notes = append(notes, "## Suggested Resolution (Auto-generated)")
+
+	hasResults := false
+
+	if ticketResult != nil && len(ticketResult.Chunks) > 0 {
+		hasResults = true
+		notes = append(notes, fmt.Sprintf("Based on %d similar past tickets:", len(ticketResult.Chunks)))
+		for i, chunk := range ticketResult.Chunks {
+			score := 0.0
+			if i < len(ticketResult.Scores) {
+				score = ticketResult.Scores[i] * 100
+			}
+			content := chunk.Content
+			if len(content) > 800 {
+				content = content[:800] + "..."
+			}
+			notes = append(notes, fmt.Sprintf("### %s (%.0f%% match)\n%s", chunk.Title, score, content))
+		}
+	}
+
+	if bugResult != nil && len(bugResult.Chunks) > 0 {
+		hasResults = true
+		if len(notes) > 1 {
+			notes = append(notes, "")
+		}
+		notes = append(notes, fmt.Sprintf("## Relevant Bug History (%d matches):", len(bugResult.Chunks)))
+		for i, chunk := range bugResult.Chunks {
+			score := 0.0
+			if i < len(bugResult.Scores) {
+				score = bugResult.Scores[i] * 100
+			}
+			content := chunk.Content
+			if len(content) > 600 {
+				content = content[:600] + "..."
+			}
+			notes = append(notes, fmt.Sprintf("### %s (%.0f%% match)\n%s", chunk.Title, score, content))
+		}
+	}
+
+	if !hasResults {
+		slog.Info("no similar tickets or bug history found for inference", "ticket_id", ticket.ID)
+		return
+	}
+
+	suggestedNotes := strings.Join(notes, "\n")
+
+	// Update ticket's internal_notes
+	update := &store.UpdateTicket{
+		ID:            ticket.ID,
+		InternalNotes: &suggestedNotes,
+	}
+	_, err := s.store.UpdateTicket(ctx, update)
+	if err != nil {
+		slog.Error("failed to update ticket with inferred resolution", "error", err, "ticket_id", ticket.ID)
+		return
+	}
+
+	totalMatches := 0
+	if ticketResult != nil {
+		totalMatches += len(ticketResult.Chunks)
+	}
+	if bugResult != nil {
+		totalMatches += len(bugResult.Chunks)
+	}
+	slog.Info("inferred resolution for new ticket", "ticket_id", ticket.ID, "similar_tickets", len(ticketResult.Chunks), "bug_history", len(bugResult.Chunks), "total", totalMatches)
+}

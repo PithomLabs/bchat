@@ -22,9 +22,10 @@ func (d *DB) CreateTicket(ctx context.Context, create *store.Ticket) (*store.Tic
 			updated_ts,
 			type,
 			tags,
-			tenant_id
+			tenant_id,
+			internal_notes
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING id
 	`
 	tagsBytes, err := json.Marshal(create.Tags)
@@ -45,6 +46,7 @@ func (d *DB) CreateTicket(ctx context.Context, create *store.Ticket) (*store.Tic
 		create.Type,
 		string(tagsBytes),
 		create.TenantID,
+		create.InternalNotes,
 	).Scan(&create.ID); err != nil {
 		return nil, err
 	}
@@ -54,12 +56,6 @@ func (d *DB) CreateTicket(ctx context.Context, create *store.Ticket) (*store.Tic
 
 func (d *DB) ListTickets(ctx context.Context, find *store.FindTicket) ([]*store.Ticket, error) {
 	where, args := []string{"1=1"}, []interface{}{}
-	if find.ID != nil {
-		where = append(where, "id = $1") // This logic is too simple for multiple args in postgres, need manual placeholder counting
-	}
-	// Fixing placeholder logic for Postgres
-	where = []string{"1=1"}
-	args = []interface{}{}
 	argCounter := 1
 
 	if find.ID != nil {
@@ -106,7 +102,8 @@ func (d *DB) ListTickets(ctx context.Context, find *store.FindTicket) ([]*store.
 			updated_ts,
 			type,
 			tags,
-			tenant_id
+			tenant_id,
+			internal_notes
 		FROM tickets
 		WHERE %s
 		ORDER BY created_ts DESC
@@ -135,6 +132,7 @@ func (d *DB) ListTickets(ctx context.Context, find *store.FindTicket) ([]*store.
 			&ticket.Type,
 			&tagsStr,
 			&ticket.TenantID,
+			&ticket.InternalNotes,
 		); err != nil {
 			return nil, err
 		}
@@ -210,13 +208,18 @@ func (d *DB) UpdateTicket(ctx context.Context, update *store.UpdateTicket) (*sto
 		args = append(args, string(tagsBytes))
 		argCounter++
 	}
+	if update.InternalNotes != nil {
+		set = append(set, fmt.Sprintf("internal_notes = $%d", argCounter))
+		args = append(args, *update.InternalNotes)
+		argCounter++
+	}
 
 	args = append(args, update.ID)
 	stmt := fmt.Sprintf(`
 		UPDATE tickets
 		SET %s
 		WHERE id = $%d
-		RETURNING id, title, description, status, priority, creator_id, assignee_id, created_ts, updated_ts, type, tags, tenant_id
+		RETURNING id, title, description, status, priority, creator_id, assignee_id, created_ts, updated_ts, type, tags, tenant_id, internal_notes
 	`, strings.Join(set, ", "), argCounter)
 
 	var ticket store.Ticket
@@ -234,6 +237,7 @@ func (d *DB) UpdateTicket(ctx context.Context, update *store.UpdateTicket) (*sto
 		&ticket.Type,
 		&tagsStr,
 		&ticket.TenantID,
+		&ticket.InternalNotes,
 	); err != nil {
 		return nil, err
 	}

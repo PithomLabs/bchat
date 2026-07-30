@@ -33,7 +33,8 @@ type Ticket struct {
 	UpdatedTs   int64
 	Type        string
 	Tags        []string
-	TenantID    *int32
+	TenantID      *int32
+	InternalNotes string
 }
 
 type FindTicket struct {
@@ -55,7 +56,8 @@ type UpdateTicket struct {
 	AssigneeID  *int32
 	UpdatedTs   *int64
 	Type        *string
-	Tags        []string
+	Tags          []string
+	InternalNotes *string
 }
 
 type DeleteTicket struct {

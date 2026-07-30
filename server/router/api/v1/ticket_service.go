@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -8,21 +9,23 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/usememos/memos/server/router/api/v1/agent"
 	"github.com/usememos/memos/store"
 )
 
 type Ticket struct {
-	ID          int32    `json:"id"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	Status      string   `json:"status"`
-	Priority    string   `json:"priority"`
-	CreatorID   int32    `json:"creatorId"`
-	AssigneeID  *int32   `json:"assigneeId"`
-	CreatedTs   int64    `json:"createdTs"`
-	UpdatedTs   int64    `json:"updatedTs"`
-	Type        string   `json:"type"`
-	Tags        []string `json:"tags"`
+	ID            int32    `json:"id"`
+	Title         string   `json:"title"`
+	Description   string   `json:"description"`
+	Status        string   `json:"status"`
+	Priority      string   `json:"priority"`
+	CreatorID     int32    `json:"creatorId"`
+	AssigneeID    *int32   `json:"assigneeId"`
+	CreatedTs     int64    `json:"createdTs"`
+	UpdatedTs     int64    `json:"updatedTs"`
+	Type          string   `json:"type"`
+	Tags          []string `json:"tags"`
+	InternalNotes string   `json:"internalNotes"`
 }
 
 type CreateTicketRequest struct {
@@ -36,13 +39,14 @@ type CreateTicketRequest struct {
 }
 
 type UpdateTicketRequest struct {
-	Title       *string  `json:"title"`
-	Description *string  `json:"description"`
-	Status      *string  `json:"status"`
-	Priority    *string  `json:"priority"`
-	Type        *string  `json:"type"`
-	Tags        []string `json:"tags"`
-	AssigneeID  *int32   `json:"assigneeId"`
+	Title         *string  `json:"title"`
+	Description   *string  `json:"description"`
+	Status        *string  `json:"status"`
+	Priority      *string  `json:"priority"`
+	Type          *string  `json:"type"`
+	Tags          []string `json:"tags"`
+	AssigneeID    *int32   `json:"assigneeId"`
+	InternalNotes *string  `json:"internalNotes"`
 }
 
 func (s *APIV1Service) RegisterTicketRoutes(g *echo.Group) {
@@ -157,6 +161,11 @@ func (s *APIV1Service) CreateTicket(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create ticket").SetInternal(err)
 	}
 
+	// Trigger resolution inference in background
+	if s.agentHandler != nil {
+		go s.agentHandler.GetService().InferResolutionForNewTicket(context.WithoutCancel(ctx), ticket)
+	}
+
 	slog.Info("CreateTicket success", "id", ticket.ID)
 
 	return c.JSON(http.StatusOK, convertTicketFromStore(ticket))
@@ -203,8 +212,19 @@ func (s *APIV1Service) ListTickets(c echo.Context) error {
 	}
 
 	result := make([]*Ticket, 0, len(list))
+	// Resolve internal notes permission once before loop
+	tenantID := getTenantFromContext(c)
+	var hasPerm bool
+	if tenantID != nil {
+		resolvedPerms, err := agent.ResolveEffectivePermissions(ctx, s.Store, *tenantID, userID)
+		if err == nil {
+			hasPerm = agent.HasPermission(resolvedPerms, agent.PermTicketInternalNotes)
+		}
+	}
 	for _, t := range list {
-		result = append(result, convertTicketFromStore(t))
+		resp := convertTicketFromStore(t)
+		filterInternalNotes(resp, t, user, hasPerm)
+		result = append(result, resp)
 	}
 
 	return c.JSON(http.StatusOK, result)
@@ -315,6 +335,20 @@ func (s *APIV1Service) UpdateTicket(c echo.Context) error {
 	if request.Tags != nil {
 		update.Tags = request.Tags
 	}
+	// Internal notes update requires ticket:internal_notes permission or superuser
+	if request.InternalNotes != nil {
+		tenantID := getTenantFromContext(c)
+		hasPerm := false
+		if tenantID != nil {
+			resolvedPerms, err := agent.ResolveEffectivePermissions(ctx, s.Store, *tenantID, userID)
+			if err == nil {
+				hasPerm = agent.HasPermission(resolvedPerms, agent.PermTicketInternalNotes)
+			}
+		}
+		if isSuperUser(user) || hasPerm {
+			update.InternalNotes = request.InternalNotes
+		}
+	}
 	now := time.Now().Unix()
 	update.UpdatedTs = &now
 
@@ -423,24 +457,47 @@ func (s *APIV1Service) GetTicket(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "You do not have permission to access this ticket")
 	}
 
+	// RBAC: filter internal notes based on permissions
+	tnID := getTenantFromContext(c)
+	var hasPerm bool
+	if tnID != nil {
+		resolvedPerms, err := agent.ResolveEffectivePermissions(ctx, s.Store, *tnID, userID)
+		if err == nil {
+			hasPerm = agent.HasPermission(resolvedPerms, agent.PermTicketInternalNotes)
+		}
+	}
+	resp := convertTicketFromStore(ticket)
+	filterInternalNotes(resp, ticket, user, hasPerm)
+
 	slog.Info("GetTicket success", "id", ticket.ID)
-	return c.JSON(http.StatusOK, convertTicketFromStore(ticket))
+	return c.JSON(http.StatusOK, resp)
 }
 
 func convertTicketFromStore(ticket *store.Ticket) *Ticket {
 	return &Ticket{
-		ID:          ticket.ID,
-		Title:       ticket.Title,
-		Description: ticket.Description,
-		Status:      string(ticket.Status),
-		Priority:    string(ticket.Priority),
-		CreatorID:   ticket.CreatorID,
-		AssigneeID:  ticket.AssigneeID,
-		CreatedTs:   ticket.CreatedTs,
-		UpdatedTs:   ticket.UpdatedTs,
-		Type:        ticket.Type,
-		Tags:        ticket.Tags,
+		ID:            ticket.ID,
+		Title:         ticket.Title,
+		Description:   ticket.Description,
+		Status:        string(ticket.Status),
+		Priority:      string(ticket.Priority),
+		CreatorID:     ticket.CreatorID,
+		AssigneeID:    ticket.AssigneeID,
+		CreatedTs:     ticket.CreatedTs,
+		UpdatedTs:     ticket.UpdatedTs,
+		Type:          ticket.Type,
+		Tags:          ticket.Tags,
+		InternalNotes: ticket.InternalNotes,
 	}
+}
+
+// filterInternalNotes hides internal notes for users without permission.
+// Visibility: superuser, ticket creator, assigned user, or ticket:internal_notes permission.
+func filterInternalNotes(resp *Ticket, ticket *store.Ticket, user *store.User, hasPerm bool) {
+	if isSuperUser(user) || ticket.CreatorID == user.ID ||
+		(ticket.AssigneeID != nil && *ticket.AssigneeID == user.ID) || hasPerm {
+		return
+	}
+	resp.InternalNotes = ""
 }
 
 // Helper to match the key used in common/auth.go checks

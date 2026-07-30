@@ -17,6 +17,7 @@ const (
 	PermFilesUpload  = "files:upload"
 	PermFilesRestore = "files:restore"
 	PermAPIConfig    = "api:config"
+	PermTicketInternalNotes = "ticket:internal_notes"
 	PermWildcard     = "*"
 )
 
@@ -25,6 +26,7 @@ var AllPermissions = []string{
 	PermTenantAdmin, PermTenantRead, PermTenantWrite,
 	PermChatTest, PermChatLogs,
 	PermFilesUpload, PermFilesRestore, PermAPIConfig,
+	PermTicketInternalNotes,
 }
 
 // SourceGlobalRole is the permission source for global role grants.
@@ -40,9 +42,9 @@ const SourceExplicit = "explicit"
 var PermissionPresets = map[string][]string{
 	"viewer":       {PermTenantRead},
 	"tester":       {PermTenantRead, PermChatTest},
-	"analyst":      {PermTenantRead, PermChatLogs},
-	"editor":       {PermTenantRead, PermTenantWrite, PermFilesUpload},
-	"tenant_admin": {PermTenantAdmin},
+	"analyst":      {PermTenantRead, PermChatLogs, PermTicketInternalNotes},
+	"editor":       {PermTenantRead, PermTenantWrite, PermFilesUpload, PermTicketInternalNotes},
+	"tenant_admin": {PermTenantAdmin, PermTicketInternalNotes},
 }
 
 // SystemRoleTemplates maps system template codes to their permission sets.
@@ -98,6 +100,11 @@ func containsResolvedPermission(permissions []ResolvedPermission, required strin
 		}
 	}
 	return false
+}
+
+// HasPermission checks if a resolved permission set contains the required permission.
+func HasPermission(permissions []ResolvedPermission, required string) bool {
+	return containsResolvedPermission(permissions, required)
 }
 
 // ValidatePermissions checks if all permissions are valid.

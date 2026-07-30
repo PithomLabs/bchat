@@ -99,7 +99,7 @@ func (s *Service) embedTenantTickets(ctx context.Context, vectorDB VectorDB, ten
 	// Create chunks for embedding
 	chunks := make([]DocumentChunk, len(toEmbed))
 	for i, ticket := range toEmbed {
-		content := fmt.Sprintf("%s\n%s", ticket.Title, ticket.Description)
+		content := fmt.Sprintf("%s\n%s\n%s", ticket.Title, ticket.Description, ticket.InternalNotes)
 		chunks[i] = DocumentChunk{
 			ID:          fmt.Sprintf("ticket_%d", ticket.ID),
 			TenantID:    tenantID,

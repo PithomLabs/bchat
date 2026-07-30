@@ -657,7 +657,8 @@ CREATE TABLE tickets (
     discovery_context TEXT,
     closed_reason TEXT,
     issue_type TEXT,
-    tenant_id INTEGER DEFAULT NULL
+    tenant_id INTEGER DEFAULT NULL,
+    internal_notes TEXT DEFAULT ''
 );
 
 CREATE INDEX idx_tickets_creator_id ON tickets(creator_id);

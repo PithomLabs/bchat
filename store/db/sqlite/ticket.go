@@ -26,9 +26,10 @@ func (d *DB) CreateTicket(ctx context.Context, create *store.Ticket) (*store.Tic
 			updated_ts,
 			type,
 			tags,
-			tenant_id
+			tenant_id,
+			internal_notes
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		RETURNING id
 	`
 	if err := d.db.QueryRowContext(
@@ -45,6 +46,7 @@ func (d *DB) CreateTicket(ctx context.Context, create *store.Ticket) (*store.Tic
 		create.Type,
 		string(tagsBytes),
 		create.TenantID,
+		create.InternalNotes,
 	).Scan(&create.ID); err != nil {
 		return nil, err
 	}
@@ -97,7 +99,8 @@ func (d *DB) ListTickets(ctx context.Context, find *store.FindTicket) ([]*store.
 			updated_ts,
 			type,
 			tags,
-			tenant_id
+			tenant_id,
+			internal_notes
 		FROM tickets
 		WHERE %s
 		ORDER BY created_ts DESC
@@ -126,6 +129,7 @@ func (d *DB) ListTickets(ctx context.Context, find *store.FindTicket) ([]*store.
 			&ticket.Type,
 			&tagsStr,
 			&ticket.TenantID,
+			&ticket.InternalNotes,
 		); err != nil {
 			return nil, err
 		}
@@ -192,13 +196,17 @@ func (d *DB) UpdateTicket(ctx context.Context, update *store.UpdateTicket) (*sto
 		set = append(set, "tags = ?")
 		args = append(args, string(tagsBytes))
 	}
+	if update.InternalNotes != nil {
+		set = append(set, "internal_notes = ?")
+		args = append(args, *update.InternalNotes)
+	}
 
 	args = append(args, update.ID)
 	stmt := fmt.Sprintf(`
 		UPDATE tickets
 		SET %s
 		WHERE id = ?
-		RETURNING id, title, description, status, priority, creator_id, assignee_id, created_ts, updated_ts, type, tags, tenant_id
+		RETURNING id, title, description, status, priority, creator_id, assignee_id, created_ts, updated_ts, type, tags, tenant_id, internal_notes
 	`, strings.Join(set, ", "))
 
 	var ticket store.Ticket
@@ -216,6 +224,7 @@ func (d *DB) UpdateTicket(ctx context.Context, update *store.UpdateTicket) (*sto
 		&ticket.Type,
 		&tagsStr,
 		&ticket.TenantID,
+		&ticket.InternalNotes,
 	); err != nil {
 		return nil, err
 	}

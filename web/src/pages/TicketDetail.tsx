@@ -17,6 +17,7 @@ interface Ticket {
     updatedTs: number;
     type: string;
     tags: string[];
+    internalNotes?: string;
 }
 
 const TicketDetail = () => {
@@ -87,6 +88,15 @@ const TicketDetail = () => {
                             {ticket.description}
                         </div>
                     </div>
+
+                    {ticket.internalNotes && (
+                        <div className="mt-6 w-full">
+                            <p className="text-sm text-gray-500 mb-2">Internal Notes</p>
+                            <div className="p-4 border rounded-md whitespace-pre-wrap dark:border-gray-700 bg-yellow-50 dark:bg-yellow-900/20">
+                                {ticket.internalNotes}
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
         </section>
