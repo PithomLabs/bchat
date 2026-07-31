@@ -2,6 +2,7 @@ package v1
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -26,6 +27,8 @@ type Ticket struct {
 	Type          string   `json:"type"`
 	Tags          []string `json:"tags"`
 	InternalNotes string   `json:"internalNotes"`
+	TenantID      *int32   `json:"tenantId"`
+	TenantName    string   `json:"tenantName"`
 }
 
 type CreateTicketRequest struct {
@@ -36,6 +39,7 @@ type CreateTicketRequest struct {
 	Type        string   `json:"type"`
 	Tags        []string `json:"tags"`
 	AssigneeID  *int32   `json:"assigneeId"`
+	TenantID    *int32   `json:"tenantId"`
 }
 
 type UpdateTicketRequest struct {
@@ -91,6 +95,17 @@ func (s *APIV1Service) CreateTicket(c echo.Context) error {
 		CreatedTs:   time.Now().Unix(),
 		UpdatedTs:   time.Now().Unix(),
 		TenantID:    getTenantFromContext(c),
+	}
+
+	if request.TenantID != nil {
+		if !isSuperUser(user) {
+			return echo.NewHTTPError(http.StatusBadRequest, "tenantId is only available to admins")
+		}
+		tenant, err := s.Store.GetAgentTenant(ctx, &store.FindAgentTenant{ID: request.TenantID})
+		if err != nil || tenant == nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid tenantId")
+		}
+		ticket.TenantID = request.TenantID
 	}
 
 	if ticket.Type == "" {
@@ -151,6 +166,18 @@ func (s *APIV1Service) CreateTicket(c echo.Context) error {
 				return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update existing ticket").SetInternal(err)
 			}
 			slog.Info("CreateTicket deduplication success", "id", ticket.ID)
+
+		// Index deduplicated ticket for RAG
+		if s.agentHandler != nil && ticket.TenantID != nil {
+			go func() {
+				ctx := context.WithoutCancel(ctx)
+				_, _, err := s.agentHandler.GetService().IndexTicketContent(ctx, *ticket.TenantID, ticket, nil, false)
+				if err != nil {
+					slog.Error("failed to index deduplicated ticket for RAG", "ticket_id", ticket.ID, "error", err)
+					}
+				}()
+			}
+
 			return c.JSON(http.StatusOK, convertTicketFromStore(ticket))
 		}
 	}
@@ -161,9 +188,28 @@ func (s *APIV1Service) CreateTicket(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create ticket").SetInternal(err)
 	}
 
-	// Trigger resolution inference in background
-	if s.agentHandler != nil {
-		go s.agentHandler.GetService().InferResolutionForNewTicket(context.WithoutCancel(ctx), ticket)
+	// Index ticket for RAG, then trigger inference (chained, not parallel)
+	if s.agentHandler != nil && ticket.TenantID != nil {
+		go func() {
+			ctx := context.WithoutCancel(ctx)
+			_, _, err := s.agentHandler.GetService().IndexTicketContent(ctx, *ticket.TenantID, ticket, nil, true)
+			if err != nil {
+				slog.Error("failed to index new ticket for RAG", "ticket_id", ticket.ID, "error", err)
+				return
+			}
+
+			// Fetch updated ticket to read populated internal_notes
+			updated, fetchErr := s.Store.GetTicket(ctx, &store.FindTicket{ID: &ticket.ID})
+			if fetchErr != nil || updated == nil || updated.InternalNotes == "" {
+				return
+			}
+
+			// Create system-authored comment with the inferred resolution
+			suggestion := updated.InternalNotes
+			if commentErr := s.createSystemResolutionComment(ctx, *ticket.TenantID, ticket, suggestion); commentErr != nil {
+				slog.Error("failed to create system resolution comment", "ticket_id", ticket.ID, "error", commentErr)
+			}
+		}()
 	}
 
 	slog.Info("CreateTicket success", "id", ticket.ID)
@@ -225,6 +271,24 @@ func (s *APIV1Service) ListTickets(c echo.Context) error {
 		resp := convertTicketFromStore(t)
 		filterInternalNotes(resp, t, user, hasPerm)
 		result = append(result, resp)
+	}
+
+	// Batch-resolve tenant names (N+1 is acceptable for admin-scale ticket lists)
+	tenantMap := make(map[int32]string)
+	for _, t := range result {
+		if t.TenantID != nil {
+			if _, ok := tenantMap[*t.TenantID]; !ok {
+				tenant, err := s.Store.GetAgentTenant(ctx, &store.FindAgentTenant{ID: t.TenantID})
+				if err == nil && tenant != nil {
+					tenantMap[*t.TenantID] = tenant.CompanyName
+				}
+			}
+		}
+	}
+	for _, t := range result {
+		if t.TenantID != nil {
+			t.TenantName = tenantMap[*t.TenantID]
+		}
 	}
 
 	return c.JSON(http.StatusOK, result)
@@ -357,6 +421,22 @@ func (s *APIV1Service) UpdateTicket(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update ticket").SetInternal(err)
 	}
 
+	// Re-index ticket content for RAG
+	if s.agentHandler != nil && ticket.TenantID != nil {
+		go func() {
+			ctx := context.WithoutCancel(ctx)
+			comments, err := s.getTicketComments(ctx, ticket)
+			if err != nil {
+				slog.Warn("failed to fetch comments for ticket re-index, indexing title+description only",
+					"ticket_id", ticket.ID, "error", err)
+			}
+			_, _, idxErr := s.agentHandler.GetService().IndexTicketContent(ctx, *ticket.TenantID, ticket, comments, false)
+			if idxErr != nil {
+				slog.Error("failed to re-index updated ticket for RAG", "ticket_id", ticket.ID, "error", idxErr)
+			}
+		}()
+	}
+
 	return c.JSON(http.StatusOK, convertTicketFromStore(ticket))
 }
 
@@ -487,6 +567,7 @@ func convertTicketFromStore(ticket *store.Ticket) *Ticket {
 		Type:          ticket.Type,
 		Tags:          ticket.Tags,
 		InternalNotes: ticket.InternalNotes,
+		TenantID:      ticket.TenantID,
 	}
 }
 
@@ -507,4 +588,81 @@ func getUserIDContextKey() string {
 
 func getTenantIDContextKey() string {
 	return "tenant-id"
+}
+
+// getTicketComments fetches all comment memos for a ticket.
+// Returns nil, nil if the ticket has no description link or no comments.
+func (s *APIV1Service) getTicketComments(ctx context.Context, ticket *store.Ticket) ([]*store.Memo, error) {
+	if !strings.HasPrefix(ticket.Description, "/m/") {
+		return nil, nil
+	}
+	memoUID := strings.TrimPrefix(ticket.Description, "/m/")
+	parentMemo, err := s.Store.GetMemo(ctx, &store.FindMemo{
+		UID:       &memoUID,
+		TenantID:  ticket.TenantID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get parent memo: %w", err)
+	}
+	if parentMemo == nil {
+		return nil, nil
+	}
+	commentType := store.MemoRelationComment
+	relations, err := s.Store.ListMemoRelations(ctx, &store.FindMemoRelation{
+		RelatedMemoID: &parentMemo.ID,
+		Type:          &commentType,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list memo relations: %w", err)
+	}
+	var comments []*store.Memo
+	for _, rel := range relations {
+		memo, err := s.Store.GetMemo(ctx, &store.FindMemo{ID: &rel.MemoID})
+		if err != nil {
+			slog.Warn("failed to load comment memo", "memo_id", rel.MemoID, "error", err)
+			continue
+		}
+		if memo != nil {
+			comments = append(comments, memo)
+		}
+	}
+	return comments, nil
+}
+
+func (s *APIV1Service) createSystemResolutionComment(ctx context.Context, tenantID int32, ticket *store.Ticket, suggestion string) error {
+	if !strings.HasPrefix(ticket.Description, "/m/") {
+		return nil
+	}
+	memoUID := strings.TrimPrefix(ticket.Description, "/m/")
+
+	parentMemo, err := s.Store.GetMemo(ctx, &store.FindMemo{
+		UID:      &memoUID,
+		TenantID: &tenantID,
+	})
+	if err != nil || parentMemo == nil {
+		return fmt.Errorf("parent memo not found: %w", err)
+	}
+
+	comment, err := s.Store.CreateMemo(ctx, &store.Memo{
+		RowStatus:  store.Normal,
+		CreatorID:  store.SystemBotID,
+		Content:    "## AI Suggestion\n\n" + suggestion,
+		Visibility: store.Public,
+		TenantID:   &tenantID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create system comment: %w", err)
+	}
+
+	_, err = s.Store.UpsertMemoRelation(ctx, &store.MemoRelation{
+		MemoID:        comment.ID,
+		RelatedMemoID: parentMemo.ID,
+		Type:          store.MemoRelationComment,
+		TenantID:      &tenantID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to link system comment: %w", err)
+	}
+
+	return nil
 }

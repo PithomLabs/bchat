@@ -438,6 +438,74 @@ func (s *APIV1Service) UpdateMemo(ctx context.Context, request *v1pb.UpdateMemoR
 		return nil, status.Errorf(codes.Internal, "failed to update memo")
 	}
 
+	// Re-index parent ticket if this memo is a comment and content changed
+	if s.agentHandler != nil && update.Content != nil {
+		if tenantID := GetTenantIDFromContext(ctx); tenantID != nil {
+			// Check if this memo is a comment on something.
+			// NOTE: memo.ID is used intentionally — it is immutable after creation.
+			commentType := store.MemoRelationComment
+			parentRelations, relErr := s.Store.ListMemoRelations(ctx, &store.FindMemoRelation{
+				MemoID: &memo.ID,
+				Type:   &commentType,
+			})
+			if relErr != nil {
+				slog.Debug("failed to load memo relations for comment-edit reindex, skipping",
+					"memo_id", memo.ID, "error", relErr)
+			}
+			if relErr == nil && len(parentRelations) > 0 {
+				if len(parentRelations) > 1 {
+					slog.Warn("memo has multiple COMMENT relations, indexing all parent tickets",
+						"memo_id", memo.ID, "count", len(parentRelations))
+				}
+				for _, rel := range parentRelations {
+					parentMemoID := rel.RelatedMemoID
+					parentMemo, err := s.Store.GetMemo(ctx, &store.FindMemo{
+						ID:       &parentMemoID,
+						TenantID: tenantID,
+					})
+					if err != nil {
+						slog.Debug("failed to load parent memo for comment-edit reindex, skipping",
+							"memo_id", parentMemoID, "error", err)
+						continue
+					}
+					if parentMemo == nil {
+						continue
+					}
+					descriptionLink := "/m/" + parentMemo.UID
+					tickets, listErr := s.Store.ListTickets(ctx, &store.FindTicket{
+						Description: &descriptionLink,
+						TenantID:    tenantID,
+					})
+					if listErr != nil {
+						slog.Debug("failed to find ticket for comment-edit reindex",
+							"description", descriptionLink, "error", listErr)
+						continue
+					}
+					if len(tickets) == 0 {
+						continue
+					}
+					ticketCopy := tickets[0]
+					if ticketCopy.TenantID == nil {
+						continue
+					}
+					go func(t store.Ticket) {
+						ctx := context.WithoutCancel(ctx)
+						comments, err := s.getTicketComments(ctx, &t)
+						if err != nil {
+							slog.Warn("failed to fetch comments for ticket re-index after comment edit",
+								"ticket_id", t.ID, "error", err)
+						}
+						_, _, idxErr := s.agentHandler.GetService().IndexTicketContent(ctx, *t.TenantID, &t, comments, false)
+						if idxErr != nil {
+							slog.Error("failed to re-index ticket after comment edit",
+								"ticket_id", t.ID, "error", idxErr)
+						}
+					}(*ticketCopy)
+				}
+			}
+		}
+	}
+
 	memo, err = s.Store.GetMemo(ctx, &store.FindMemo{
 		ID: &memo.ID,
 	})
@@ -592,6 +660,44 @@ func (s *APIV1Service) CreateMemoComment(ctx context.Context, request *v1pb.Crea
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create memo relation")
 	}
+
+	// Re-index parent ticket for RAG if this comment is on a ticket
+	if s.agentHandler != nil {
+		go func() {
+			ctx := context.WithoutCancel(ctx)
+			tid := GetTenantIDFromContext(ctx)
+			if tid == nil {
+				return
+			}
+			descriptionLink := "/m/" + relatedMemo.UID
+		tickets, listErr := s.Store.ListTickets(ctx, &store.FindTicket{
+			Description: &descriptionLink,
+			TenantID:    tid,
+		})
+		if listErr != nil {
+			slog.Warn("failed to find parent ticket for comment reindex",
+				"description", descriptionLink, "error", listErr)
+			return
+		}
+		if len(tickets) == 0 {
+			return
+		}
+			ticket := tickets[0]
+			if ticket.TenantID == nil {
+				return
+			}
+		comments, err := s.getTicketComments(ctx, ticket)
+		if err != nil {
+			slog.Warn("failed to fetch comments for ticket re-index after comment creation",
+				"ticket_id", ticket.ID, "error", err)
+		}
+		_, _, idxErr := s.agentHandler.GetService().IndexTicketContent(ctx, *ticket.TenantID, ticket, comments, false)
+		if idxErr != nil {
+			slog.Error("failed to re-index ticket after comment creation", "ticket_id", ticket.ID, "error", idxErr)
+		}
+		}()
+	}
+
 	creatorID, err := ExtractUserIDFromName(memoComment.Creator)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid memo creator")
@@ -1064,6 +1170,7 @@ func (s *APIV1Service) handleAutoTicketCreation(ctx context.Context, memo *store
 		CreatorID:   user.ID,
 		CreatedTs:   time.Now().Unix(),
 		UpdatedTs:   time.Now().Unix(),
+		TenantID:    memo.TenantID,
 	}
 
 	_, err := s.Store.CreateTicket(ctx, ticket)

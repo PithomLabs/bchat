@@ -370,6 +370,9 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	authGroup.POST("/:slug/learning/behaviors/:behaviorId/toggle", s.agentHandler.HandleToggleLearnedBehavior)
 	authGroup.DELETE("/:slug/learning", s.agentHandler.HandleClearLearning)
 
+	// Escalation route (requires auth + tenant binding)
+	authGroup.POST("/:slug/escalate", s.agentHandler.HandleEscalateTicket)
+
 	// User tenants route - restrictive CORS
 	userGroup := echoServer.Group("/api/v1/user")
 	userGroup.Use(s.AuthMiddleware)

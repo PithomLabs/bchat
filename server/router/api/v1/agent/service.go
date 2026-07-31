@@ -556,11 +556,11 @@ type reindexFileEntry struct {
 	version int32
 }
 
-// reindexFileVersion indexes a single (tenant, audience, file_type) source-file version:
+// ReindexFileVersion indexes a single (tenant, audience, file_type) source-file version:
 // it chunks, performs a one-time cutover purge of pre-versioning data, inserts the new
 // versioned chunks (append-only — never wiping other versions), updates the active-version
 // pointer, and enforces retention (keep the last 5 versions).
-func (s *Service) reindexFileVersion(ctx context.Context, tenantID int32, audience, fileType string, version int32, content string, maxChunkTokens int) (int, error) {
+func (s *Service) ReindexFileVersion(ctx context.Context, tenantID int32, audience, fileType string, version int32, content string, maxChunkTokens int) (int, error) {
 	if content == "" {
 		return 0, nil
 	}
@@ -662,14 +662,14 @@ func (s *Service) ReindexAllContent(ctx context.Context) error {
 		// Index each audience/file-type version (kb + policy).
 		for audience, fileMap := range audienceFiles {
 			if entry, ok := fileMap["kb"]; ok {
-				if count, err := s.reindexFileVersion(tenantCtx, tenant.ID, audience, "kb", entry.version, entry.content, maxChunkTokens); err != nil {
+				if count, err := s.ReindexFileVersion(tenantCtx, tenant.ID, audience, "kb", entry.version, entry.content, maxChunkTokens); err != nil {
 					slog.Warn("failed to reindex kb", "tenantID", tenant.ID, "audience", audience, "error", err)
 				} else {
 					totalChunks += count
 				}
 			}
 			if entry, ok := fileMap["policy"]; ok {
-				if count, err := s.reindexFileVersion(tenantCtx, tenant.ID, audience, "policy", entry.version, entry.content, maxChunkTokens); err != nil {
+				if count, err := s.ReindexFileVersion(tenantCtx, tenant.ID, audience, "policy", entry.version, entry.content, maxChunkTokens); err != nil {
 					slog.Warn("failed to reindex policy", "tenantID", tenant.ID, "audience", audience, "error", err)
 				} else {
 					totalChunks += count
@@ -765,7 +765,7 @@ func (s *Service) ReindexTenantContent(ctx context.Context, tenantID int32, audi
 	// Index each audience/file-type version (kb + policy).
 	for audience, fileMap := range audienceFiles {
 		if entry, ok := fileMap["kb"]; ok {
-			if count, err := s.reindexFileVersion(ctx, tenantID, audience, "kb", entry.version, entry.content, maxChunkTokens); err != nil {
+			if count, err := s.ReindexFileVersion(ctx, tenantID, audience, "kb", entry.version, entry.content, maxChunkTokens); err != nil {
 				slog.Error("failed to reindex kb", "tenantID", tenantID, "audience", audience, "error", err)
 				return totalChunks, fmt.Errorf("failed to reindex kb for audience %s: %w", audience, err)
 			} else {
@@ -773,7 +773,7 @@ func (s *Service) ReindexTenantContent(ctx context.Context, tenantID int32, audi
 			}
 		}
 		if entry, ok := fileMap["policy"]; ok {
-			if count, err := s.reindexFileVersion(ctx, tenantID, audience, "policy", entry.version, entry.content, maxChunkTokens); err != nil {
+			if count, err := s.ReindexFileVersion(ctx, tenantID, audience, "policy", entry.version, entry.content, maxChunkTokens); err != nil {
 				slog.Error("failed to reindex policy", "tenantID", tenantID, "audience", audience, "error", err)
 				return totalChunks, fmt.Errorf("failed to reindex policy for audience %s: %w", audience, err)
 			} else {
@@ -5522,13 +5522,8 @@ type EscalateTicketResponse struct {
 }
 
 // EscalateTicket handles ticket escalation via vector search.
-func (s *Service) EscalateTicket(ctx context.Context, tenantSlug string, req EscalateTicketRequest) (*EscalateTicketResponse, error) {
-	// Get tenant by slug
-	tenant, err := s.store.GetAgentTenant(ctx, &store.FindAgentTenant{Slug: &tenantSlug})
-	if err != nil || tenant == nil {
-		return nil, fmt.Errorf("tenant not found: %s", tenantSlug)
-	}
-
+// tenantID is passed from the handler (already resolved by TenantBindingMiddleware).
+func (s *Service) EscalateTicket(ctx context.Context, tenantID int32, req EscalateTicketRequest, creatorID int32) (*EscalateTicketResponse, error) {
 	// Create ticket in database
 	priority := store.TicketPriorityMedium
 	if req.Priority == "high" {
@@ -5543,13 +5538,26 @@ func (s *Service) EscalateTicket(ctx context.Context, tenantSlug string, req Esc
 		description = "/m/" + description
 	}
 
+	now := time.Now().Unix()
 	ticket := &store.Ticket{
 		Title:       req.Title,
 		Description: description,
 		Status:      store.TicketStatusOpen,
 		Priority:    priority,
-		TenantID:    &tenant.ID,
+		CreatorID:   creatorID,
+		CreatedTs:   now,
+		UpdatedTs:   now,
+		Type:        "agent_escalation",
+		TenantID:    &tenantID,
 		Tags:        req.Tags,
+	}
+
+	// Defensive guard: verify all required fields are set
+	if ticket.CreatorID == 0 || ticket.CreatedTs == 0 || ticket.UpdatedTs == 0 || ticket.Type == "" {
+		slog.Error("EscalateTicket: ticket construction incomplete",
+			"title", req.Title, "tenant_id", tenantID,
+			"creator_id", ticket.CreatorID, "created_ts", ticket.CreatedTs, "type", ticket.Type)
+		return nil, fmt.Errorf("failed to construct ticket: internal error")
 	}
 
 	createdTicket, err := s.store.CreateTicket(ctx, ticket)
@@ -5567,7 +5575,7 @@ func (s *Service) EscalateTicket(ctx context.Context, tenantSlug string, req Esc
 		query := fmt.Sprintf("%s %s", req.Title, req.Description)
 		result, err := vectorDB.Search(ctx, SearchQuery{
 			QueryText:    query,
-			TenantID:     tenant.ID,
+			TenantID:     tenantID,
 			ContentTypes: []string{"ticket"},
 			TopK:         5,
 			MinScore:     0.5,
@@ -5586,9 +5594,10 @@ func (s *Service) EscalateTicket(ctx context.Context, tenantSlug string, req Esc
 
 // InferResolutionForNewTicket searches for similar past tickets and bug history
 // corpus, then auto-populates internal_notes with a merged resolution suggestion.
-func (s *Service) InferResolutionForNewTicket(ctx context.Context, ticket *store.Ticket) {
+// Returns the generated notes string, or empty string if no results were found.
+func (s *Service) InferResolutionForNewTicket(ctx context.Context, ticket *store.Ticket) string {
 	if ticket.TenantID == nil {
-		return
+		return ""
 	}
 
 	s.vectorDBMu.RLock()
@@ -5596,7 +5605,7 @@ func (s *Service) InferResolutionForNewTicket(ctx context.Context, ticket *store
 	s.vectorDBMu.RUnlock()
 
 	if vectorDB == nil {
-		return
+		return ""
 	}
 
 	queryText := fmt.Sprintf("%s %s", ticket.Title, ticket.Description)
@@ -5669,7 +5678,7 @@ func (s *Service) InferResolutionForNewTicket(ctx context.Context, ticket *store
 
 	if !hasResults {
 		slog.Info("no similar tickets or bug history found for inference", "ticket_id", ticket.ID)
-		return
+		return ""
 	}
 
 	suggestedNotes := strings.Join(notes, "\n")
@@ -5682,7 +5691,7 @@ func (s *Service) InferResolutionForNewTicket(ctx context.Context, ticket *store
 	_, err := s.store.UpdateTicket(ctx, update)
 	if err != nil {
 		slog.Error("failed to update ticket with inferred resolution", "error", err, "ticket_id", ticket.ID)
-		return
+		return ""
 	}
 
 	totalMatches := 0
@@ -5693,4 +5702,87 @@ func (s *Service) InferResolutionForNewTicket(ctx context.Context, ticket *store
 		totalMatches += len(bugResult.Chunks)
 	}
 	slog.Info("inferred resolution for new ticket", "ticket_id", ticket.ID, "similar_tickets", len(ticketResult.Chunks), "bug_history", len(bugResult.Chunks), "total", totalMatches)
+	return suggestedNotes
+}
+
+// ticketIndexMu prevents TOCTOU races on content-hash dedup per ticket.
+// Key: fmt.Sprintf("%d:%d", tenantID, ticketID)
+// LIMITATION: Entries are never removed. Acceptable for prototype.
+// PRODUCTION TODO: Add background cleanup or move dedup into ReindexFileVersion.
+var ticketIndexMu sync.Map
+
+// IndexTicketContent indexes a ticket's content (title + description + comments)
+// into the vector DB for RAG retrieval. It performs content-hash dedup to avoid
+// creating new versions when content is unchanged. After successful indexing,
+// it optionally triggers InferResolutionForNewTicket to chain inference.
+// Returns (chunks, inferred, error) where inferred is true when the inference
+// produced notes.
+func (s *Service) IndexTicketContent(ctx context.Context, tenantID int32, ticket *store.Ticket, comments []*store.Memo, triggerInference bool) (chunks int, inferred bool, err error) {
+	// Per-ticket mutex to prevent TOCTOU race on content-hash dedup
+	muKey := fmt.Sprintf("%d:%d", tenantID, ticket.ID)
+	muVal, _ := ticketIndexMu.LoadOrStore(muKey, &sync.Mutex{})
+	mu := muVal.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Build content: title + description + comments
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "# %s\n\n%s", ticket.Title, ticket.Description)
+
+	if len(comments) > 0 {
+		fmt.Fprintf(&sb, "\n\n## Comments\n\n")
+		for _, c := range comments {
+			fmt.Fprintf(&sb, "---\n\n%s\n\n", c.Content)
+		}
+	}
+
+	content := sb.String()
+	contentHash := ContentHash(content)
+
+	// Check if latest version already has this content hash.
+	// UpsertAgentSourceFile always increments version — skip if unchanged.
+	existing, err := s.store.GetAgentSourceFile(ctx, &store.FindAgentSourceFile{
+		TenantID:   &tenantID,
+		FileType:   strPtr("ticket"),
+		LatestOnly: true,
+	})
+	if err != nil {
+		slog.Warn("failed to check existing ticket source file, will upsert new version",
+			"ticket_id", ticket.ID, "error", err)
+	}
+	if existing != nil && existing.ContentHash == contentHash {
+		// Content unchanged — reindex existing version, don't create new row
+		chunks, err = s.ReindexFileVersion(ctx, tenantID, "internal", "ticket", existing.Version, content, 0)
+		if err != nil {
+			return 0, false, err
+		}
+		if triggerInference {
+			inferred = s.InferResolutionForNewTicket(ctx, ticket) != ""
+		}
+		return chunks, inferred, nil
+	}
+
+	// Content changed — upsert creates new version row
+	sourceFile, err := s.store.UpsertAgentSourceFile(ctx, &store.AgentSourceFile{
+		TenantID:     tenantID,
+		AudienceType: "internal",
+		FileType:     "ticket",
+		Content:      content,
+		ContentHash:  contentHash,
+	})
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to upsert source file: %w", err)
+	}
+
+	chunks, err = s.ReindexFileVersion(ctx, tenantID, "internal", "ticket", sourceFile.Version, content, 0)
+	if err != nil {
+		return 0, false, err
+	}
+
+	// Chain: index first, then infer (eliminates race)
+	if triggerInference {
+		inferred = s.InferResolutionForNewTicket(ctx, ticket) != ""
+	}
+
+	return chunks, inferred, nil
 }

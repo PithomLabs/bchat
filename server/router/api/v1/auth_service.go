@@ -172,8 +172,31 @@ func (s *APIV1Service) SignIn(ctx context.Context, request *v1pb.SignInRequest) 
 }
 
 func (s *APIV1Service) doSignIn(ctx context.Context, user *store.User, tenantID *int32, expireTime time.Time) error {
-	// External users MUST have a company association to log in.
-	if user.Role == store.RoleUser {
+	// Resolve tenant for all user roles. HOST/ADMIN get the same tenant-resolution
+	// behavior as USER: auto-select when exactly one association exists, prompt
+	// for selection when multiple exist. When no explicit association exists,
+	// fall back to the first tenant in the system.
+	if user.Role == store.RoleHost || user.Role == store.RoleAdmin {
+		perms, err := s.Store.ListUserTenantPermissions(ctx, &store.FindUserTenantPermission{UserID: &user.ID})
+		if err != nil {
+			return status.Errorf(codes.Internal, "failed to verify tenant association")
+		}
+		if len(perms) > 0 {
+			if tenantID == nil && len(perms) == 1 {
+				tenantID = &perms[0].TenantID
+			} else if tenantID == nil && len(perms) > 1 {
+				return status.Errorf(codes.FailedPrecondition, "multiple tenants found, use /auth/tenants endpoint")
+			}
+		} else {
+			allTenants, err := s.Store.ListAgentTenants(ctx, &store.FindAgentTenant{})
+			if err != nil {
+				return status.Errorf(codes.Internal, "failed to list tenants")
+			}
+			if len(allTenants) > 0 && tenantID == nil {
+				tenantID = &allTenants[0].ID
+			}
+		}
+	} else if user.Role == store.RoleUser {
 		perms, err := s.Store.ListUserTenantPermissions(ctx, &store.FindUserTenantPermission{UserID: &user.ID})
 		if err != nil {
 			return status.Errorf(codes.Internal, "failed to verify user company association")
@@ -181,7 +204,6 @@ func (s *APIV1Service) doSignIn(ctx context.Context, user *store.User, tenantID 
 		if len(perms) == 0 {
 			return status.Errorf(codes.PermissionDenied, "user is not associated with any company")
 		}
-		// Auto-select single tenant if not already specified
 		if tenantID == nil && len(perms) == 1 {
 			tenantID = &perms[0].TenantID
 		} else if tenantID == nil && len(perms) > 1 {
@@ -403,27 +425,42 @@ func (s *APIV1Service) HandleAuthTenants(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "password signin is not allowed")
 	}
 
-	// Get tenant permissions
-	perms, err := s.Store.ListUserTenantPermissions(c.Request().Context(), &store.FindUserTenantPermission{UserID: &user.ID})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get tenant permissions")
-	}
-	if len(perms) == 0 {
-		return echo.NewHTTPError(http.StatusForbidden, "user is not associated with any company")
-	}
-
-	// Build tenant list
-	tenants := make([]TenantInfo, 0, len(perms))
-	for _, perm := range perms {
-		tenant, err := s.Store.GetAgentTenant(c.Request().Context(), &store.FindAgentTenant{ID: &perm.TenantID})
-		if err != nil || tenant == nil {
-			continue
+	// Super users (HOST or unscoped ADMIN) see all tenants.
+	var tenants []TenantInfo
+	if isSuperUser(user) {
+		allTenants, err := s.Store.ListAgentTenants(c.Request().Context(), &store.FindAgentTenant{})
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to list tenants")
 		}
-		tenants = append(tenants, TenantInfo{
-			ID:   tenant.ID,
-			Name: tenant.CompanyName,
-			Slug: tenant.Slug,
-		})
+		tenants = make([]TenantInfo, 0, len(allTenants))
+		for _, t := range allTenants {
+			tenants = append(tenants, TenantInfo{
+				ID:   t.ID,
+				Name: t.CompanyName,
+				Slug: t.Slug,
+			})
+		}
+	} else {
+		// Regular users and scoped admins: query permission rows
+		perms, err := s.Store.ListUserTenantPermissions(c.Request().Context(), &store.FindUserTenantPermission{UserID: &user.ID})
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get tenant permissions")
+		}
+		if len(perms) == 0 {
+			return echo.NewHTTPError(http.StatusForbidden, "user is not associated with any company")
+		}
+		tenants = make([]TenantInfo, 0, len(perms))
+		for _, perm := range perms {
+			tenant, err := s.Store.GetAgentTenant(c.Request().Context(), &store.FindAgentTenant{ID: &perm.TenantID})
+			if err != nil || tenant == nil {
+				continue
+			}
+			tenants = append(tenants, TenantInfo{
+				ID:   tenant.ID,
+				Name: tenant.CompanyName,
+				Slug: tenant.Slug,
+			})
+		}
 	}
 
 	// Generate selection token (random string)
@@ -490,12 +527,15 @@ func (s *APIV1Service) HandleSelectTenant(c echo.Context) error {
 	}
 
 	// Verify user has access to the target tenant
-	perm, err := s.Store.GetUserTenantPermission(ctx, &store.FindUserTenantPermission{
-		UserID:   &matchedUser.ID,
-		TenantID: &req.TenantID,
-	})
-	if err != nil || perm == nil {
-		return echo.NewHTTPError(http.StatusForbidden, "user does not have access to this tenant")
+	// Super users (HOST, unscoped ADMIN) have implicit access to all tenants
+	if matchedUser != nil && !isSuperUser(matchedUser) {
+		perm, err := s.Store.GetUserTenantPermission(ctx, &store.FindUserTenantPermission{
+			UserID:   &matchedUser.ID,
+			TenantID: &req.TenantID,
+		})
+		if err != nil || perm == nil {
+			return echo.NewHTTPError(http.StatusForbidden, "user does not have access to this tenant")
+		}
 	}
 
 	// Delete the selection token (single-use)

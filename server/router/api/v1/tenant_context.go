@@ -88,15 +88,20 @@ func ApplyTenantFilter(c echo.Context, s *store.Store, find *store.FindMemo) {
 }
 
 // ApplyTicketTenantFilter applies tenant filtering to a FindTicket query.
+// Super users (HOST, unscoped ADMIN) see all tickets across all tenants.
 // For scoped admins, derives TenantIDs from AllowedTenantIDs.
 func ApplyTicketTenantFilter(c echo.Context, s *store.Store, find *store.FindTicket) {
+	// Super users see all tickets — no tenant filter needed
+	user := getUserFromContext(c)
+	if user != nil && isSuperUser(user) {
+		return
+	}
 	tenantID := getTenantFromContext(c)
 	if tenantID != nil {
 		find.TenantID = tenantID
 		return
 	}
 	// H2 Part B: For scoped admins, derive filter from AllowedTenantIDs
-	user := getUserFromContext(c)
 	if user != nil {
 		tenantIDs := deriveTenantIDsForScopedAdmin(c.Request().Context(), s, user)
 		if tenantIDs != nil {

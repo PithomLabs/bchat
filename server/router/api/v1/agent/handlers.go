@@ -466,10 +466,21 @@ func (h *Handler) HandleChatExternal(c echo.Context) error {
 func (h *Handler) HandleEscalateTicket(c echo.Context) error {
 	ctx := c.Request().Context()
 
-	// Get tenant from context
+	// Extract authenticated user from JWT context
+	userID := h.getUserID(c)
+	if userID == 0 {
+		return echo.NewHTTPError(http.StatusUnauthorized, "Authentication required")
+	}
+
+	// Get tenant from context (set by TenantBindingMiddleware)
 	tenant, err := getTenantOrFail(ctx, h.store, c)
 	if err != nil {
 		return err
+	}
+
+	// Permission check: admin or chat:test permission required
+	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermChatTest) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin role or chat:test permission")
 	}
 
 	// Bind request
@@ -488,8 +499,13 @@ func (h *Handler) HandleEscalateTicket(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "description must be under 10000 characters")
 	}
 
-	// Call escalation service
-	resp, err := h.service.EscalateTicket(ctx, tenant.Slug, req)
+	// Validate priority if provided
+	if req.Priority != "" && req.Priority != "high" && req.Priority != "medium" && req.Priority != "low" {
+		return echo.NewHTTPError(http.StatusBadRequest, "priority must be high, medium, or low")
+	}
+
+	// Call escalation service with tenant ID (avoids redundant DB lookup)
+	resp, err := h.service.EscalateTicket(ctx, tenant.ID, req, userID)
 	if err != nil {
 		slog.Error("ticket escalation failed", "slug", tenant.Slug, "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Escalation service unavailable")

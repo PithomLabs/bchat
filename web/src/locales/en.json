@@ -140,6 +140,7 @@
     "tenant-slug-hint": "Unique identifier used in URLs (lowercase, hyphens allowed)",
     "company-name": "Company Name",
     "company-name-placeholder": "e.g., ACME Restoration Inc.",
+    "tenantLabel": "Company",
     "vertical": "Industry/Vertical",
     "vertical-placeholder": "e.g., restoration, healthcare, retail",
     "external-kb": "External Knowledge Base",

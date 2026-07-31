@@ -15,6 +15,7 @@ import MemoView from "@/components/MemoView";
 import MemoEditor from "@/components/MemoEditor";
 import UserAvatar from "@/components/UserAvatar";
 import { userStore } from "@/store/v2";
+import type { AgentTenant } from "@/store/v2/agentAdmin";
 
 interface Ticket {
     id: number;
@@ -28,6 +29,8 @@ interface Ticket {
     createdTs: number;
     updatedTs: number;
     tags?: string[];
+    tenantId?: number;
+    tenantName?: string;
 }
 
 interface User {
@@ -111,14 +114,23 @@ const Tickets = observer(() => {
     const [showCommentEditor, setShowCommentEditor] = useState(false);
     const [isCreatingDescription, setIsCreatingDescription] = useState(false);
 
+    // Tenant selector state (admin only)
+    const [availableTenants, setAvailableTenants] = useState<AgentTenant[]>([]);
+    const [selectedTenantId, setSelectedTenantId] = useState<number | null>(() => {
+        const stored = localStorage.getItem("tenant_id");
+        return stored ? Number(stored) : null;
+    });
+
     useEffect(() => {
         fetchTickets();
         if (isAdmin) {
             fetchUsers();
+            fetchTenants();
         } else {
             setUsers([]);
+            setAvailableTenants([]);
         }
-    }, [searchParams, isAdmin]);
+    }, [searchParams, isAdmin, showCreateDialog]);
 
     // Handle reactive refresh of comments when store changes
     useEffect(() => {
@@ -135,6 +147,17 @@ const Tickets = observer(() => {
             setUsers(data || []);
         } catch (error) {
             console.error("Error loading assignees:", error);
+        }
+    };
+
+    const fetchTenants = async () => {
+        try {
+            const response = await fetch("/api/v1/agent/tenants");
+            if (!response.ok) throw new Error("Failed to fetch tenants");
+            const data = await response.json();
+            setAvailableTenants(data.tenants || []);
+        } catch (error) {
+            console.error("Error loading tenants:", error);
         }
     };
 
@@ -213,7 +236,7 @@ const Tickets = observer(() => {
                 memoUrl = description;
             }
 
-            const payload = {
+            const payload: any = {
                 title,
                 description: memoUrl,
                 status,
@@ -221,6 +244,10 @@ const Tickets = observer(() => {
                 type,
                 assigneeId: assigneeId || undefined
             };
+
+            if (isAdmin && selectedTenantId) {
+                payload.tenantId = selectedTenantId;
+            }
 
             let response;
             if (editingTicket) {
@@ -322,6 +349,8 @@ const Tickets = observer(() => {
         setDescription("");
         setRelatedMemos([]);
         setIsCreatingDescription(false);
+        const stored = localStorage.getItem("tenant_id");
+        setSelectedTenantId(stored ? Number(stored) : null);
     };
 
     const openEdit = async (ticket: Ticket) => {
@@ -405,6 +434,7 @@ const Tickets = observer(() => {
                                     <th>Status</th>
                                     <th>Priority</th>
                                     {isAdmin && <th>Assignee</th>}
+                                    {isAdmin && <th>Tenant</th>}
                                     <th>Updated</th>
                                     <th style={{ width: "80px" }}></th>
                                 </tr>
@@ -453,6 +483,13 @@ const Tickets = observer(() => {
                                                 </span>
                                             </td>
                                         )}
+                                        {isAdmin && (
+                                            <td>
+                                                <span className="text-sm text-gray-600 dark:text-gray-400">
+                                                    {ticket.tenantName || `#${ticket.tenantId}`}
+                                                </span>
+                                            </td>
+                                        )}
                                         <td>{new Date(ticket.updatedTs * 1000).toLocaleDateString()}</td>
                                         <td>
                                             {isAdmin && (
@@ -465,7 +502,7 @@ const Tickets = observer(() => {
                                 ))}
                                 {tickets.length === 0 && (
                                     <tr>
-                                        <td colSpan={isAdmin ? 9 : 7} className="text-center py-8 text-gray-500">
+                                        <td colSpan={isAdmin ? 10 : 8} className="text-center py-8 text-gray-500">
                                             No tickets found.
                                         </td>
                                     </tr>
@@ -527,6 +564,21 @@ const Tickets = observer(() => {
                                             Escalate to Human
                                         </Button>
                                     )}
+                                </div>
+                            )}
+
+                            {isAdmin && availableTenants.length > 0 && (
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">Company</label>
+                                    <Select
+                                        value={selectedTenantId || null}
+                                        onChange={(_, val) => setSelectedTenantId(val)}
+                                        placeholder="Select tenant"
+                                    >
+                                        {availableTenants.map((t) => (
+                                            <Option key={t.id} value={t.id}>{t.companyName}</Option>
+                                        ))}
+                                    </Select>
                                 </div>
                             )}
 
@@ -747,12 +799,27 @@ const CommentItem = observer(({ memo }: { memo: Memo }) => {
     // If the memo is explicitly deleted from store, don't show it
     if (!memoStore.getMemoByName(memo.name)) return null;
 
+    const isSystemSuggestion = liveMemo.content.startsWith("## AI Suggestion");
+
     return (
-        <div className="border rounded-lg p-3 bg-gray-50 dark:bg-zinc-900/50">
+        <div className={cx(
+            "border rounded-lg p-3",
+            isSystemSuggestion
+                ? "bg-amber-50 border-amber-200 dark:bg-amber-900/20 dark:border-amber-900/30"
+                : "bg-gray-50 dark:bg-zinc-900/50"
+        )}>
             <div className="flex justify-between items-center mb-1">
                 <div className="flex items-center gap-2">
                     {creator && <UserAvatar avatarUrl={creator.avatarUrl as any} className="w-5 h-5" />}
-                    <span className="font-semibold text-sm">{creator ? (creator.nickname || creator.username) : liveMemo.creator}</span>
+                    {isSystemSuggestion && (
+                        <span className="font-semibold text-sm text-amber-800 dark:text-amber-300 flex items-center gap-1">
+                            <span>🤖</span>
+                            <span>AI Suggestion</span>
+                        </span>
+                    )}
+                    {!isSystemSuggestion && (
+                        <span className="font-semibold text-sm">{creator ? (creator.nickname || creator.username) : liveMemo.creator}</span>
+                    )}
                 </div>
                 <span className="text-xs text-gray-500">{liveMemo.createTime ? new Date(liveMemo.createTime).toLocaleString() : ""}</span>
             </div>
