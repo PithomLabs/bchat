@@ -404,3 +404,66 @@ func TestVectorDBConfig_HybridSearchFromEnv(t *testing.T) {
 		t.Errorf("Expected HybridTextWeight=0.4, got %f", config.HybridTextWeight)
 	}
 }
+
+func TestLanceVectorDB_Integration_SmallDatasetNoIndex(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "lancedb_test_")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	config := &VectorDBConfig{
+		StorageProvider: "local",
+		LocalPath:       tempDir,
+		EmbeddingConfig: &EmbeddingConfig{
+			Provider:  "mock",
+			Dimension: 384,
+		},
+		Enabled: true,
+	}
+
+	embedSvc, err := NewEmbeddingService(config.EmbeddingConfig)
+	if err != nil {
+		t.Fatalf("Failed to create embedding service: %v", err)
+	}
+
+	db, err := newLanceVectorDB(config, embedSvc)
+	if err != nil {
+		t.Fatalf("Failed to create LanceDB: %v", err)
+	}
+	defer db.Close()
+
+	// Insert a small dataset that is below the IVF-PQ training threshold.
+	chunks := []DocumentChunk{
+		{ID: "c1", TenantID: 1, AudienceType: "kb", ContentType: "service", Title: "Water Damage", Content: "Water damage restoration services", IsActive: true},
+		{ID: "c2", TenantID: 1, AudienceType: "kb", ContentType: "service", Title: "Fire Damage", Content: "Fire damage repair and cleanup", IsActive: true},
+		{ID: "c3", TenantID: 2, AudienceType: "kb", ContentType: "service", Title: "Other Tenant", Content: "Different tenant content", IsActive: true},
+	}
+
+	ctx := context.Background()
+	if err := db.Insert(ctx, chunks); err != nil {
+		t.Fatalf("Insert failed for small dataset: %v", err)
+	}
+
+	// Verify insertion succeeded and search still works without an index.
+	stats, err := db.Stats(ctx)
+	if err != nil {
+		t.Fatalf("Stats failed: %v", err)
+	}
+	if stats.TotalChunks != 3 {
+		t.Errorf("Expected 3 chunks, got %d", stats.TotalChunks)
+	}
+
+	result, err := db.Search(ctx, SearchQuery{
+		QueryText: "water damage restoration",
+		TenantID:  1,
+		TopK:      10,
+		MinScore:  0.0,
+	})
+	if err != nil {
+		t.Fatalf("Search failed for small dataset: %v", err)
+	}
+	if len(result.Chunks) == 0 {
+		t.Error("Expected search to return results even without vector index")
+	}
+}

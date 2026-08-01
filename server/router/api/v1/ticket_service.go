@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/lithammer/shortuuid/v4"
 	"github.com/usememos/memos/server/router/api/v1/agent"
 	"github.com/usememos/memos/store"
 )
@@ -590,6 +591,25 @@ func getTenantIDContextKey() string {
 	return "tenant-id"
 }
 
+// memoBelongsToTenantOrLegacy reports whether the memo is accessible from
+// the given tenant context. A memo is accessible if:
+//   - it has no tenant (legacy/unscoped), or
+//   - its tenant matches the requested tenant.
+//
+// Returns false for nil memo (caller must handle separately).
+func memoBelongsToTenantOrLegacy(memo *store.Memo, tenantID *int32) bool {
+	if memo == nil {
+		return false
+	}
+	if memo.TenantID == nil {
+		return true // legacy/unscoped memo — accessible to all tenants
+	}
+	if tenantID == nil {
+		return false // tenant-scoped memo requires explicit tenant context
+	}
+	return *memo.TenantID == *tenantID
+}
+
 // getTicketComments fetches all comment memos for a ticket.
 // Returns nil, nil if the ticket has no description link or no comments.
 func (s *APIV1Service) getTicketComments(ctx context.Context, ticket *store.Ticket) ([]*store.Memo, error) {
@@ -597,20 +617,26 @@ func (s *APIV1Service) getTicketComments(ctx context.Context, ticket *store.Tick
 		return nil, nil
 	}
 	memoUID := strings.TrimPrefix(ticket.Description, "/m/")
+	if memoUID == "" {
+		return nil, nil
+	}
+
+	// Resolve by UID only, then enforce ownership.
 	parentMemo, err := s.Store.GetMemo(ctx, &store.FindMemo{
-		UID:       &memoUID,
-		TenantID:  ticket.TenantID,
+		UID: &memoUID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get parent memo: %w", err)
 	}
-	if parentMemo == nil {
+	if parentMemo == nil || !memoBelongsToTenantOrLegacy(parentMemo, ticket.TenantID) {
 		return nil, nil
 	}
+
 	commentType := store.MemoRelationComment
 	relations, err := s.Store.ListMemoRelations(ctx, &store.FindMemoRelation{
 		RelatedMemoID: &parentMemo.ID,
 		Type:          &commentType,
+		TenantID:      ticket.TenantID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list memo relations: %w", err)
@@ -634,16 +660,23 @@ func (s *APIV1Service) createSystemResolutionComment(ctx context.Context, tenant
 		return nil
 	}
 	memoUID := strings.TrimPrefix(ticket.Description, "/m/")
+	if memoUID == "" {
+		return nil
+	}
 
+	// Resolve by UID only (globally unique), then enforce ownership in Go.
 	parentMemo, err := s.Store.GetMemo(ctx, &store.FindMemo{
-		UID:      &memoUID,
-		TenantID: &tenantID,
+		UID: &memoUID,
 	})
-	if err != nil || parentMemo == nil {
-		return fmt.Errorf("parent memo not found: %w", err)
+	if err != nil {
+		return fmt.Errorf("parent memo lookup failed: %w", err)
+	}
+	if parentMemo == nil || !memoBelongsToTenantOrLegacy(parentMemo, &tenantID) {
+		return fmt.Errorf("parent memo not found")
 	}
 
 	comment, err := s.Store.CreateMemo(ctx, &store.Memo{
+		UID:        shortuuid.New(),
 		RowStatus:  store.Normal,
 		CreatorID:  store.SystemBotID,
 		Content:    "## AI Suggestion\n\n" + suggestion,

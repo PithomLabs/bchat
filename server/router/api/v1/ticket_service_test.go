@@ -152,3 +152,284 @@ func TestTicketAPIRegularUserCannotGetAnotherUsersTicket(t *testing.T) {
 	rec := performTicketAPIRequest(e, http.MethodGet, path, "userA")
 	require.Equal(t, http.StatusForbidden, rec.Code)
 }
+
+func setupTicketServiceTest(t *testing.T) (*store.Store, *APIV1Service, int32) {
+	t.Helper()
+	ctx := context.Background()
+	db := teststore.NewTestingStore(ctx, t)
+	tenant, err := db.CreateAgentTenant(ctx, &store.AgentTenant{
+		Slug:        "test-tenant",
+		CompanyName: "Test Tenant",
+		IsActive:    true,
+	})
+	require.NoError(t, err)
+	return db, &APIV1Service{Store: db, Secret: "test-secret"}, tenant.ID
+}
+
+func TestCreateSystemResolutionComment_LegacyMemo(t *testing.T) {
+	db, s, tenantID := setupTicketServiceTest(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	user, err := db.CreateUser(ctx, &store.User{
+		Username:     "test-user",
+		Nickname:     "Test User",
+		Role:         store.RoleUser,
+		PasswordHash: "hash",
+	})
+	require.NoError(t, err)
+
+	legacyMemo, err := db.CreateMemo(ctx, &store.Memo{
+		UID:        "legacy-parent",
+		CreatorID:  user.ID,
+		Content:    "legacy content",
+		Visibility: store.Public,
+		RowStatus:  store.Normal,
+		TenantID:   nil,
+	})
+	require.NoError(t, err)
+
+	ticket, err := db.CreateTicket(ctx, &store.Ticket{
+		Title:       "Legacy Memo Ticket",
+		Description: "/m/" + legacyMemo.UID,
+		Status:      store.TicketStatusOpen,
+		Priority:    store.TicketPriorityMedium,
+		Type:        "SUPPORT",
+		CreatorID:   user.ID,
+		TenantID:    &tenantID,
+		CreatedTs:   time.Now().Unix(),
+		UpdatedTs:   time.Now().Unix(),
+	})
+	require.NoError(t, err)
+
+	err = s.createSystemResolutionComment(ctx, tenantID, ticket, "test suggestion")
+	require.NoError(t, err)
+}
+
+func TestCreateSystemResolutionComment_CrossTenantReject(t *testing.T) {
+	db, s, tenantID := setupTicketServiceTest(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	user, err := db.CreateUser(ctx, &store.User{
+		Username:     "test-user",
+		Nickname:     "Test User",
+		Role:         store.RoleUser,
+		PasswordHash: "hash",
+	})
+	require.NoError(t, err)
+
+	otherTenant := int32(tenantID + 1)
+	otherMemo, err := db.CreateMemo(ctx, &store.Memo{
+		UID:        "other-tenant-parent",
+		CreatorID:  user.ID,
+		Content:    "other tenant content",
+		Visibility: store.Public,
+		RowStatus:  store.Normal,
+		TenantID:   &otherTenant,
+	})
+	require.NoError(t, err)
+
+	ticket, err := db.CreateTicket(ctx, &store.Ticket{
+		Title:       "Cross Tenant Ticket",
+		Description: "/m/" + otherMemo.UID,
+		Status:      store.TicketStatusOpen,
+		Priority:    store.TicketPriorityMedium,
+		Type:        "SUPPORT",
+		CreatorID:   user.ID,
+		TenantID:    &tenantID,
+		CreatedTs:   time.Now().Unix(),
+		UpdatedTs:   time.Now().Unix(),
+	})
+	require.NoError(t, err)
+
+	err = s.createSystemResolutionComment(ctx, tenantID, ticket, "test suggestion")
+	require.Error(t, err)
+}
+
+func TestCreateSystemResolutionComment_EmptyUID(t *testing.T) {
+	db, s, tenantID := setupTicketServiceTest(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	user, err := db.CreateUser(ctx, &store.User{
+		Username:     "test-user",
+		Nickname:     "Test User",
+		Role:         store.RoleUser,
+		PasswordHash: "hash",
+	})
+	require.NoError(t, err)
+
+	ticket, err := db.CreateTicket(ctx, &store.Ticket{
+		Title:       "Empty UID Ticket",
+		Description: "/m/",
+		Status:      store.TicketStatusOpen,
+		Priority:    store.TicketPriorityMedium,
+		Type:        "SUPPORT",
+		CreatorID:   user.ID,
+		TenantID:    &tenantID,
+		CreatedTs:   time.Now().Unix(),
+		UpdatedTs:   time.Now().Unix(),
+	})
+	require.NoError(t, err)
+
+	err = s.createSystemResolutionComment(ctx, tenantID, ticket, "test suggestion")
+	require.NoError(t, err)
+}
+
+func TestGetTicketComments_LegacyParentMemo(t *testing.T) {
+	db, s, tenantID := setupTicketServiceTest(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	user, err := db.CreateUser(ctx, &store.User{
+		Username:     "test-user",
+		Nickname:     "Test User",
+		Role:         store.RoleUser,
+		PasswordHash: "hash",
+	})
+	require.NoError(t, err)
+
+	legacyMemo, err := db.CreateMemo(ctx, &store.Memo{
+		UID:        "legacy-parent-comments",
+		CreatorID:  user.ID,
+		Content:    "legacy parent",
+		Visibility: store.Public,
+		RowStatus:  store.Normal,
+		TenantID:   nil,
+	})
+	require.NoError(t, err)
+
+	commentMemo, err := db.CreateMemo(ctx, &store.Memo{
+		UID:        "legacy-comment",
+		CreatorID:  user.ID,
+		Content:    "legacy comment",
+		Visibility: store.Public,
+		RowStatus:  store.Normal,
+		TenantID:   &tenantID,
+	})
+	require.NoError(t, err)
+
+	_, err = db.UpsertMemoRelation(ctx, &store.MemoRelation{
+		MemoID:        commentMemo.ID,
+		RelatedMemoID: legacyMemo.ID,
+		Type:          store.MemoRelationComment,
+		TenantID:      &tenantID,
+	})
+	require.NoError(t, err)
+
+	ticket, err := db.CreateTicket(ctx, &store.Ticket{
+		Title:       "Legacy Parent Ticket",
+		Description: "/m/" + legacyMemo.UID,
+		Status:      store.TicketStatusOpen,
+		Priority:    store.TicketPriorityMedium,
+		Type:        "SUPPORT",
+		CreatorID:   user.ID,
+		TenantID:    &tenantID,
+		CreatedTs:   time.Now().Unix(),
+		UpdatedTs:   time.Now().Unix(),
+	})
+	require.NoError(t, err)
+
+	comments, err := s.getTicketComments(ctx, ticket)
+	require.NoError(t, err)
+	require.Len(t, comments, 1)
+	require.Equal(t, commentMemo.ID, comments[0].ID)
+}
+
+func TestGetTicketComments_RelationIsolation(t *testing.T) {
+	db, s, tenantID := setupTicketServiceTest(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	user, err := db.CreateUser(ctx, &store.User{
+		Username:     "test-user",
+		Nickname:     "Test User",
+		Role:         store.RoleUser,
+		PasswordHash: "hash",
+	})
+	require.NoError(t, err)
+
+	legacyMemo, err := db.CreateMemo(ctx, &store.Memo{
+		UID:        "legacy-parent-isolation",
+		CreatorID:  user.ID,
+		Content:    "legacy parent isolation",
+		Visibility: store.Public,
+		RowStatus:  store.Normal,
+		TenantID:   nil,
+	})
+	require.NoError(t, err)
+
+	commentTenant19, err := db.CreateMemo(ctx, &store.Memo{
+		UID:        "comment-19",
+		CreatorID:  user.ID,
+		Content:    "comment 19",
+		Visibility: store.Public,
+		RowStatus:  store.Normal,
+		TenantID:   &tenantID,
+	})
+	require.NoError(t, err)
+
+	otherTenantID := tenantID + 1
+	commentTenant20, err := db.CreateMemo(ctx, &store.Memo{
+		UID:        "comment-20",
+		CreatorID:  user.ID,
+		Content:    "comment 20",
+		Visibility: store.Public,
+		RowStatus:  store.Normal,
+		TenantID:   &otherTenantID,
+	})
+	require.NoError(t, err)
+
+	nilTenantComment, err := db.CreateMemo(ctx, &store.Memo{
+		UID:        "comment-nil",
+		CreatorID:  user.ID,
+		Content:    "comment nil",
+		Visibility: store.Public,
+		RowStatus:  store.Normal,
+		TenantID:   nil,
+	})
+	require.NoError(t, err)
+
+	_, err = db.UpsertMemoRelation(ctx, &store.MemoRelation{
+		MemoID:        commentTenant19.ID,
+		RelatedMemoID: legacyMemo.ID,
+		Type:          store.MemoRelationComment,
+		TenantID:      &tenantID,
+	})
+	require.NoError(t, err)
+
+	_, err = db.UpsertMemoRelation(ctx, &store.MemoRelation{
+		MemoID:        commentTenant20.ID,
+		RelatedMemoID: legacyMemo.ID,
+		Type:          store.MemoRelationComment,
+		TenantID:      &otherTenantID,
+	})
+	require.NoError(t, err)
+
+	_, err = db.UpsertMemoRelation(ctx, &store.MemoRelation{
+		MemoID:        nilTenantComment.ID,
+		RelatedMemoID: legacyMemo.ID,
+		Type:          store.MemoRelationComment,
+		TenantID:      nil,
+	})
+	require.NoError(t, err)
+
+	ticket, err := db.CreateTicket(ctx, &store.Ticket{
+		Title:       "Isolation Ticket",
+		Description: "/m/" + legacyMemo.UID,
+		Status:      store.TicketStatusOpen,
+		Priority:    store.TicketPriorityMedium,
+		Type:        "SUPPORT",
+		CreatorID:   user.ID,
+		TenantID:    &tenantID,
+		CreatedTs:   time.Now().Unix(),
+		UpdatedTs:   time.Now().Unix(),
+	})
+	require.NoError(t, err)
+
+	comments, err := s.getTicketComments(ctx, ticket)
+	require.NoError(t, err)
+	require.Len(t, comments, 1)
+	require.Equal(t, commentTenant19.ID, comments[0].ID)
+}

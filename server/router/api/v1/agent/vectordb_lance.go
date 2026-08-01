@@ -25,6 +25,11 @@ import (
 // This is kept for migration purposes only.
 const legacyTableName = "kb_documents"
 
+// minIVFPQIndexRows is the minimum number of rows required to train the PQ
+// codebook for an IVF-PQ vector index in LanceDB. Below this threshold, index
+// creation is skipped and search falls back to sequential scan.
+const minIVFPQIndexRows int64 = 256
+
 // getTableNameForDimension returns the table name for a given embedding dimension.
 // Format: kb_documents_<dimension> (e.g., kb_documents_1536, kb_documents_384)
 func getTableNameForDimension(dim int) string {
@@ -248,6 +253,20 @@ func (db *LanceVectorDB) createIndexes(ctx context.Context) error {
 // This must be called AFTER data has been inserted, as IVF-PQ requires training data.
 func (db *LanceVectorDB) ensureVectorIndex(ctx context.Context) error {
 	if db.hasVectorIndex {
+		return nil
+	}
+
+	// IVF-PQ requires at least 256 rows for PQ codebook training.
+	// Skip index creation for small datasets; search falls back to sequential scan.
+	// hasVectorIndex intentionally remains false so future inserts can retry once
+	// row count reaches the threshold.
+	count, err := db.table.Count(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get table count: %w", err)
+	}
+	if count < minIVFPQIndexRows {
+		slog.Debug("Skipping IVF-PQ index: not enough rows for training",
+			"table", db.tableName, "count", count, "required", minIVFPQIndexRows)
 		return nil
 	}
 

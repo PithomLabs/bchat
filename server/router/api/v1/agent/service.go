@@ -675,6 +675,13 @@ func (s *Service) ReindexAllContent(ctx context.Context) error {
 					totalChunks += count
 				}
 			}
+			if entry, ok := fileMap["bug"]; ok {
+				if count, err := s.ReindexFileVersion(tenantCtx, tenant.ID, audience, "bug", entry.version, entry.content, maxChunkTokens); err != nil {
+					slog.Warn("failed to reindex bug", "tenantID", tenant.ID, "audience", audience, "error", err)
+				} else {
+					totalChunks += count
+				}
+			}
 		}
 	}
 
@@ -776,6 +783,14 @@ func (s *Service) ReindexTenantContent(ctx context.Context, tenantID int32, audi
 			if count, err := s.ReindexFileVersion(ctx, tenantID, audience, "policy", entry.version, entry.content, maxChunkTokens); err != nil {
 				slog.Error("failed to reindex policy", "tenantID", tenantID, "audience", audience, "error", err)
 				return totalChunks, fmt.Errorf("failed to reindex policy for audience %s: %w", audience, err)
+			} else {
+				totalChunks += count
+			}
+		}
+		if entry, ok := fileMap["bug"]; ok {
+			if count, err := s.ReindexFileVersion(ctx, tenantID, audience, "bug", entry.version, entry.content, maxChunkTokens); err != nil {
+				slog.Error("failed to reindex bug", "tenantID", tenantID, "audience", audience, "error", err)
+				return totalChunks, fmt.Errorf("failed to reindex bug for audience %s: %w", audience, err)
 			} else {
 				totalChunks += count
 			}
@@ -1176,6 +1191,21 @@ func (s *Service) ReindexTenantContentWithResume(ctx context.Context, tenantID i
 				"chunk_count", len(policyChunks),
 			)
 			allChunks = append(allChunks, policyChunks...)
+		}
+		if entry, ok := fileMap["bug"]; ok && entry.content != "" {
+			slog.Info("reindex: chunking bug file",
+				"tenant_id", tenantID,
+				"audience", audience,
+				"content_length", len(entry.content),
+				"version", entry.version,
+			)
+			bugChunks := s.chunker.ChunkMarkdownContent(entry.content, tenantID, audience, "bug", entry.version, maxChunkTokens)
+			slog.Info("reindex: bug chunking produced chunks",
+				"tenant_id", tenantID,
+				"audience", audience,
+				"chunk_count", len(bugChunks),
+			)
+			allChunks = append(allChunks, bugChunks...)
 		}
 	}
 
@@ -5028,7 +5058,7 @@ func (s *Service) SearchVectorDB(ctx context.Context, tenantID int32, audienceTy
 		SourceVersion: version,
 	}
 	if fileType != "" {
-		queryObj.ContentTypes = []string{fileType}
+		queryObj.ContentTypes = []string{fileType, fileType + "_section"}
 	}
 
 	return s.vectorDB.Search(ctx, queryObj)
@@ -5576,7 +5606,7 @@ func (s *Service) EscalateTicket(ctx context.Context, tenantID int32, req Escala
 		result, err := vectorDB.Search(ctx, SearchQuery{
 			QueryText:    query,
 			TenantID:     tenantID,
-			ContentTypes: []string{"ticket"},
+			ContentTypes: []string{"ticket", "ticket_section"},
 			TopK:         5,
 			MinScore:     0.5,
 		})
@@ -5590,6 +5620,66 @@ func (s *Service) EscalateTicket(ctx context.Context, tenantID int32, req Escala
 		Status:       "created",
 		SimilarCount: similarCount,
 	}, nil
+}
+
+// memoUIDPattern matches raw /m/<uid> references in suggestion text.
+// UIDs follow the pattern: [a-zA-Z0-9]([a-zA-Z0-9-]{0,30}[a-zA-Z0-9])?
+var memoUIDPattern = regexp.MustCompile(`/m/([a-zA-Z0-9]([a-zA-Z0-9-]{0,30}[a-zA-Z0-9])?)`)
+
+// linkifyMemoRefs converts raw /m/<uid> text into markdown links so the
+// frontend renderer makes them clickable. It skips matches that are already
+// inside a markdown link [...](...) to avoid double-processing.
+func linkifyMemoRefs(text string) string {
+	matches := memoUIDPattern.FindAllStringIndex(text, -1)
+	if len(matches) == 0 {
+		return text
+	}
+
+	var result strings.Builder
+	lastIdx := 0
+
+	for _, match := range matches {
+		start, end := match[0], match[1]
+		matched := text[start:end]
+
+		if isInsideMarkdownLink(text, start, end) {
+			result.WriteString(text[lastIdx:end])
+			lastIdx = end
+			continue
+		}
+
+		uid := matched[len("/m/"):]
+		result.WriteString(text[lastIdx:start])
+		result.WriteString("[m/")
+		result.WriteString(uid)
+		result.WriteString("](/m/")
+		result.WriteString(uid)
+		result.WriteString(")")
+		lastIdx = end
+	}
+
+	result.WriteString(text[lastIdx:])
+	return result.String()
+}
+
+// isInsideMarkdownLink reports whether the match at [start, end) inside text
+// is already part of a markdown link [...](...). It looks for the nearest
+// preceding "](" and the next succeeding ")" with no intervening "](".
+func isInsideMarkdownLink(text string, start, end int) bool {
+	before := text[:start]
+	lastLinkOpen := strings.LastIndex(before, "](")
+	if lastLinkOpen < 0 {
+		return false
+	}
+
+	after := text[end:]
+	closeIdx := strings.Index(after, ")")
+	if closeIdx < 0 {
+		return false
+	}
+
+	between := text[lastLinkOpen+2 : start]
+	return !strings.Contains(between, "](")
 }
 
 // InferResolutionForNewTicket searches for similar past tickets and bug history
@@ -5615,7 +5705,7 @@ func (s *Service) InferResolutionForNewTicket(ctx context.Context, ticket *store
 	ticketResult, ticketErr := vectorDB.Search(ctx, SearchQuery{
 		QueryText:    queryText,
 		TenantID:     tenantID,
-		ContentTypes: []string{"ticket"},
+		ContentTypes: []string{"ticket", "ticket_section"},
 		TopK:         3,
 		MinScore:     0.7,
 	})
@@ -5682,6 +5772,7 @@ func (s *Service) InferResolutionForNewTicket(ctx context.Context, ticket *store
 	}
 
 	suggestedNotes := strings.Join(notes, "\n")
+	suggestedNotes = linkifyMemoRefs(suggestedNotes)
 
 	// Update ticket's internal_notes
 	update := &store.UpdateTicket{

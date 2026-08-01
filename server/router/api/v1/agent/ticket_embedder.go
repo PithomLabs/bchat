@@ -103,7 +103,7 @@ func (s *Service) embedTenantTickets(ctx context.Context, vectorDB VectorDB, ten
 		chunks[i] = DocumentChunk{
 			ID:          fmt.Sprintf("ticket_%d", ticket.ID),
 			TenantID:    tenantID,
-			ContentType: "ticket",
+			ContentType: "ticket_section",
 			Title:       ticket.Title,
 			Content:     content,
 			IsActive:    true,

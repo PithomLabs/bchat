@@ -327,6 +327,11 @@ func IsGarbageChunk(content string) bool {
 	return false
 }
 
+// ContentType convention: fileType + "_section".
+// Example: fileType="kb" → ContentType="kb_section"
+// All producers of DocumentChunk MUST follow this convention.
+// See also: ticket_embedder.go, observation_indexer.go
+//
 // ChunkMarkdownContent chunks raw markdown using heading-based splitting.
 // This is the main entry point for the new chunking strategy.
 // maxTokens controls chunk size - use GetMaxChunkTokens(provider) to get appropriate value.

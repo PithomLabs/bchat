@@ -4974,7 +4974,7 @@ func (h *Handler) HandleTestRAGSearch(c echo.Context) error {
 		SourceVersion:   version,
 	}
 	if req.FileType != "" {
-		searchQuery.ContentTypes = []string{req.FileType}
+		searchQuery.ContentTypes = []string{req.FileType, req.FileType + "_section"}
 	}
 
 	ctx = h.service.withTenantEmbeddingAPIKey(ctx, req.TenantID)
@@ -5104,7 +5104,7 @@ func (h *Handler) HandleTenantRAGSearch(c echo.Context) error {
 		SourceVersion: version,
 	}
 	if req.FileType != "" {
-		searchQuery.ContentTypes = []string{req.FileType}
+		searchQuery.ContentTypes = []string{req.FileType, req.FileType + "_section"}
 	}
 
 	ctx = h.service.withTenantEmbeddingAPIKey(ctx, tenant.ID)
