@@ -1,0 +1,47 @@
+[2m2026-08-02T02:19:17Z[0m runner[860312fe920408] [32msjc[0m [[34minfo[0m]Pulling container image registry.fly.io/bchat-crdb@sha256:719a1eb8e04a0b2c1553472b0950bed64a63ae09ebe114b0fd01a81b8e083ade
+[2m2026-08-02T02:19:24Z[0m runner[860312fe920408] [32msjc[0m [[34minfo[0m]Successfully prepared image registry.fly.io/bchat-crdb@sha256:719a1eb8e04a0b2c1553472b0950bed64a63ae09ebe114b0fd01a81b8e083ade (6.889681051s)
+[2m2026-08-02T02:19:25Z[0m runner[860312fe920408] [32msjc[0m [[34minfo[0m]Configuring firecracker
+[2m2026-08-02T02:19:25Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m]2026-08-02T02:19:25.927412393 [01KZ049EMAA555P2K1BH63YVEN:main] Running Firecracker v1.14.4
+[2m2026-08-02T02:19:25Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m]2026-08-02T02:19:25.927659976 [01KZ049EMAA555P2K1BH63YVEN:main] Listening on API socket ("/fc.sock").
+[2m2026-08-02T02:19:26Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m][32m INFO[0m Starting init (commit: ea887ee)...
+[2m2026-08-02T02:19:26Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m][32m INFO[0m Preparing to run: `./entrypoint.sh ./memos` as root
+[2m2026-08-02T02:19:26Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m][32m INFO[0m [fly api proxy] listening at /.fly/api
+[2m2026-08-02T02:19:27Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m]time="2026-08-02T02:19:27Z" level=warning msg="process reaping disabled, not pid 1"
+[2m2026-08-02T02:19:27Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m]time="2026-08-02T02:19:27Z" level=info msg="read crontab: /etc/bchat/crontab"
+[2m2026-08-02T02:19:27Z[0m runner[860312fe920408] [32msjc[0m [[34minfo[0m]Machine created and started in 9.259s
+[2m2026-08-02T02:19:27Z[0m health[860312fe920408] [32msjc[0m [[33mwarn[0m]Health check 'servicecheck-00-http-5230' on port 5230 is in a 'warning' state. Your app may not be responding properly. Services exposed on ports [80, 443] may have intermittent failures until the health check passes.
+[2m2026-08-02T02:19:27Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m]2026/08/02 02:19:27 INFO SSH listening listen_address=[fdaa:0:115f:a7b:4f4:d426:be6b:2]:22
+[2m2026-08-02T02:19:27Z[0m health[860312fe920408] [32msjc[0m [[31merror[0m]Health check 'servicecheck-00-http-5230' on port 5230 has failed. Your app is not responding properly. Services exposed on ports [80, 443] will have intermittent failures until the health check passes.
+[2m2026-08-02T02:19:29Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m]2026/08/02 02:19:29 INFO OpenRouter API key loaded prefix=sk-or-v1-0...
+[2m2026-08-02T02:19:32Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m]2026/08/02 02:19:32 WARN failed to find migration history in pre-migrate error="ERROR: relation \"migration_history\" does not exist (SQLSTATE 42P01)"
+[2m2026-08-02T02:20:00Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m]time="2026-08-02T02:20:00Z" level=info msg=starting iteration=0 job.command="curl -sf -X POST http://localhost:${PORT:-5230}/api/v1/system/trigger-cron -H \"X-Cron-Token: ${CRON_TOKEN}\"" job.position=0 job.schedule="*/5 * * * *"
+[2m2026-08-02T02:20:00Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m]time="2026-08-02T02:20:00Z" level=error msg="error running command: exit status 7" iteration=0 job.command="curl -sf -X POST http://localhost:${PORT:-5230}/api/v1/system/trigger-cron -H \"X-Cron-Token: ${CRON_TOKEN}\"" job.position=0 job.schedule="*/5 * * * *"
+[2m2026-08-02T02:25:00Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m]time="2026-08-02T02:25:00Z" level=info msg=starting iteration=1 job.command="curl -sf -X POST http://localhost:${PORT:-5230}/api/v1/system/trigger-cron -H \"X-Cron-Token: ${CRON_TOKEN}\"" job.position=0 job.schedule="*/5 * * * *"
+[2m2026-08-02T02:25:00Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m]time="2026-08-02T02:25:00Z" level=error msg="error running command: exit status 7" iteration=1 job.command="curl -sf -X POST http://localhost:${PORT:-5230}/api/v1/system/trigger-cron -H \"X-Cron-Token: ${CRON_TOKEN}\"" job.position=0 job.schedule="*/5 * * * *"
+[2m2026-08-02T02:25:03Z[0m proxy[860312fe920408] [32msjc[0m [[34minfo[0m]App bchat-crdb has excess capacity, autostopping machine 860312fe920408. 0 out of 1 machines left running (region=sjc, process group=app)
+[2m2026-08-02T02:25:03Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m][32m INFO[0m Sending signal SIGINT to main child process w/ PID 644
+[2m2026-08-02T02:25:04Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m][32m INFO[0m Main child exited with signal (with signal 'SIGINT', core dumped? false)
+[2m2026-08-02T02:25:04Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m][32m INFO[0m Starting clean up.
+[2m2026-08-02T02:25:04Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m][  338.286780] reboot: Restarting system
+[2m2026-08-02T02:25:16Z[0m proxy[860312fe920408] [32msjc[0m [[34minfo[0m]Starting machine
+[2m2026-08-02T02:25:16Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m]2026-08-02T02:25:16.662436714 [01KZ049EMAA555P2K1BH63YVEN:main] Running Firecracker v1.14.4
+[2m2026-08-02T02:25:16Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m]2026-08-02T02:25:16.662587456 [01KZ049EMAA555P2K1BH63YVEN:main] Listening on API socket ("/fc.sock").
+[2m2026-08-02T02:25:17Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m][32m INFO[0m Starting init (commit: ea887ee)...
+[2m2026-08-02T02:25:17Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m][32m INFO[0m Preparing to run: `./entrypoint.sh ./memos` as root
+[2m2026-08-02T02:25:17Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m][32m INFO[0m [fly api proxy] listening at /.fly/api
+[2m2026-08-02T02:25:17Z[0m runner[860312fe920408] [32msjc[0m [[34minfo[0m]Machine started in 1.159s
+[2m2026-08-02T02:25:17Z[0m proxy[860312fe920408] [32msjc[0m [[34minfo[0m]machine started in 1.215004825s
+[2m2026-08-02T02:25:17Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m]time="2026-08-02T02:25:17Z" level=warning msg="process reaping disabled, not pid 1"
+[2m2026-08-02T02:25:17Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m]time="2026-08-02T02:25:17Z" level=info msg="read crontab: /etc/bchat/crontab"
+[2m2026-08-02T02:25:17Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m]2026/08/02 02:25:17 INFO SSH listening listen_address=[fdaa:0:115f:a7b:4f4:d426:be6b:2]:22
+[2m2026-08-02T02:25:20Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m]2026/08/02 02:25:20 INFO OpenRouter API key loaded prefix=sk-or-v1-0...
+[2m2026-08-02T02:25:23Z[0m proxy[860312fe920408] [32msjc[0m [[34minfo[0m]waiting for machine to be reachable on 0.0.0.0:5230 (waited 5.376595279s so far)
+[2merror.message=[0m"failed to connect to machine: gave up after 15 attempts (in 8.38035877s)" [2m2026-08-02T02:25:26Z[0m proxy[860312fe920408] [32msjc[0m [[31merror[0m]
+[2merror.message=[0m"could not find a good candidate within 40 attempts at load balancing" [2m2026-08-02T02:25:37Z[0m proxy [32msin[0m [[31merror[0m][2mrequest.url=[0m"https://bchat-crdb.fly.dev/healthz" 
+[2m2026-08-02T02:30:00Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m]time="2026-08-02T02:30:00Z" level=info msg=starting iteration=0 job.command="curl -sf -X POST http://localhost:${PORT:-5230}/api/v1/system/trigger-cron -H \"X-Cron-Token: ${CRON_TOKEN}\"" job.position=0 job.schedule="*/5 * * * *"
+[2m2026-08-02T02:30:00Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m]time="2026-08-02T02:30:00Z" level=error msg="error running command: exit status 7" iteration=0 job.command="curl -sf -X POST http://localhost:${PORT:-5230}/api/v1/system/trigger-cron -H \"X-Cron-Token: ${CRON_TOKEN}\"" job.position=0 job.schedule="*/5 * * * *"
+[2m2026-08-02T02:31:24Z[0m proxy[860312fe920408] [32msjc[0m [[34minfo[0m]App bchat-crdb has excess capacity, autostopping machine 860312fe920408. 0 out of 1 machines left running (region=sjc, process group=app)
+[2m2026-08-02T02:31:24Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m][32m INFO[0m Sending signal SIGINT to main child process w/ PID 643
+[2m2026-08-02T02:31:25Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m][32m INFO[0m Main child exited with signal (with signal 'SIGINT', core dumped? false)
+[2m2026-08-02T02:31:25Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m][32m INFO[0m Starting clean up.
+[2m2026-08-02T02:31:25Z[0m app[860312fe920408] [32msjc[0m [[34minfo[0m][  368.348910] reboot: Restarting system

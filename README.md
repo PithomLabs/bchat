@@ -189,6 +189,30 @@ JWT (tenant_id) → Auth Middleware → Context → Handler → DB Query (WHERE 
 - **Echo handlers**: Extract tenant from echo context via `getTenantFromContext(c)`
 - **Superusers**: Bypass tenant checks for cross-tenant access
 
+### Deployment Profiles
+
+bchat is a Fly.io-native application framework where the **database is a deployment profile, not an architecture**. A profile bundles exactly four things: a driver flag, a migration directory, a DSN source, and a Fly config.
+
+```
+                  bchat
+                    │
+             store.Driver
+                    │
+        ┌───────────┼────────────┐
+        │           │            │
+     SQLite     PostgreSQL   Cockroach
+        │           │            │
+     Local      Fly+Neon     Fly+Cockroach
+        │           │            │
+       Taskfile operator API (intent, not infrastructure)
+```
+
+- **CockroachDB is the reference profile**: `--driver=cockroach` + `store/migration/cockroach/` + `COCKROACH_DSN` + `fly_cockroach.toml`. Nothing else. The shared `store/db/postgres/` package satisfies `store.Driver` for both PostgreSQL and CockroachDB.
+- Four divergence seams — the only places driver-specific logic may live: DDL dialect (migration files), transaction semantics (retry wrapper), connection protocol (none today), capability availability (vector provider). No conditional-on-driver logic inside individual SQL methods.
+- **Parallel Fly apps `bchat-pg` / `bchat-crdb` are a migration and demo strategy, not the intended permanent deployment topology.** They prove the same Taskfile drives both profiles (`task deploy:postgres` / `task deploy:cockroach`) so a tenant can move between them without code changes; a permanent deployment picks one profile.
+- Future evolution: `task deploy:postgres` / `task deploy:cockroach` become `task deploy PROFILE=postgres` / `deploy PROFILE=cockroach` (not implemented yet).
+- See [`docs/docs_flyio_cockroach_deploy.md`](docs/docs_flyio_cockroach_deploy.md) for the CockroachDB deploy + demo runbook.
+
 ---
 
 ## Configuration

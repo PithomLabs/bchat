@@ -238,7 +238,7 @@ tasks:
           echo "Loading environment from .env file..."
           set -a && . .env && set +a
         fi
-        RAG_PIPELINE_ENABLED=true VECTOR_DB_PROVIDER=cockroach TICKET_EMBEDDING_ENABLED=true ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
+        RAG_PIPELINE_ENABLED=true LANCEDB_STORAGE_PROVIDER=cockroach TICKET_EMBEDDING_ENABLED=true ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
 
   run:cockroach:seed:
     desc: Seed demo tickets for hackathon demo
@@ -251,7 +251,8 @@ tasks:
         go run cmd/seed/seed_demo_tickets.go
 
   crdb:check:
-    desc: Validate CockroachDB environment
+    desc: Validate CockroachDB environment (env + DSN + compat scanner + parity)
+    deps: [validate:parity]
     cmds:
       - |
         echo "=== CockroachDB Environment Check ==="
@@ -260,15 +261,115 @@ tasks:
           exit 1
         fi
         echo "COCKROACH_DSN: set"
-        if [ "${VECTOR_DB_PROVIDER:-}" != "cockroach" ]; then
-          echo "WARNING: VECTOR_DB_PROVIDER should be 'cockroach'"
+        if [ "${LANCEDB_STORAGE_PROVIDER:-}" != "cockroach" ]; then
+          echo "WARNING: LANCEDB_STORAGE_PROVIDER should be 'cockroach'"
         fi
-        echo "VECTOR_DB_PROVIDER: ${VECTOR_DB_PROVIDER:-not set}"
+        echo "LANCEDB_STORAGE_PROVIDER: ${LANCEDB_STORAGE_PROVIDER:-not set}"
         echo "RAG_PIPELINE_ENABLED: ${RAG_PIPELINE_ENABLED:-not set}"
         echo "TICKET_EMBEDDING_ENABLED: ${TICKET_EMBEDDING_ENABLED:-not set}"
         echo "EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-not set}"
         echo ""
+        echo "=== CockroachDB Migration Compatibility Scanner ==="
+        ./scripts/validate-cockroach-compat.sh
+        echo ""
         echo "All checks passed!"
+
+  # TODO(post-hackathon): profile-parameterized aliases — db:up PROFILE=cockroach,
+  # db:reset PROFILE=cockroach (scales to SQLite/TiDB/PlanetScale)
+  crdb:up:
+    desc: Start local CockroachDB compose cluster (docker compose)
+    cmds:
+      - docker compose -f scripts/docker-compose.cockroach.yml up -d
+
+  crdb:down:
+    desc: Stop local CockroachDB compose cluster
+    cmds:
+      - docker compose -f scripts/docker-compose.cockroach.yml down
+
+  crdb:reset:
+    desc: Wipe and restart local CockroachDB compose cluster (A1 state)
+    cmds:
+      - docker compose -f scripts/docker-compose.cockroach.yml down -v
+      - docker compose -f scripts/docker-compose.cockroach.yml up -d
+
+  crdb:migrate:
+    desc: Boot memos against CockroachDB (boot applies migrations)
+    cmds:
+      - |
+        if [ -f .env ]; then
+          echo "Loading environment from .env file..."
+          set -a && . .env && set +a
+        fi
+        COCKROACH_DSN="${COCKROACH_DSN}" ./build/memos --driver=cockroach --mode dev --data {{.ROOT_DIR}}/build/data
+
+  crdb:verify:
+    desc: Run production-facing P1-P6 verification against CockroachDB (bugs/057 §6.2)
+    cmds:
+      - |
+        echo "=== CockroachDB Verification (P1-P6) ==="
+        go test -tags "cockroach integration" ./store/ -run TestCockroachP0 -v
+        if [ -z "${COCKROACH_DSN:-}" ] || echo "$COCKROACH_DSN" | grep -qE "localhost|127\.0\.0\.1"; then
+          BCHAT_ALLOW_DB_RESET=1 go test -tags "cockroach integration" ./store/test/ -run "TestCockroachMigrate" -v
+        else
+          echo "SKIP: E2E migrate tests (resetCockroachDB) — COCKROACH_DSN is non-local (${COCKROACH_DSN:0:40}...)"
+        fi
+        echo ""
+        echo "--- §6.2 checks (env-gated on COCKROACH_DSN + cockroach binary) ---"
+        if [ -z "${COCKROACH_DSN:-}" ]; then
+          echo "COCKROACH_DSN not set — skipping §6.2 SQL checks"
+        elif ! command -v cockroach &>/dev/null; then
+          echo "cockroach binary not found — skipping §6.2 SQL checks"
+        else
+          run_sql() { cockroach sql --url "${COCKROACH_DSN}" -e "$1" 2>/dev/null; }
+          run_sql "SELECT 1;" >/dev/null || { echo "FAIL: SELECT 1"; exit 1; }
+          echo "OK: SELECT 1"
+          DB=$(run_sql "SELECT current_database();" 2>/dev/null | tail -1)
+          echo "OK: current_database() = $DB"
+          EXPECTED_DB=$(echo "$COCKROACH_DSN" | grep -oE '[^/]+$' | cut -d'?' -f1)
+          if [ "$DB" != "$EXPECTED_DB" ]; then
+            echo "FAIL: connected to $DB, expected $EXPECTED_DB"; exit 1
+          fi
+          echo "OK: database matches DSN"
+          V=$(run_sql "SELECT version();")
+          echo "$V" | grep -qi cockroach || { echo "FAIL: version() is not Cockroach"; exit 1; }
+          echo "OK: version() = Cockroach"
+          H=$(run_sql "SELECT count(*) FROM migration_history;")
+          echo "$H" | grep -q "1" || { echo "FAIL: migration_history count != 1"; exit 1; }
+          echo "OK: migration_history = 1 row (A1)"
+          C=$(run_sql "SHOW CREATE TABLE agent_tenants;")
+          echo "$C" | grep -q "nextval" || { echo "FAIL: agent_tenants has no nextval default"; exit 1; }
+          echo "OK: nextval() defaults present"
+          S=$(run_sql "SHOW CLUSTER SETTING feature.vector_index.enabled;")
+          echo "$S" | grep -q "true" || { echo "FAIL: feature.vector_index.enabled != true"; exit 1; }
+          echo "OK: vector index enabled"
+          I=$(run_sql "SELECT count(*) FROM information_schema.statistics WHERE table_name='agent_vectors';")
+          echo "$I" | grep -qv "^0" || { echo "FAIL: agent_vectors has no indexes"; exit 1; }
+          echo "OK: agent_vectors indexed"
+          if [ -n "${BCHAT_URL:-}" ]; then
+            curl -fsS -o /dev/null "$BCHAT_URL/healthz" 2>/dev/null \
+              || { echo "FAIL: /healthz not 200 at $BCHAT_URL"; exit 1; }
+            echo "OK: /healthz 200"
+          else
+            echo "WARN: BCHAT_URL not set — skipping /healthz check"
+          fi
+        fi
+        echo ""
+        echo "P1-P6 verification complete!"
+
+  crdb:init:
+    desc: Bootstrap a 2-region Basic cluster (console-first; see bugs/057/pre_code.md §5)
+    cmds:
+      - |
+        echo "Multi-region Basic clusters are created in the Cloud Console (https://cockroachlabs.cloud)."
+        echo "ccloud cluster create basic accepts exactly ONE region — create the cluster in the"
+        echo "console with 2+ regions, then configure operator access:"
+        echo "  1. Console: Clusters → Create Cluster → Basic → 2+ regions"
+        echo "  2. ccloud cluster networking allowlist create <name> 0.0.0.0/0 --sql --ui --name all"
+        echo "  3. Create a SQL user + password in the console"
+        echo "  4. Export COCKROACH_DSN and set feature.vector_index.enabled=true (v25.x)"
+        echo "     e.g. cockroach sql --url 'postgresql://user:pass@host:26257/defaultdb?sslmode=verify-full' \\"
+        echo "       -e \"SET CLUSTER SETTING feature.vector_index.enabled = true;\""
+        echo "  5. task crdb:migrate"
 
   crdb:db-check:
     desc: Validate CockroachDB database migrations
@@ -284,12 +385,8 @@ tasks:
         echo "Database check passed!"
 
   crdb:cluster:create:
-    desc: Create a new CockroachDB cluster
-    cmds:
-      - |
-        echo "Creating CockroachDB cluster..."
-        ccloud cluster create basic hackathon-demo aws-us-east-1 --cloud AWS --spend-limit 0
-        echo "Cluster created!"
+    desc: Bootstrap a 2-region Basic cluster (console-first; see bugs/057/pre_code.md §5)
+    deps: [crdb:init]
 
   crdb:cluster:delete:
     desc: Delete a CockroachDB cluster
@@ -345,10 +442,56 @@ tasks:
         echo "Running Docker image for CockroachDB..."
         docker run -p 8081:8081 \
           -e COCKROACH_DSN="${COCKROACH_DSN}" \
-          -e VECTOR_DB_PROVIDER=cockroach \
+          -e LANCEDB_STORAGE_PROVIDER=cockroach \
           -e RAG_PIPELINE_ENABLED=true \
           -e TICKET_EMBEDDING_ENABLED=true \
           -e EMBEDDING_PROVIDER=openrouter \
           -e OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" \
           bchat:cockroach
         echo "Docker container started!"
+
+  deploy:cockroach:
+    desc: Deploy bchat to Fly.io with CockroachDB (build -> checks -> fly deploy -> verify; bugs/057 §4.10)
+    cmds:
+      - bash scripts/crdb-deploy.sh {{.CLI_ARGS}}
+
+  deploy:postgres:
+    desc: Deploy bchat to Fly.io with Neon Postgres (proves the same Taskfile drives both profiles)
+    cmds:
+      - fly -a bchat-pg deploy -c fly_pg.toml
+
+  verify:production:
+    desc: App-first smoke against the deployed instance (create tenant -> KB -> reindex -> RAG search -> destroy; bugs/057 §6.3)
+    cmds:
+      - bash scripts/verify-production.sh {{.CLI_ARGS}}
+
+  rollback:postgres:
+    desc: Flip bchat-crdb back to Neon Postgres (demo capability; bugs/057 §6.4) — needs DATABASE_URL secret + Neon RAG envs
+    cmds:
+      - fly secrets set DATABASE_URL="$DATABASE_URL" --app bchat-crdb
+      - fly secrets unset COCKROACH_DSN --app bchat-crdb
+      - fly -a bchat-crdb deploy -c fly_pg-rollback.toml
+      - task verify:production
+
+  crdb:harden:
+    desc: Restrict CockroachDB Cloud allowlist to a Fly egress IP (~$3.60/mo; bugs/057 §6.5)
+    cmds:
+      - |
+        CLUSTER="${COCKROACH_CLUSTER:-hackathon-demo}"
+        echo "=== CockroachDB networking hardening ==="
+        IP=$(fly ips allocate-egress -a bchat-crdb 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+        if [ -z "$IP" ]; then
+          echo "ERROR: failed to allocate Fly egress IP"; exit 1
+        fi
+        echo "Egress IP: $IP"
+        ccloud cluster networking allowlist create "$CLUSTER" "$IP/32" --sql --ui --name fly-egress || exit 1
+        ccloud cluster networking allowlist delete "$CLUSTER" 0.0.0.0/0 --yes || echo "WARN: 0.0.0.0/0 removal failed"
+        echo "Verifying connectivity from this host..."
+        if ! ccloud cluster sql "$CLUSTER" -e "SELECT 1;" 2>/dev/null; then
+          echo "ERROR: connectivity broken — reverting"
+          ccloud cluster networking allowlist delete "$CLUSTER" "$IP/32" --yes
+          ccloud cluster networking allowlist create "$CLUSTER" 0.0.0.0/0 --sql --ui --name all
+          echo "Reverted to 0.0.0.0/0. Connectivity was broken after egress IP allocation."
+          exit 1
+        fi
+        echo "Hardening complete: only $IP/32 allowlisted"

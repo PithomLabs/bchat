@@ -35,6 +35,9 @@ file_env() {
 # Database connection string
 file_env "MEMOS_DSN"
 
+# CockroachDB connection string (cockroach driver; exclusive with MEMOS_DSN)
+file_env "COCKROACH_DSN"
+
 # API Keys
 file_env "OPENROUTER_API_KEY"
 

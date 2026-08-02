@@ -23,7 +23,7 @@
           "value": "prod"
         },
         {
-          "name": "VECTOR_DB_PROVIDER",
+          "name": "LANCEDB_STORAGE_PROVIDER",
           "value": "cockroach"
         },
         {

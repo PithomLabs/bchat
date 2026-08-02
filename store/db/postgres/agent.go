@@ -769,22 +769,20 @@ func (d *DB) CreateAgentMessages(ctx context.Context, messages []*store.AgentMes
 		return nil
 	}
 
-	tx, err := d.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	stmt := `
-		INSERT INTO agent_messages (session_id, tenant_id, source, source_id, role, content, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`
-	for _, m := range messages {
-		if _, err := tx.ExecContext(ctx, stmt, m.SessionID, m.TenantID, m.Source, m.SourceID, m.Role, m.Content, m.CreatedAt); err != nil {
-			return err
+	// retry-safe: append-only — inserts only ever add rows, so a 40001 retry
+	// of the transaction cannot double-write any existing row.
+	return d.execTx(ctx, func(tx *sql.Tx) error {
+		stmt := `
+			INSERT INTO agent_messages (session_id, tenant_id, source, source_id, role, content, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`
+		for _, m := range messages {
+			if _, err := tx.ExecContext(ctx, stmt, m.SessionID, m.TenantID, m.Source, m.SourceID, m.Role, m.Content, m.CreatedAt); err != nil {
+				return err
+			}
 		}
-	}
-	return tx.Commit()
+		return nil
+	})
 }
 
 func (d *DB) GetAssistantMessageBySourceID(ctx context.Context, sessionID, sourceID string) (*store.AgentMessageRecord, error) {

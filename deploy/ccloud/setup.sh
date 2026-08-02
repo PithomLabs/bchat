@@ -1,26 +1,31 @@
 #!/bin/bash
 # setup.sh - CockroachDB setup script for hackathon demo
-# Uses ccloud CLI to create and configure a CockroachDB cluster
+# NOTE: cluster creation is console-first (see bugs/057/pre_code.md §5):
+# multi-region Basic clusters must be created in the Cloud Console
+# (https://cockroachlabs.cloud) — `ccloud cluster create basic` accepts
+# exactly ONE region. This script handles user / connection URL / allowlist
+# for an existing cluster.
 
 set -euo pipefail
 
 CLUSTER_NAME="${CLUSTER_NAME:-hackathon-demo}"
-REGION="${REGION:-us-east-1}"
 USER_NAME="${USER_NAME:-hackathon-user}"
 
 echo "=== CockroachDB Setup Script ==="
 echo "Cluster: $CLUSTER_NAME"
-echo "Region: $REGION"
 echo "User: $USER_NAME"
 echo ""
 
-# Step 1: Create cluster
-echo "1. Creating CockroachDB cluster..."
-if ccloud cluster create basic "$CLUSTER_NAME" "$REGION" --cloud AWS --spend-limit 0; then
-    echo "   Cluster created successfully"
-else
-    echo "   Cluster creation failed or already exists"
+# Step 1: Verify cluster exists (console-created; 2-region Basic)
+echo "1. Checking cluster $CLUSTER_NAME..."
+if ! ccloud cluster list 2>/dev/null | grep -q "$CLUSTER_NAME"; then
+    echo "   Cluster '$CLUSTER_NAME' not found."
+    echo "   Create it in the Cloud Console first (Create cluster -> Basic ->"
+    echo "   AWS, 2 regions: us-east-1 primary + us-west-2)."
+    echo "   NOTE: ccloud cluster create basic supports only ONE region."
+    exit 1
 fi
+echo "   Cluster found"
 
 # Step 2: Create user
 echo "2. Creating database user..."
@@ -30,8 +35,17 @@ else
     echo "   User creation failed or already exists"
 fi
 
-# Step 3: Get connection string
-echo "3. Getting connection string..."
+# Step 3: Allowlist (Basic ships with 0.0.0.0/0; keep unless hardened via task crdb:harden)
+echo "3. Checking SQL allowlist..."
+if ! ccloud cluster networking allowlist list "$CLUSTER_NAME" 2>/dev/null | grep -q "0.0.0.0/0"; then
+    ccloud cluster networking allowlist create "$CLUSTER_NAME" 0.0.0.0/0 --sql --ui --name all || true
+    echo "   Allowlist 0.0.0.0/0 added"
+else
+    echo "   Allowlist 0.0.0.0/0 present"
+fi
+
+# Step 4: Get connection string
+echo "4. Getting connection string..."
 CONNECTION_URL=$(ccloud cluster sql --connection-url "$CLUSTER_NAME" 2>/dev/null || echo "")
 if [ -n "$CONNECTION_URL" ]; then
     echo "   Connection URL: $CONNECTION_URL"
@@ -42,12 +56,16 @@ if [ -n "$CONNECTION_URL" ]; then
     echo "Next steps:"
     echo "1. Set environment variables:"
     echo "   export COCKROACH_DSN=\"$CONNECTION_URL\""
-    echo "   export VECTOR_DB_PROVIDER=cockroach"
+    echo "   export LANCEDB_STORAGE_PROVIDER=cockroach"
     echo "   export RAG_PIPELINE_ENABLED=true"
     echo "   export EMBEDDING_PROVIDER=openrouter"
     echo "   export OPENROUTER_API_KEY=your-api-key"
     echo ""
-    echo "2. Run the application:"
+    echo "2. Enable vector index (v25.x clusters only; no-op on v26+):"
+    echo "   cockroach sql --url \"$CONNECTION_URL\" \\"
+    echo "     -e \"SET CLUSTER SETTING feature.vector_index.enabled = true;\""
+    echo ""
+    echo "3. Run the application:"
     echo "   task run:cockroach"
 else
     echo "   Failed to get connection URL"

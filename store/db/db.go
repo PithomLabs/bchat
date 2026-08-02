@@ -22,6 +22,8 @@ func NewDBDriver(profile *profile.Profile) (store.Driver, error) {
 		driver, err = mysql.NewDB(profile)
 	case "postgres":
 		driver, err = postgres.NewDB(profile)
+	case "cockroach":
+		driver, err = postgres.NewCockroachDB(profile)
 	default:
 		return nil, errors.New("unknown db driver")
 	}

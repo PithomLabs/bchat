@@ -109,56 +109,60 @@ func (d *DB) CreateBridgeHandoff(ctx context.Context, tenantID int32, sessionID 
 }
 
 func (d *DB) createBridgeHandoffAttempt(ctx context.Context, tenantID int32, sessionID string, now time.Time) (*store.BridgeHandoff, error) {
-	tx, err := d.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin bridge handoff transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	var externalSessionID int64
-	err = tx.QueryRowContext(ctx, `
-		UPDATE bridge_external_sessions
-		SET updated_at = updated_at
-		WHERE tenant_id = $1 AND session_id = $2
-		RETURNING id
-	`, tenantID, sessionID).Scan(&externalSessionID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, store.ErrBridgeExternalSessionNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("lock bridge external session: %w", err)
-	}
-
-	var activeCount int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM bridge_handoffs WHERE external_session_id = $1 AND active = true`, externalSessionID).Scan(&activeCount); err != nil {
-		return nil, fmt.Errorf("check active bridge handoff: %w", err)
-	}
-	if activeCount != 0 {
-		return nil, store.ErrBridgeHandoffConflict
-	}
-
+	// retry-safe: status-guarded — the active-handoff COUNT check and the
+	// external-session touch re-read inside the retried transaction, so a
+	// 40001 retry cannot double-create a handoff.
+	var handoffID string
 	var generation int
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(generation), 0) + 1 FROM bridge_handoffs WHERE external_session_id = $1`, externalSessionID).Scan(&generation); err != nil {
-		return nil, fmt.Errorf("allocate bridge handoff generation: %w", err)
-	}
-
-	handoffID := uuid.NewString()
-	var id int64
-	err = tx.QueryRowContext(ctx, `
-		INSERT INTO bridge_handoffs (
-			external_session_id, handoff_id, tenant_id, session_id, generation,
-			routing_mode, outcome, active, version, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, 'handoff_queued', NULL, true, 1, $6, $7)
-		RETURNING id
-	`, externalSessionID, handoffID, tenantID, sessionID, generation, now.Unix(), now.Unix()).Scan(&id)
-	if err != nil {
-		if isPostgresConstraint(err) {
-			return nil, store.ErrBridgeHandoffConflict
+	err := d.execTx(ctx, func(tx *sql.Tx) error {
+		var externalSessionID int64
+		err := tx.QueryRowContext(ctx, `
+			UPDATE bridge_external_sessions
+			SET updated_at = updated_at
+			WHERE tenant_id = $1 AND session_id = $2
+			RETURNING id
+		`, tenantID, sessionID).Scan(&externalSessionID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return store.ErrBridgeExternalSessionNotFound
 		}
-		return nil, fmt.Errorf("insert bridge handoff: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit bridge handoff: %w", err)
+		if err != nil {
+			return fmt.Errorf("lock bridge external session: %w", err)
+		}
+
+		var activeCount int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM bridge_handoffs WHERE external_session_id = $1 AND active = true`, externalSessionID).Scan(&activeCount); err != nil {
+			return fmt.Errorf("check active bridge handoff: %w", err)
+		}
+		if activeCount != 0 {
+			return store.ErrBridgeHandoffConflict
+		}
+
+		var gen int
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(generation), 0) + 1 FROM bridge_handoffs WHERE external_session_id = $1`, externalSessionID).Scan(&gen); err != nil {
+			return fmt.Errorf("allocate bridge handoff generation: %w", err)
+		}
+
+		hid := uuid.NewString()
+		var id int64
+		err = tx.QueryRowContext(ctx, `
+			INSERT INTO bridge_handoffs (
+				external_session_id, handoff_id, tenant_id, session_id, generation,
+				routing_mode, outcome, active, version, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, 'handoff_queued', NULL, true, 1, $6, $7)
+			RETURNING id
+		`, externalSessionID, hid, tenantID, sessionID, gen, now.Unix(), now.Unix()).Scan(&id)
+		if err != nil {
+			if isPostgresConstraint(err) {
+				return store.ErrBridgeHandoffConflict
+			}
+			return fmt.Errorf("insert bridge handoff: %w", err)
+		}
+		handoffID = hid
+		generation = gen
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return d.findBridgeHandoffByIdentity(ctx, tenantID, sessionID, generation, handoffID)
 }
@@ -347,109 +351,99 @@ func (d *DB) GetBridgeHandoff(ctx context.Context, tenantID int32, sessionID str
 }
 
 func (d *DB) CreateBridgeHandoffReplyIfActive(ctx context.Context, create *store.CreateBridgeHandoffReply) (*store.BridgeHandoffReply, error) {
-	conn, err := d.db.Conn(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("get connection: %w", err)
-	}
-	defer conn.Close()
+	// retry-safe: status-guarded — the active-handoff FOR UPDATE re-read inside
+	// the retried transaction gates the insert, so a 40001 retry cannot
+	// double-insert a reply; a constraint duplicate re-returns the existing row
+	// instead of failing.
+	var out *store.BridgeHandoffReply
+	err := d.execTx(ctx, func(tx *sql.Tx) error {
+		var sessionID string
+		var active bool
+		var routingMode string
+		var generation int64
 
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	var sessionID string
-	var active bool
-	var routingMode string
-	var generation int64
-
-	err = tx.QueryRowContext(ctx, `
-		SELECT session_id, active, routing_mode, generation
-		FROM bridge_handoffs
-		WHERE tenant_id = $1 AND handoff_id = $2
-		FOR UPDATE
-	`, create.TenantID, create.HandoffID).Scan(&sessionID, &active, &routingMode, &generation)
-	if errors.Is(err, sql.ErrNoRows) {
-		tx.Rollback()
-		return nil, store.ErrBridgeHandoffNotFound
-	}
-	if err != nil {
-		tx.Rollback()
-		return nil, fmt.Errorf("query handoff in transaction: %w", err)
-	}
-
-	if sessionID != create.SessionID {
-		tx.Rollback()
-		return nil, store.ErrBridgeHandoffConflict
-	}
-
-	if !active || routingMode != string(store.BridgeRoutingModeHumanActive) {
-		tx.Rollback()
-		return nil, store.ErrBridgeHandoffConflict
-	}
-
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO bridge_handoff_replies (
-			reply_id, tenant_id, session_id, handoff_id, generation,
-			client_message_id, text, delivery_status, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, 'not_delivered', $8)
-	`, create.ReplyID, create.TenantID, create.SessionID, create.HandoffID, generation,
-		create.ClientMessageID, create.Text, create.Now)
-
-	if err != nil {
-		if isPostgresConstraint(err) {
-			var existingReplyID string
-			var existingText string
-			var existingDeliveryStatus string
-			var existingCreatedAt int64
-			var existingGeneration int64
-
-			errQuery := tx.QueryRowContext(ctx, `
-				SELECT reply_id, text, delivery_status, created_at, generation
-				FROM bridge_handoff_replies
-				WHERE tenant_id = $1 AND session_id = $2 AND handoff_id = $3 AND client_message_id = $4
-			`, create.TenantID, create.SessionID, create.HandoffID, create.ClientMessageID).Scan(
-				&existingReplyID, &existingText, &existingDeliveryStatus, &existingCreatedAt, &existingGeneration,
-			)
-			if errQuery == nil {
-				if existingText == create.Text {
-					tx.Commit()
-					return &store.BridgeHandoffReply{
-						ReplyID:         existingReplyID,
-						TenantID:        create.TenantID,
-						SessionID:       create.SessionID,
-						HandoffID:       create.HandoffID,
-						Generation:      existingGeneration,
-						ClientMessageID: create.ClientMessageID,
-						Text:            existingText,
-						DeliveryStatus:  existingDeliveryStatus,
-						CreatedAt:       existingCreatedAt,
-					}, nil
-				}
-				tx.Rollback()
-				return nil, store.ErrBridgeHandoffReplyTextMismatch
-			}
+		err := tx.QueryRowContext(ctx, `
+			SELECT session_id, active, routing_mode, generation
+			FROM bridge_handoffs
+			WHERE tenant_id = $1 AND handoff_id = $2
+			FOR UPDATE
+		`, create.TenantID, create.HandoffID).Scan(&sessionID, &active, &routingMode, &generation)
+		if errors.Is(err, sql.ErrNoRows) {
+			return store.ErrBridgeHandoffNotFound
 		}
-		tx.Rollback()
-		return nil, fmt.Errorf("insert reply: %w", err)
-	}
+		if err != nil {
+			return fmt.Errorf("query handoff in transaction: %w", err)
+		}
 
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit reply: %w", err)
-	}
+		if sessionID != create.SessionID {
+			return store.ErrBridgeHandoffConflict
+		}
 
-	return &store.BridgeHandoffReply{
-		ReplyID:         create.ReplyID,
-		TenantID:        create.TenantID,
-		SessionID:       create.SessionID,
-		HandoffID:       create.HandoffID,
-		Generation:      generation,
-		ClientMessageID: create.ClientMessageID,
-		Text:            create.Text,
-		DeliveryStatus:  "not_delivered",
-		CreatedAt:       create.Now,
-	}, nil
+		if !active || routingMode != string(store.BridgeRoutingModeHumanActive) {
+			return store.ErrBridgeHandoffConflict
+		}
+
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO bridge_handoff_replies (
+				reply_id, tenant_id, session_id, handoff_id, generation,
+				client_message_id, text, delivery_status, created_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, 'not_delivered', $8)
+		`, create.ReplyID, create.TenantID, create.SessionID, create.HandoffID, generation,
+			create.ClientMessageID, create.Text, create.Now)
+
+		if err != nil {
+			if isPostgresConstraint(err) {
+				var existingReplyID string
+				var existingText string
+				var existingDeliveryStatus string
+				var existingCreatedAt int64
+				var existingGeneration int64
+
+				errQuery := tx.QueryRowContext(ctx, `
+					SELECT reply_id, text, delivery_status, created_at, generation
+					FROM bridge_handoff_replies
+					WHERE tenant_id = $1 AND session_id = $2 AND handoff_id = $3 AND client_message_id = $4
+				`, create.TenantID, create.SessionID, create.HandoffID, create.ClientMessageID).Scan(
+					&existingReplyID, &existingText, &existingDeliveryStatus, &existingCreatedAt, &existingGeneration,
+				)
+				if errQuery == nil {
+					if existingText == create.Text {
+						out = &store.BridgeHandoffReply{
+							ReplyID:         existingReplyID,
+							TenantID:        create.TenantID,
+							SessionID:       create.SessionID,
+							HandoffID:       create.HandoffID,
+							Generation:      existingGeneration,
+							ClientMessageID: create.ClientMessageID,
+							Text:            existingText,
+							DeliveryStatus:  existingDeliveryStatus,
+							CreatedAt:       existingCreatedAt,
+						}
+						return nil
+					}
+					return store.ErrBridgeHandoffReplyTextMismatch
+				}
+			}
+			return fmt.Errorf("insert reply: %w", err)
+		}
+
+		out = &store.BridgeHandoffReply{
+			ReplyID:         create.ReplyID,
+			TenantID:        create.TenantID,
+			SessionID:       create.SessionID,
+			HandoffID:       create.HandoffID,
+			Generation:      generation,
+			ClientMessageID: create.ClientMessageID,
+			Text:            create.Text,
+			DeliveryStatus:  "not_delivered",
+			CreatedAt:       create.Now,
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (d *DB) GetBridgeHandoffReplyByClientMessageID(ctx context.Context, tenantID int32, sessionID string, handoffID string, clientMessageID string) (*store.BridgeHandoffReply, error) {
@@ -491,202 +485,187 @@ func (d *DB) GetBridgeHandoffReplyByReplyID(ctx context.Context, tenantID int32,
 }
 
 func (d *DB) CreateBridgeHandoffReplyAndOutboxIfActive(ctx context.Context, create *store.CreateBridgeHandoffReply) (*store.BridgeHandoffReplyWithOutbox, error) {
-	conn, err := d.db.Conn(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("get connection: %w", err)
-	}
-	defer conn.Close()
+	// retry-safe: status-guarded — the active-handoff FOR UPDATE re-read inside
+	// the retried transaction gates the inserts, so a 40001 retry cannot
+	// double-insert a reply or outbox; constraint duplicates re-read the
+	// existing rows instead of failing.
+	var out *store.BridgeHandoffReplyWithOutbox
+	err := d.execTx(ctx, func(tx *sql.Tx) error {
+		var sessionID string
+		var active bool
+		var routingMode string
+		var generation int64
 
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	var sessionID string
-	var active bool
-	var routingMode string
-	var generation int64
-
-	err = tx.QueryRowContext(ctx, `
-		SELECT session_id, active, routing_mode, generation
-		FROM bridge_handoffs
-		WHERE tenant_id = $1 AND handoff_id = $2
-		FOR UPDATE
-	`, create.TenantID, create.HandoffID).Scan(&sessionID, &active, &routingMode, &generation)
-	if errors.Is(err, sql.ErrNoRows) {
-		tx.Rollback()
-		return nil, store.ErrBridgeHandoffNotFound
-	}
-	if err != nil {
-		tx.Rollback()
-		return nil, fmt.Errorf("query handoff in transaction: %w", err)
-	}
-
-	if sessionID != create.SessionID {
-		tx.Rollback()
-		return nil, store.ErrBridgeHandoffConflict
-	}
-
-	if !active || routingMode != string(store.BridgeRoutingModeHumanActive) {
-		tx.Rollback()
-		return nil, store.ErrBridgeHandoffConflict
-	}
-
-	var finalReply *store.BridgeHandoffReply
-	var finalOutbox *store.BridgeReplyOutbox
-
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO bridge_handoff_replies (
-			reply_id, tenant_id, session_id, handoff_id, generation,
-			client_message_id, text, delivery_status, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, 'not_delivered', $8)
-	`, create.ReplyID, create.TenantID, create.SessionID, create.HandoffID, generation,
-		create.ClientMessageID, create.Text, create.Now)
-
-	if err == nil {
-		outboxID := uuid.NewString()
-		_, err = tx.ExecContext(ctx, `
-			INSERT INTO bridge_reply_outbox (
-				outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at,
-				claim_token, claimed_by, claimed_at, claim_expires_at
-			) VALUES ($1, $2, $3, $4, $5, 'pending', 0, $6, NULL, NULL, NULL, NULL)
-		`, outboxID, create.TenantID, create.SessionID, create.HandoffID, create.ReplyID, create.Now)
+		err := tx.QueryRowContext(ctx, `
+			SELECT session_id, active, routing_mode, generation
+			FROM bridge_handoffs
+			WHERE tenant_id = $1 AND handoff_id = $2
+			FOR UPDATE
+		`, create.TenantID, create.HandoffID).Scan(&sessionID, &active, &routingMode, &generation)
+		if errors.Is(err, sql.ErrNoRows) {
+			return store.ErrBridgeHandoffNotFound
+		}
 		if err != nil {
-			tx.Rollback()
-			return nil, fmt.Errorf("insert outbox: %w", err)
+			return fmt.Errorf("query handoff in transaction: %w", err)
 		}
 
-		finalReply = &store.BridgeHandoffReply{
-			ReplyID:         create.ReplyID,
-			TenantID:        create.TenantID,
-			SessionID:       create.SessionID,
-			HandoffID:       create.HandoffID,
-			Generation:      generation,
-			ClientMessageID: create.ClientMessageID,
-			Text:            create.Text,
-			DeliveryStatus:  "not_delivered",
-			CreatedAt:       create.Now,
-		}
-		finalOutbox = &store.BridgeReplyOutbox{
-			OutboxID:     outboxID,
-			TenantID:     create.TenantID,
-			SessionID:    create.SessionID,
-			HandoffID:    create.HandoffID,
-			ReplyID:      create.ReplyID,
-			Status:       "pending",
-			AttemptCount: 0,
-			CreatedAt:    create.Now,
-		}
-	} else if isPostgresConstraint(err) {
-		var existingReplyID string
-		var existingText string
-		var existingDeliveryStatus string
-		var existingCreatedAt int64
-		var existingGeneration int64
-
-		errQuery := tx.QueryRowContext(ctx, `
-			SELECT reply_id, text, delivery_status, created_at, generation
-			FROM bridge_handoff_replies
-			WHERE tenant_id = $1 AND session_id = $2 AND handoff_id = $3 AND client_message_id = $4
-		`, create.TenantID, create.SessionID, create.HandoffID, create.ClientMessageID).Scan(
-			&existingReplyID, &existingText, &existingDeliveryStatus, &existingCreatedAt, &existingGeneration,
-		)
-		if errQuery != nil {
-			tx.Rollback()
-			return nil, fmt.Errorf("query existing reply on constraint violation: %w", errQuery)
+		if sessionID != create.SessionID {
+			return store.ErrBridgeHandoffConflict
 		}
 
-		if existingText != create.Text {
-			tx.Rollback()
-			return nil, store.ErrBridgeHandoffReplyTextMismatch
+		if !active || routingMode != string(store.BridgeRoutingModeHumanActive) {
+			return store.ErrBridgeHandoffConflict
 		}
 
-		finalReply = &store.BridgeHandoffReply{
-			ReplyID:         existingReplyID,
-			TenantID:        create.TenantID,
-			SessionID:       create.SessionID,
-			HandoffID:       create.HandoffID,
-			Generation:      existingGeneration,
-			ClientMessageID: create.ClientMessageID,
-			Text:            existingText,
-			DeliveryStatus:  existingDeliveryStatus,
-			CreatedAt:       existingCreatedAt,
-		}
+		var finalReply *store.BridgeHandoffReply
+		var finalOutbox *store.BridgeReplyOutbox
 
-		var ob store.BridgeReplyOutbox
-		var obID int64
-		var obCreatedAt int64
-		errOutbox := tx.QueryRowContext(ctx, `
-			SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at, completed_at, failed_at, failure_code, failure_message
-			FROM bridge_reply_outbox
-			WHERE tenant_id = $1 AND reply_id = $2
-		`, create.TenantID, existingReplyID).Scan(
-			&obID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &obCreatedAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt, &ob.CompletedAt, &ob.FailedAt, &ob.FailureCode, &ob.FailureMessage,
-		)
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO bridge_handoff_replies (
+				reply_id, tenant_id, session_id, handoff_id, generation,
+				client_message_id, text, delivery_status, created_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, 'not_delivered', $8)
+		`, create.ReplyID, create.TenantID, create.SessionID, create.HandoffID, generation,
+			create.ClientMessageID, create.Text, create.Now)
 
-		if errOutbox == nil {
-			ob.ID = obID
-			ob.CreatedAt = obCreatedAt
-			finalOutbox = &ob
-		} else if errors.Is(errOutbox, sql.ErrNoRows) {
+		if err == nil {
 			outboxID := uuid.NewString()
 			_, err = tx.ExecContext(ctx, `
 				INSERT INTO bridge_reply_outbox (
 					outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at,
 					claim_token, claimed_by, claimed_at, claim_expires_at
 				) VALUES ($1, $2, $3, $4, $5, 'pending', 0, $6, NULL, NULL, NULL, NULL)
-			`, outboxID, create.TenantID, create.SessionID, create.HandoffID, existingReplyID, create.Now)
+			`, outboxID, create.TenantID, create.SessionID, create.HandoffID, create.ReplyID, create.Now)
 			if err != nil {
-				if isPostgresConstraint(err) {
-					errOutboxRetry := tx.QueryRowContext(ctx, `
-						SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at, completed_at, failed_at, failure_code, failure_message
-						FROM bridge_reply_outbox
-						WHERE tenant_id = $1 AND reply_id = $2
-					`, create.TenantID, existingReplyID).Scan(
-						&obID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &obCreatedAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt, &ob.CompletedAt, &ob.FailedAt, &ob.FailureCode, &ob.FailureMessage,
-					)
-					if errOutboxRetry == nil {
-						ob.ID = obID
-						ob.CreatedAt = obCreatedAt
-						finalOutbox = &ob
+				return fmt.Errorf("insert outbox: %w", err)
+			}
+
+			finalReply = &store.BridgeHandoffReply{
+				ReplyID:         create.ReplyID,
+				TenantID:        create.TenantID,
+				SessionID:       create.SessionID,
+				HandoffID:       create.HandoffID,
+				Generation:      generation,
+				ClientMessageID: create.ClientMessageID,
+				Text:            create.Text,
+				DeliveryStatus:  "not_delivered",
+				CreatedAt:       create.Now,
+			}
+			finalOutbox = &store.BridgeReplyOutbox{
+				OutboxID:     outboxID,
+				TenantID:     create.TenantID,
+				SessionID:    create.SessionID,
+				HandoffID:    create.HandoffID,
+				ReplyID:      create.ReplyID,
+				Status:       "pending",
+				AttemptCount: 0,
+				CreatedAt:    create.Now,
+			}
+		} else if isPostgresConstraint(err) {
+			var existingReplyID string
+			var existingText string
+			var existingDeliveryStatus string
+			var existingCreatedAt int64
+			var existingGeneration int64
+
+			errQuery := tx.QueryRowContext(ctx, `
+				SELECT reply_id, text, delivery_status, created_at, generation
+				FROM bridge_handoff_replies
+				WHERE tenant_id = $1 AND session_id = $2 AND handoff_id = $3 AND client_message_id = $4
+			`, create.TenantID, create.SessionID, create.HandoffID, create.ClientMessageID).Scan(
+				&existingReplyID, &existingText, &existingDeliveryStatus, &existingCreatedAt, &existingGeneration,
+			)
+			if errQuery != nil {
+				return fmt.Errorf("query existing reply on constraint violation: %w", errQuery)
+			}
+
+			if existingText != create.Text {
+				return store.ErrBridgeHandoffReplyTextMismatch
+			}
+
+			finalReply = &store.BridgeHandoffReply{
+				ReplyID:         existingReplyID,
+				TenantID:        create.TenantID,
+				SessionID:       create.SessionID,
+				HandoffID:       create.HandoffID,
+				Generation:      existingGeneration,
+				ClientMessageID: create.ClientMessageID,
+				Text:            existingText,
+				DeliveryStatus:  existingDeliveryStatus,
+				CreatedAt:       existingCreatedAt,
+			}
+
+			var ob store.BridgeReplyOutbox
+			var obID int64
+			var obCreatedAt int64
+			errOutbox := tx.QueryRowContext(ctx, `
+				SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at, completed_at, failed_at, failure_code, failure_message
+				FROM bridge_reply_outbox
+				WHERE tenant_id = $1 AND reply_id = $2
+			`, create.TenantID, existingReplyID).Scan(
+				&obID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &obCreatedAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt, &ob.CompletedAt, &ob.FailedAt, &ob.FailureCode, &ob.FailureMessage,
+			)
+
+			if errOutbox == nil {
+				ob.ID = obID
+				ob.CreatedAt = obCreatedAt
+				finalOutbox = &ob
+			} else if errors.Is(errOutbox, sql.ErrNoRows) {
+				outboxID := uuid.NewString()
+				_, err = tx.ExecContext(ctx, `
+					INSERT INTO bridge_reply_outbox (
+						outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at,
+						claim_token, claimed_by, claimed_at, claim_expires_at
+					) VALUES ($1, $2, $3, $4, $5, 'pending', 0, $6, NULL, NULL, NULL, NULL)
+				`, outboxID, create.TenantID, create.SessionID, create.HandoffID, existingReplyID, create.Now)
+				if err != nil {
+					if isPostgresConstraint(err) {
+						errOutboxRetry := tx.QueryRowContext(ctx, `
+							SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at, completed_at, failed_at, failure_code, failure_message
+							FROM bridge_reply_outbox
+							WHERE tenant_id = $1 AND reply_id = $2
+						`, create.TenantID, existingReplyID).Scan(
+							&obID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &obCreatedAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt, &ob.CompletedAt, &ob.FailedAt, &ob.FailureCode, &ob.FailureMessage,
+						)
+						if errOutboxRetry == nil {
+							ob.ID = obID
+							ob.CreatedAt = obCreatedAt
+							finalOutbox = &ob
+						} else {
+							return fmt.Errorf("recover legacy outbox concurrency fallback: %w", errOutboxRetry)
+						}
 					} else {
-						tx.Rollback()
-						return nil, fmt.Errorf("recover legacy outbox concurrency fallback: %w", errOutboxRetry)
+						return fmt.Errorf("insert legacy recovery outbox: %w", err)
 					}
 				} else {
-					tx.Rollback()
-					return nil, fmt.Errorf("insert legacy recovery outbox: %w", err)
+					finalOutbox = &store.BridgeReplyOutbox{
+						OutboxID:     outboxID,
+						TenantID:     create.TenantID,
+						SessionID:    create.SessionID,
+						HandoffID:    create.HandoffID,
+						ReplyID:      existingReplyID,
+						Status:       "pending",
+						AttemptCount: 0,
+						CreatedAt:    create.Now,
+					}
 				}
 			} else {
-				finalOutbox = &store.BridgeReplyOutbox{
-					OutboxID:     outboxID,
-					TenantID:     create.TenantID,
-					SessionID:    create.SessionID,
-					HandoffID:    create.HandoffID,
-					ReplyID:      existingReplyID,
-					Status:       "pending",
-					AttemptCount: 0,
-					CreatedAt:    create.Now,
-				}
+				return fmt.Errorf("query outbox: %w", errOutbox)
 			}
 		} else {
-			tx.Rollback()
-			return nil, fmt.Errorf("query outbox: %w", errOutbox)
+			return fmt.Errorf("insert reply failed: %w", err)
 		}
-	} else {
-		tx.Rollback()
-		return nil, fmt.Errorf("insert reply failed: %w", err)
-	}
 
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit transaction: %w", err)
+		out = &store.BridgeHandoffReplyWithOutbox{
+			Reply:  finalReply,
+			Outbox: finalOutbox,
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	return &store.BridgeHandoffReplyWithOutbox{
-		Reply:  finalReply,
-		Outbox: finalOutbox,
-	}, nil
+	return out, nil
 }
 
 func (d *DB) GetBridgeReplyOutboxByReplyID(ctx context.Context, tenantID int32, replyID string) (*store.BridgeReplyOutbox, error) {
@@ -723,169 +702,154 @@ func (d *DB) ClaimPendingBridgeReplyOutbox(ctx context.Context, tenantID int32, 
 		return nil, store.ErrBridgeInvalidArgument
 	}
 
-	tx, err := d.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at, completed_at, failed_at, failure_code, failure_message
-		FROM bridge_reply_outbox
-		WHERE tenant_id = $1
-		  AND (
-		    status = 'pending'
-		    OR (status = 'claimed' AND claim_expires_at <= $2)
-		  )
-		ORDER BY created_at ASC, id ASC
-		LIMIT $3
-	`, tenantID, nowUnix, limit)
-	if err != nil {
-		tx.Rollback()
-		return nil, fmt.Errorf("query pending rows: %w", err)
-	}
-
-	var candidates []*store.BridgeReplyOutbox
-	for rows.Next() {
-		var ob store.BridgeReplyOutbox
-		var createdAt int64
-		err = rows.Scan(&ob.ID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &createdAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt, &ob.CompletedAt, &ob.FailedAt, &ob.FailureCode, &ob.FailureMessage)
-		if err != nil {
-			rows.Close()
-			tx.Rollback()
-			return nil, fmt.Errorf("scan pending row: %w", err)
-		}
-		ob.CreatedAt = createdAt
-		candidates = append(candidates, &ob)
-	}
-	rows.Close()
-
+	// retry-safe: status-guarded — the conditional UPDATE ... WHERE status =
+	// 'pending' (or expired claim) is re-evaluated inside the retried
+	// transaction, so a 40001 retry cannot claim the same outbox twice.
 	var claimed []*store.BridgeReplyOutbox
-	expiresAt := nowUnix + claimDurationSeconds
-
-	for _, ob := range candidates {
-		claimToken := uuid.NewString()
-
-		res, err := tx.ExecContext(ctx, `
-			UPDATE bridge_reply_outbox
-			SET status='claimed',
-			    claim_token=$1,
-			    claimed_by=$2,
-			    claimed_at=$3,
-			    claim_expires_at=$4,
-			    attempt_count=attempt_count+1
-			WHERE id=$5
-			  AND tenant_id=$6
+	err := d.execTx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
+			SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at, completed_at, failed_at, failure_code, failure_message
+			FROM bridge_reply_outbox
+			WHERE tenant_id = $1
 			  AND (
-			    status='pending'
-			    OR (status='claimed' AND claim_expires_at <= $7)
+			    status = 'pending'
+			    OR (status = 'claimed' AND claim_expires_at <= $2)
 			  )
-		`, claimToken, claimedBy, nowUnix, expiresAt, ob.ID, tenantID, nowUnix)
+			ORDER BY created_at ASC, id ASC
+			LIMIT $3
+		`, tenantID, nowUnix, limit)
 		if err != nil {
-			tx.Rollback()
-			return nil, fmt.Errorf("update claim: %w", err)
+			return fmt.Errorf("query pending rows: %w", err)
 		}
 
-		rowsAffected, err := res.RowsAffected()
-		if err != nil {
-			tx.Rollback()
-			return nil, fmt.Errorf("check rows affected: %w", err)
+		var candidates []*store.BridgeReplyOutbox
+		for rows.Next() {
+			var ob store.BridgeReplyOutbox
+			var createdAt int64
+			err = rows.Scan(&ob.ID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &createdAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt, &ob.CompletedAt, &ob.FailedAt, &ob.FailureCode, &ob.FailureMessage)
+			if err != nil {
+				rows.Close()
+				return fmt.Errorf("scan pending row: %w", err)
+			}
+			ob.CreatedAt = createdAt
+			candidates = append(candidates, &ob)
 		}
+		rows.Close()
 
-		if rowsAffected == 1 {
-			ob.Status = "claimed"
-			ob.ClaimToken = &claimToken
-			ob.ClaimedBy = &claimedBy
-			ob.ClaimedAt = &nowUnix
-			ob.ClaimExpiresAt = &expiresAt
-			ob.AttemptCount++
-			claimed = append(claimed, ob)
+		expiresAt := nowUnix + claimDurationSeconds
+
+		for _, ob := range candidates {
+			claimToken := uuid.NewString()
+
+			res, err := tx.ExecContext(ctx, `
+				UPDATE bridge_reply_outbox
+				SET status='claimed',
+				    claim_token=$1,
+				    claimed_by=$2,
+				    claimed_at=$3,
+				    claim_expires_at=$4,
+				    attempt_count=attempt_count+1
+				WHERE id=$5
+				  AND tenant_id=$6
+				  AND (
+				    status='pending'
+				    OR (status='claimed' AND claim_expires_at <= $7)
+				  )
+			`, claimToken, claimedBy, nowUnix, expiresAt, ob.ID, tenantID, nowUnix)
+			if err != nil {
+				return fmt.Errorf("update claim: %w", err)
+			}
+
+			rowsAffected, err := res.RowsAffected()
+			if err != nil {
+				return fmt.Errorf("check rows affected: %w", err)
+			}
+
+			if rowsAffected == 1 {
+				ob.Status = "claimed"
+				ob.ClaimToken = &claimToken
+				ob.ClaimedBy = &claimedBy
+				ob.ClaimedAt = &nowUnix
+				ob.ClaimExpiresAt = &expiresAt
+				ob.AttemptCount++
+				claimed = append(claimed, ob)
+			}
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit transaction: %w", err)
-	}
-
 	return claimed, nil
 }
-
 func (d *DB) CompleteClaimedBridgeReplyOutbox(ctx context.Context, complete *store.CompleteBridgeReplyOutbox) (*store.BridgeReplyOutbox, error) {
 	if complete.TenantID <= 0 || len(complete.OutboxID) != 36 || len(complete.ClaimToken) != 36 || complete.Now <= 0 {
 		return nil, store.ErrBridgeInvalidArgument
 	}
 
-	tx, err := d.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	var ob store.BridgeReplyOutbox
-	var createdAt int64
-	err = tx.QueryRowContext(ctx, `
-		SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at, completed_at, failed_at, failure_code, failure_message
-		FROM bridge_reply_outbox
-		WHERE tenant_id = $1 AND outbox_id = $2
-	`, complete.TenantID, complete.OutboxID).Scan(
-		&ob.ID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &createdAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt, &ob.CompletedAt, &ob.FailedAt, &ob.FailureCode, &ob.FailureMessage,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		tx.Rollback()
-		return nil, store.ErrBridgeOutboxNotFound
-	}
-	if err != nil {
-		tx.Rollback()
-		return nil, fmt.Errorf("query outbox: %w", err)
-	}
-
-	if ob.ClaimedAt == nil {
-		tx.Rollback()
-		return nil, store.ErrBridgeOutboxConflict
-	}
-	if complete.Now < *ob.ClaimedAt {
-		tx.Rollback()
-		return nil, store.ErrBridgeInvalidArgument
-	}
-
-	res, err := tx.ExecContext(ctx, `
-		UPDATE bridge_reply_outbox
-		SET status='completed', completed_at=$1
-		WHERE tenant_id=$2 AND outbox_id=$3 AND claim_token=$4 AND status='claimed'
-	`, complete.Now, complete.TenantID, complete.OutboxID, complete.ClaimToken)
-	if err != nil {
-		tx.Rollback()
-		return nil, fmt.Errorf("update complete: %w", err)
-	}
-
-	rowsAffected, err := res.RowsAffected()
-	if err != nil {
-		tx.Rollback()
-		return nil, fmt.Errorf("check complete rows affected: %w", err)
-	}
-
-	if rowsAffected == 1 {
-		if err := tx.Commit(); err != nil {
-			tx.Rollback()
-			return nil, fmt.Errorf("commit transaction: %w", err)
+	// retry-safe: token-guarded — the conditional UPDATE ... WHERE claim_token
+	// = $4 AND status = 'claimed' filters already-completed rows on re-read, so
+	// a 40001 retry cannot complete an outbox twice (the idempotent re-read
+	// path returns the already-completed row).
+	var out *store.BridgeReplyOutbox
+	err := d.execTx(ctx, func(tx *sql.Tx) error {
+		var ob store.BridgeReplyOutbox
+		var createdAt int64
+		err := tx.QueryRowContext(ctx, `
+			SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at, completed_at, failed_at, failure_code, failure_message
+			FROM bridge_reply_outbox
+			WHERE tenant_id = $1 AND outbox_id = $2
+		`, complete.TenantID, complete.OutboxID).Scan(
+			&ob.ID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &createdAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt, &ob.CompletedAt, &ob.FailedAt, &ob.FailureCode, &ob.FailureMessage,
+		)
+		if errors.Is(err, sql.ErrNoRows) {
+			return store.ErrBridgeOutboxNotFound
 		}
-		ob.CreatedAt = createdAt
-		ob.Status = "completed"
-		ob.CompletedAt = &complete.Now
-		return &ob, nil
-	}
-
-	if ob.Status == "completed" && ob.ClaimToken != nil && *ob.ClaimToken == complete.ClaimToken {
-		if err := tx.Commit(); err != nil {
-			tx.Rollback()
-			return nil, fmt.Errorf("commit transaction on idempotent complete: %w", err)
+		if err != nil {
+			return fmt.Errorf("query outbox: %w", err)
 		}
-		ob.CreatedAt = createdAt
-		return &ob, nil
-	}
 
-	tx.Rollback()
-	return nil, store.ErrBridgeOutboxConflict
+		if ob.ClaimedAt == nil {
+			return store.ErrBridgeOutboxConflict
+		}
+		if complete.Now < *ob.ClaimedAt {
+			return store.ErrBridgeInvalidArgument
+		}
+
+		res, err := tx.ExecContext(ctx, `
+			UPDATE bridge_reply_outbox
+			SET status='completed', completed_at=$1
+			WHERE tenant_id=$2 AND outbox_id=$3 AND claim_token=$4 AND status='claimed'
+		`, complete.Now, complete.TenantID, complete.OutboxID, complete.ClaimToken)
+		if err != nil {
+			return fmt.Errorf("update complete: %w", err)
+		}
+
+		rowsAffected, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("check complete rows affected: %w", err)
+		}
+
+		if rowsAffected == 1 {
+			ob.CreatedAt = createdAt
+			ob.Status = "completed"
+			ob.CompletedAt = &complete.Now
+			out = &ob
+			return nil
+		}
+
+		if ob.Status == "completed" && ob.ClaimToken != nil && *ob.ClaimToken == complete.ClaimToken {
+			ob.CreatedAt = createdAt
+			out = &ob
+			return nil
+		}
+
+		return store.ErrBridgeOutboxConflict
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (d *DB) FailClaimedBridgeReplyOutbox(ctx context.Context, fail *store.FailBridgeReplyOutbox) (*store.BridgeReplyOutbox, error) {
@@ -909,81 +873,73 @@ func (d *DB) FailClaimedBridgeReplyOutbox(ctx context.Context, fail *store.FailB
 		}
 	}
 
-	tx, err := d.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	var ob store.BridgeReplyOutbox
-	var createdAt int64
-	err = tx.QueryRowContext(ctx, `
-		SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at, completed_at, failed_at, failure_code, failure_message
-		FROM bridge_reply_outbox
-		WHERE tenant_id = $1 AND outbox_id = $2
-	`, fail.TenantID, fail.OutboxID).Scan(
-		&ob.ID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &createdAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt, &ob.CompletedAt, &ob.FailedAt, &ob.FailureCode, &ob.FailureMessage,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		tx.Rollback()
-		return nil, store.ErrBridgeOutboxNotFound
-	}
-	if err != nil {
-		tx.Rollback()
-		return nil, fmt.Errorf("query outbox: %w", err)
-	}
-
-	if ob.ClaimedAt == nil {
-		tx.Rollback()
-		return nil, store.ErrBridgeOutboxConflict
-	}
-	if fail.Now < *ob.ClaimedAt {
-		tx.Rollback()
-		return nil, store.ErrBridgeInvalidArgument
-	}
-
-	res, err := tx.ExecContext(ctx, `
-		UPDATE bridge_reply_outbox
-		SET status='failed', failed_at=$1, failure_code=$2, failure_message=$3
-		WHERE tenant_id=$4 AND outbox_id=$5 AND claim_token=$6 AND status='claimed'
-	`, fail.Now, fail.FailureCode, fail.FailureMessage, fail.TenantID, fail.OutboxID, fail.ClaimToken)
-	if err != nil {
-		tx.Rollback()
-		return nil, fmt.Errorf("update fail: %w", err)
-	}
-
-	rowsAffected, err := res.RowsAffected()
-	if err != nil {
-		tx.Rollback()
-		return nil, fmt.Errorf("check fail rows affected: %w", err)
-	}
-
-	if rowsAffected == 1 {
-		if err := tx.Commit(); err != nil {
-			tx.Rollback()
-			return nil, fmt.Errorf("commit transaction: %w", err)
+	// retry-safe: token-guarded — the conditional UPDATE ... WHERE claim_token
+	// = $6 AND status = 'claimed' filters already-failed rows on re-read, so a
+	// 40001 retry cannot fail an outbox twice (the idempotent re-read path
+	// returns the already-failed row).
+	var out *store.BridgeReplyOutbox
+	err := d.execTx(ctx, func(tx *sql.Tx) error {
+		var ob store.BridgeReplyOutbox
+		var createdAt int64
+		err := tx.QueryRowContext(ctx, `
+			SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at, completed_at, failed_at, failure_code, failure_message
+			FROM bridge_reply_outbox
+			WHERE tenant_id = $1 AND outbox_id = $2
+		`, fail.TenantID, fail.OutboxID).Scan(
+			&ob.ID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &createdAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt, &ob.CompletedAt, &ob.FailedAt, &ob.FailureCode, &ob.FailureMessage,
+		)
+		if errors.Is(err, sql.ErrNoRows) {
+			return store.ErrBridgeOutboxNotFound
 		}
-		ob.CreatedAt = createdAt
-		ob.Status = "failed"
-		ob.FailedAt = &fail.Now
-		ob.FailureCode = &fail.FailureCode
-		ob.FailureMessage = &fail.FailureMessage
-		return &ob, nil
-	}
-
-	if ob.Status == "failed" && ob.ClaimToken != nil && *ob.ClaimToken == fail.ClaimToken &&
-		ob.FailureCode != nil && *ob.FailureCode == fail.FailureCode &&
-		ob.FailureMessage != nil && *ob.FailureMessage == fail.FailureMessage {
-		if err := tx.Commit(); err != nil {
-			tx.Rollback()
-			return nil, fmt.Errorf("commit transaction on idempotent fail: %w", err)
+		if err != nil {
+			return fmt.Errorf("query outbox: %w", err)
 		}
-		ob.CreatedAt = createdAt
-		return &ob, nil
-	}
 
-	tx.Rollback()
-	return nil, store.ErrBridgeOutboxConflict
+		if ob.ClaimedAt == nil {
+			return store.ErrBridgeOutboxConflict
+		}
+		if fail.Now < *ob.ClaimedAt {
+			return store.ErrBridgeInvalidArgument
+		}
+
+		res, err := tx.ExecContext(ctx, `
+			UPDATE bridge_reply_outbox
+			SET status='failed', failed_at=$1, failure_code=$2, failure_message=$3
+			WHERE tenant_id=$4 AND outbox_id=$5 AND claim_token=$6 AND status='claimed'
+		`, fail.Now, fail.FailureCode, fail.FailureMessage, fail.TenantID, fail.OutboxID, fail.ClaimToken)
+		if err != nil {
+			return fmt.Errorf("update fail: %w", err)
+		}
+
+		rowsAffected, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("check fail rows affected: %w", err)
+		}
+
+		if rowsAffected == 1 {
+			ob.CreatedAt = createdAt
+			ob.Status = "failed"
+			ob.FailedAt = &fail.Now
+			ob.FailureCode = &fail.FailureCode
+			ob.FailureMessage = &fail.FailureMessage
+			out = &ob
+			return nil
+		}
+
+		if ob.Status == "failed" && ob.ClaimToken != nil && *ob.ClaimToken == fail.ClaimToken &&
+			ob.FailureCode != nil && *ob.FailureCode == fail.FailureCode &&
+			ob.FailureMessage != nil && *ob.FailureMessage == fail.FailureMessage {
+			ob.CreatedAt = createdAt
+			out = &ob
+			return nil
+		}
+
+		return store.ErrBridgeOutboxConflict
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (d *DB) ClaimBridgeReplyOutboxByOutboxID(ctx context.Context, tenantID int32, outboxID string, claimedBy string, now time.Time, claimDurationSeconds int64) (*store.BridgeReplyOutbox, error) {
@@ -1000,87 +956,80 @@ func (d *DB) ClaimBridgeReplyOutboxByOutboxID(ctx context.Context, tenantID int3
 		return nil, store.ErrBridgeInvalidArgument
 	}
 
-	tx, err := d.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	var ob store.BridgeReplyOutbox
-	var createdAt int64
-	err = tx.QueryRowContext(ctx, `
-		SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at, completed_at, failed_at, failure_code, failure_message
-		FROM bridge_reply_outbox
-		WHERE tenant_id = $1 AND outbox_id = $2
-	`, tenantID, outboxID).Scan(
-		&ob.ID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &createdAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt, &ob.CompletedAt, &ob.FailedAt, &ob.FailureCode, &ob.FailureMessage,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		tx.Rollback()
-		return nil, store.ErrBridgeOutboxNotFound
-	}
-	if err != nil {
-		tx.Rollback()
-		return nil, fmt.Errorf("query outbox by id: %w", err)
-	}
-
-	if ob.Status == "completed" {
-		tx.Rollback()
-		return nil, store.ErrBridgeOutboxAlreadyCompleted
-	}
-	if ob.Status == "failed" {
-		tx.Rollback()
-		return nil, store.ErrBridgeOutboxAlreadyFailed
-	}
-	if ob.Status != "pending" && !(ob.Status == "claimed" && ob.ClaimExpiresAt != nil && *ob.ClaimExpiresAt <= nowUnix) {
-		tx.Rollback()
-		return nil, store.ErrBridgeOutboxConflict
-	}
-
-	claimToken := uuid.NewString()
-	expiresAt := nowUnix + claimDurationSeconds
-
-	res, err := tx.ExecContext(ctx, `
-		UPDATE bridge_reply_outbox
-		SET status='claimed',
-		    claim_token=$1,
-		    claimed_by=$2,
-		    claimed_at=$3,
-		    claim_expires_at=$4,
-		    attempt_count=attempt_count+1
-		WHERE id=$5
-		  AND tenant_id=$6
-		  AND (
-		    status='pending'
-		    OR (status='claimed' AND claim_expires_at <= $7)
-		  )
-	`, claimToken, claimedBy, nowUnix, expiresAt, ob.ID, tenantID, nowUnix)
-	if err != nil {
-		tx.Rollback()
-		return nil, fmt.Errorf("update claim: %w", err)
-	}
-
-	rowsAffected, err := res.RowsAffected()
-	if err != nil {
-		tx.Rollback()
-		return nil, fmt.Errorf("check rows affected: %w", err)
-	}
-
-	if rowsAffected == 1 {
-		if err := tx.Commit(); err != nil {
-			tx.Rollback()
-			return nil, fmt.Errorf("commit transaction: %w", err)
+	// retry-safe: status-guarded — the conditional UPDATE ... WHERE status =
+	// 'pending' (or expired claim) is re-evaluated inside the retried
+	// transaction, so a 40001 retry cannot claim the outbox twice.
+	var out *store.BridgeReplyOutbox
+	err := d.execTx(ctx, func(tx *sql.Tx) error {
+		var ob store.BridgeReplyOutbox
+		var createdAt int64
+		err := tx.QueryRowContext(ctx, `
+			SELECT id, outbox_id, tenant_id, session_id, handoff_id, reply_id, status, attempt_count, created_at, claim_token, claimed_by, claimed_at, claim_expires_at, completed_at, failed_at, failure_code, failure_message
+			FROM bridge_reply_outbox
+			WHERE tenant_id = $1 AND outbox_id = $2
+		`, tenantID, outboxID).Scan(
+			&ob.ID, &ob.OutboxID, &ob.TenantID, &ob.SessionID, &ob.HandoffID, &ob.ReplyID, &ob.Status, &ob.AttemptCount, &createdAt, &ob.ClaimToken, &ob.ClaimedBy, &ob.ClaimedAt, &ob.ClaimExpiresAt, &ob.CompletedAt, &ob.FailedAt, &ob.FailureCode, &ob.FailureMessage,
+		)
+		if errors.Is(err, sql.ErrNoRows) {
+			return store.ErrBridgeOutboxNotFound
 		}
-		ob.CreatedAt = createdAt
-		ob.Status = "claimed"
-		ob.ClaimToken = &claimToken
-		ob.ClaimedBy = &claimedBy
-		ob.ClaimedAt = &nowUnix
-		ob.ClaimExpiresAt = &expiresAt
-		ob.AttemptCount++
-		return &ob, nil
-	}
+		if err != nil {
+			return fmt.Errorf("query outbox by id: %w", err)
+		}
 
-	tx.Rollback()
-	return nil, store.ErrBridgeOutboxConflict
+		if ob.Status == "completed" {
+			return store.ErrBridgeOutboxAlreadyCompleted
+		}
+		if ob.Status == "failed" {
+			return store.ErrBridgeOutboxAlreadyFailed
+		}
+		if ob.Status != "pending" && !(ob.Status == "claimed" && ob.ClaimExpiresAt != nil && *ob.ClaimExpiresAt <= nowUnix) {
+			return store.ErrBridgeOutboxConflict
+		}
+
+		claimToken := uuid.NewString()
+		expiresAt := nowUnix + claimDurationSeconds
+
+		res, err := tx.ExecContext(ctx, `
+			UPDATE bridge_reply_outbox
+			SET status='claimed',
+			    claim_token=$1,
+			    claimed_by=$2,
+			    claimed_at=$3,
+			    claim_expires_at=$4,
+			    attempt_count=attempt_count+1
+			WHERE id=$5
+			  AND tenant_id=$6
+			  AND (
+			    status='pending'
+			    OR (status='claimed' AND claim_expires_at <= $7)
+			  )
+		`, claimToken, claimedBy, nowUnix, expiresAt, ob.ID, tenantID, nowUnix)
+		if err != nil {
+			return fmt.Errorf("update claim: %w", err)
+		}
+
+		rowsAffected, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("check rows affected: %w", err)
+		}
+
+		if rowsAffected == 1 {
+			ob.CreatedAt = createdAt
+			ob.Status = "claimed"
+			ob.ClaimToken = &claimToken
+			ob.ClaimedBy = &claimedBy
+			ob.ClaimedAt = &nowUnix
+			ob.ClaimExpiresAt = &expiresAt
+			ob.AttemptCount++
+			out = &ob
+			return nil
+		}
+
+		return store.ErrBridgeOutboxConflict
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }

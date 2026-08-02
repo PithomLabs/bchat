@@ -26,7 +26,7 @@ type Profile struct {
 	// DSN points to where memos stores its own data
 	DSN string
 	// Driver is the database driver
-	// sqlite, mysql
+	// sqlite, mysql, postgres, cockroach
 	Driver string
 	// Version is the current version of server
 	Version string
@@ -98,6 +98,13 @@ func (p *Profile) Validate() error {
 		p.DSN = os.Getenv("DATABASE_URL")
 		if p.DSN == "" {
 			return errors.New("postgres driver requires DSN or DATABASE_URL environment variable")
+		}
+	}
+
+	if p.Driver == "cockroach" && p.DSN == "" {
+		p.DSN = os.Getenv("COCKROACH_DSN")
+		if p.DSN == "" {
+			return errors.New("cockroach driver requires DSN or COCKROACH_DSN environment variable")
 		}
 	}
 

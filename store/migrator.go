@@ -87,14 +87,20 @@ func (s *Store) Migrate(ctx context.Context) error {
 			}
 			sort.Strings(filePaths)
 
-			// Start a transaction to apply the latest schema.
-			tx, err := s.driver.GetDB().Begin()
-			if err != nil {
-				return errors.Wrap(err, "failed to start transaction")
-			}
-			defer tx.Rollback()
-
 			slog.Info("start migration", slog.String("currentSchemaVersion", latestMigrationHistoryVersion), slog.String("targetSchemaVersion", schemaVersion))
+			// Cockroach: DDL in explicit transactions is unsupported (online schema
+			// changes run as background jobs; autocommit_before_ddl commits prior
+			// statements anyway) — skip the tx entirely for cockroach. Under A1 this
+			// loop never executes for cockroach (inert mirror files are ≤ history
+			// version), but it must not Begin() if it ever does.
+			var tx *sql.Tx
+			if s.profile.Driver != "cockroach" {
+				tx, err = s.driver.GetDB().Begin()
+				if err != nil {
+					return errors.Wrap(err, "failed to start transaction")
+				}
+				defer tx.Rollback()
+			}
 			for _, filePath := range filePaths {
 				fileSchemaVersion, err := s.getSchemaVersionOfMigrateScript(filePath)
 				if err != nil {
@@ -127,13 +133,34 @@ func (s *Store) Migrate(ctx context.Context) error {
 					return errors.Wrapf(err, "failed to read minor version migration file: %s", filePath)
 				}
 				stmt := string(bytes)
-				if err := s.execute(ctx, tx, stmt); err != nil {
-					return errors.Wrapf(err, "migrate error: %s", stmt)
+				if s.profile.Driver == "cockroach" {
+					// SET + whole file as one statement (P0-verified, bugs/057 §4.0.1).
+					// The cockroach migration files are fully idempotent (IF NOT EXISTS
+					// on all DDL), so a failed boot re-runs cleanly (bugs/057 §4.4.3).
+					stmt = "SET serial_normalization = 'sql_sequence';\n" + stmt
+					if _, err := s.driver.GetDB().ExecContext(ctx, stmt); err != nil {
+						// Tolerance inlined from execute() (see below) so the shared tx
+						// path stays byte-identical. Deliberate duplication.
+						errMsg := err.Error()
+						if strings.Contains(errMsg, "duplicate column") ||
+							strings.Contains(errMsg, "already exists") ||
+							strings.Contains(errMsg, "column already exists") {
+							slog.Warn("migration: column already exists, skipping", slog.String("error", errMsg))
+						} else {
+							return errors.Wrapf(err, "migrate error: %s", stmt)
+						}
+					}
+				} else {
+					if err := s.execute(ctx, tx, stmt); err != nil {
+						return errors.Wrapf(err, "migrate error: %s", stmt)
+					}
 				}
 			}
 
-			if err := tx.Commit(); err != nil {
-				return errors.Wrap(err, "failed to commit transaction")
+			if s.profile.Driver != "cockroach" {
+				if err := tx.Commit(); err != nil {
+					return errors.Wrap(err, "failed to commit transaction")
+				}
 			}
 			slog.Info("end migrate")
 
@@ -175,17 +202,39 @@ func (s *Store) preMigrate(ctx context.Context) error {
 			return errors.Wrap(err, "failed to get current schema version")
 		}
 
-		// Start a transaction to apply the latest schema.
-		tx, err := s.driver.GetDB().Begin()
-		if err != nil {
-			return errors.Wrap(err, "failed to start transaction")
-		}
-		defer tx.Rollback()
-		if err := s.execute(ctx, tx, string(bytes)); err != nil {
-			return errors.Errorf("failed to execute SQL file %s, err %s", filePath, err)
-		}
-		if err := tx.Commit(); err != nil {
-			return errors.Wrap(err, "failed to commit transaction")
+		if s.profile.Driver == "cockroach" {
+			// Cockroach does not support DDL in explicit transactions (online schema
+			// changes run as background jobs; autocommit_before_ddl commits prior
+			// statements anyway), so no Begin/Commit here. The SET + whole file is
+			// one statement (P0-verified, bugs/057 §4.0.1). The cockroach LATEST.sql
+			// mirror is fully idempotent (IF NOT EXISTS on all DDL), so a failed
+			// boot re-runs cleanly (bugs/057 §4.4.3).
+			stmt := "SET serial_normalization = 'sql_sequence';\n" + string(bytes)
+			if _, err := s.driver.GetDB().ExecContext(ctx, stmt); err != nil {
+				// Tolerance inlined from execute() (see below) so the shared tx path
+				// stays byte-identical. Deliberate duplication.
+				errMsg := err.Error()
+				if strings.Contains(errMsg, "duplicate column") ||
+					strings.Contains(errMsg, "already exists") ||
+					strings.Contains(errMsg, "column already exists") {
+					slog.Warn("migration: column already exists, skipping", slog.String("error", errMsg))
+				} else {
+					return errors.Errorf("failed to execute SQL file %s, err %s", filePath, err)
+				}
+			}
+		} else {
+			// Start a transaction to apply the latest schema.
+			tx, err := s.driver.GetDB().Begin()
+			if err != nil {
+				return errors.Wrap(err, "failed to start transaction")
+			}
+			defer tx.Rollback()
+			if err := s.execute(ctx, tx, string(bytes)); err != nil {
+				return errors.Errorf("failed to execute SQL file %s, err %s", filePath, err)
+			}
+			if err := tx.Commit(); err != nil {
+				return errors.Wrap(err, "failed to commit transaction")
+			}
 		}
 
 		// TODO: using schema version in basic setting instead of migration history.

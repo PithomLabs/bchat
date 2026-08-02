@@ -31,8 +31,10 @@ done
 
 SQLITE_DIR="$REPO_ROOT/store/migration/sqlite"
 POSTGRES_DIR="$REPO_ROOT/store/migration/postgres"
+COCKROACH_DIR="$REPO_ROOT/store/migration/cockroach"
 SQLITE_LATEST="$SQLITE_DIR/LATEST.sql"
 POSTGRES_LATEST="$POSTGRES_DIR/LATEST.sql"
+COCKROACH_LATEST="$COCKROACH_DIR/LATEST.sql"
 
 FILE_LIST_ISSUES=0
 SCHEMA_ISSUES=0
@@ -68,14 +70,39 @@ KNOWN_DIVERGENCES=$(cat << 'DIVERGENCES'
 DIVERGENCES
 )
 
+# Cockroach is a minimal mirror of postgres: only the 0.35 mirror dir
+# (inert; version machinery only — postgres applies the real migration).
+# Versions 0.19-0.34 exist in postgres but never in cockroach.
+COCKROACH_DIVERGENCES=$(cat << 'DIVERGENCES'
+0.19:cockroach minimal mirror (inert; version machinery only)
+0.20:cockroach minimal mirror (inert; version machinery only)
+0.21:cockroach minimal mirror (inert; version machinery only)
+0.22:cockroach minimal mirror (inert; version machinery only)
+0.23:cockroach minimal mirror (inert; version machinery only)
+0.24:cockroach minimal mirror (inert; version machinery only)
+0.25:cockroach minimal mirror (inert; version machinery only)
+0.26:cockroach minimal mirror (inert; version machinery only)
+0.27:cockroach minimal mirror (inert; version machinery only)
+0.28:cockroach minimal mirror (inert; version machinery only)
+0.29:cockroach minimal mirror (inert; version machinery only)
+0.30:cockroach minimal mirror (inert; version machinery only)
+0.31:cockroach minimal mirror (inert; version machinery only)
+0.32:cockroach minimal mirror (inert; version machinery only)
+0.33:cockroach minimal mirror (inert; version machinery only)
+0.34:cockroach minimal mirror (inert; version machinery only)
+DIVERGENCES
+)
+
 is_known_divergence() {
     local ver="$1"
-    echo "$KNOWN_DIVERGENCES" | grep -q "^${ver}:" 2>/dev/null
+    local list="${2:-$KNOWN_DIVERGENCES}"
+    echo "$list" | grep -q "^${ver}:" 2>/dev/null
 }
 
 get_divergence_reason() {
     local ver="$1"
-    echo "$KNOWN_DIVERGENCES" | grep "^${ver}:" | head -1 | sed 's/^[^:]*://'
+    local list="${2:-$KNOWN_DIVERGENCES}"
+    echo "$list" | grep "^${ver}:" | head -1 | sed 's/^[^:]*://'
 }
 
 echo "=== Cross-Driver Parity Validator ==="
@@ -88,6 +115,7 @@ check_file_list_parity() {
     local driver_name="$1"
     local driver_dir="$2"
     local other_dir="$3"
+    local divergence_list="${4:-$KNOWN_DIVERGENCES}"
 
     for dir in "$driver_dir"/*/; do
         local dirname
@@ -97,9 +125,9 @@ check_file_list_parity() {
         fi
 
         # Check known divergence
-        if is_known_divergence "$dirname"; then
+        if is_known_divergence "$dirname" "$divergence_list"; then
             if [ "$VERBOSE" = true ]; then
-                echo "  SKIP $dirname (known divergence: $(get_divergence_reason "$dirname"))"
+                echo "  SKIP $dirname (known divergence: $(get_divergence_reason "$dirname" "$divergence_list"))"
             fi
             continue
         fi
@@ -148,6 +176,13 @@ check_file_list_parity() {
 
 check_file_list_parity "sqlite" "$SQLITE_DIR" "$POSTGRES_DIR"
 check_file_list_parity "postgres" "$POSTGRES_DIR" "$SQLITE_DIR"
+
+# Cockroach pair: cockroach mirrors only postgres's 0.35 dir (inert).
+# The divergence list for this pair is COCKROACH_DIVERGENCES (0.19-0.34).
+if [ -d "$COCKROACH_DIR" ]; then
+    check_file_list_parity "cockroach" "$COCKROACH_DIR" "$POSTGRES_DIR" "$COCKROACH_DIVERGENCES"
+    check_file_list_parity "postgres" "$POSTGRES_DIR" "$COCKROACH_DIR" "$COCKROACH_DIVERGENCES"
+fi
 
 if [ "$FILE_LIST_ISSUES" -eq 0 ]; then
     echo "  PASS: File lists are in sync"
@@ -233,6 +268,49 @@ if [ "$SCHEMA_ISSUES" -eq 0 ]; then
 else
     echo "  WARN: Schema differences detected (best-effort lint — verify manually)"
     echo "  Note: Shell-level SQL parsing is limited. See docs/TYPE_MAPPING.md for details."
+fi
+
+# Check 2b: Cockroach mirror vs postgres — table/index names must match.
+# The cockroach LATEST.sql is a copy of postgres + ::BIGINT casts +
+# IF NOT EXISTS + PRIMARY KEY conversions (bugs/057 §4.1); any name drift
+# breaks the mirror relationship.
+if [ -f "$COCKROACH_LATEST" ]; then
+    echo ""
+    echo "Check 2b: Cockroach mirror schema parity (names only)"
+    COCKROACH_TABLES=$(extract_tables "$COCKROACH_LATEST")
+    COCKROACH_INDEXES=$(extract_indexes "$COCKROACH_LATEST")
+
+    MISSING_TBL=$(comm -13 <(echo "$POSTGRES_TABLES") <(echo "$COCKROACH_TABLES") || true)
+    MISSING_IDX=$(comm -13 <(echo "$POSTGRES_INDEXES") <(echo "$COCKROACH_INDEXES") || true)
+    EXTRA_TBL=$(comm -23 <(echo "$POSTGRES_TABLES") <(echo "$COCKROACH_TABLES") || true)
+    EXTRA_IDX=$(comm -23 <(echo "$POSTGRES_INDEXES") <(echo "$COCKROACH_INDEXES") || true)
+
+    COCKROACH_MIRROR_ISSUES=0
+    if [ -n "$EXTRA_TBL" ] || [ -n "$EXTRA_IDX" ] || [ -n "$MISSING_TBL" ] || [ -n "$MISSING_IDX" ]; then
+        COCKROACH_MIRROR_ISSUES=1
+    fi
+    if [ -n "$EXTRA_TBL" ]; then
+        echo "  Tables in postgres but NOT in cockroach mirror:"
+        echo "$EXTRA_TBL" | sed 's/^/    /'
+    fi
+    if [ -n "$MISSING_TBL" ]; then
+        echo "  Tables in cockroach mirror but NOT in postgres:"
+        echo "$MISSING_TBL" | sed 's/^/    /'
+    fi
+    if [ -n "$EXTRA_IDX" ]; then
+        echo "  Indexes in postgres but NOT in cockroach mirror:"
+        echo "$EXTRA_IDX" | sed 's/^/    /'
+    fi
+    if [ -n "$MISSING_IDX" ]; then
+        echo "  Indexes in cockroach mirror but NOT in postgres:"
+        echo "$MISSING_IDX" | sed 's/^/    /'
+    fi
+    if [ "$COCKROACH_MIRROR_ISSUES" -eq 0 ]; then
+        echo "  PASS: Cockroach mirror table/index names match postgres"
+    else
+        echo "  FAIL: Cockroach mirror drift (table/index names differ from postgres)"
+        SCHEMA_ISSUES=1
+    fi
 fi
 echo ""
 

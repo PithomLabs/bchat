@@ -1,0 +1,107 @@
+# =============================================================================
+# Multi-stage Dockerfile for fly.io deployment with CockroachDB backend
+# Runtime: Ubuntu 24.04 LTS (Noble Numbat)
+# Storage: CockroachDB for application data AND LanceDB vectors (native vector support)
+# =============================================================================
+
+# Stage 1: Build frontend and widget
+FROM node:20-alpine AS frontend
+
+# Build main frontend
+WORKDIR /frontend-build
+COPY web/package*.json ./
+COPY web/vendor ./vendor
+RUN npm ci
+COPY web/ .
+RUN test -f node_modules/@usememos/mui/dist/index.css
+RUN npm run release
+
+# Build widget
+WORKDIR /widget-build
+COPY widget/package*.json ./
+RUN npm ci
+COPY widget/ .
+RUN npm run build
+
+# Stage 2: Build backend with CockroachDB support (pure Go — no CGO/LanceDB)
+FROM golang:1.26 AS backend
+WORKDIR /backend-build
+
+# Copy go modules first for better layer caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Copy frontend build from stage 1
+COPY --from=frontend /server/router/frontend/dist ./server/router/frontend/dist
+
+RUN go build -tags cockroach -ldflags="-s -w" -o memos ./bin/memos/main.go
+
+# Stage 3: Ubuntu 24.04 LTS runtime image
+FROM ubuntu:24.04
+
+WORKDIR /usr/local/memos
+
+# Install runtime dependencies + gosu for privilege dropping
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    tzdata \
+    gosu \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install supercronic for webhook event polling
+ARG SUPERCRONIC_URL=https://github.com/aptible/supercronic/releases/download/v0.2.33/supercronic-linux-amd64
+ARG SUPERCRONIC_SHA1SUM=71b0d58cc53f6bd72cf2f293e09e294b79c666d8
+RUN curl -fsSL "$SUPERCRONIC_URL" -o /usr/local/bin/supercronic \
+    && echo "$SUPERCRONIC_SHA1SUM /usr/local/bin/supercronic" | sha1sum -c - \
+    && chmod +x /usr/local/bin/supercronic
+
+# Copy application binary and scripts
+COPY --from=backend /backend-build/memos .
+COPY scripts/entrypoint.sh .
+RUN chmod +x entrypoint.sh
+
+# Copy crontab for supercronic
+RUN mkdir -p /etc/bchat
+COPY build/crontab /etc/bchat/crontab
+
+# Copy widget bundle for external embeds
+COPY --from=frontend /widget-build/dist ./widget/dist
+
+# H5: Create non-root user
+RUN groupadd -r memos && useradd -r -g memos -d /usr/local/memos -s /sbin/nologin memos
+
+# Create data directory for SQLite fallback (CockroachDB is the primary datastore in prod)
+RUN mkdir -p /var/opt/memos && chown memos:memos /var/opt/memos
+
+# H5: Do NOT add USER memos here — entrypoint handles privilege dropping
+
+# Environment defaults
+ENV TZ="UTC"
+ENV MEMOS_MODE="prod"
+ENV MEMOS_PORT="5230"
+
+# RAG pipeline configuration (CockroachDB-native vector storage)
+ENV RAG_STARTUP_REINDEX_DISABLED="true"
+ENV RAG_PIPELINE_ENABLED="true"
+ENV LANCEDB_STORAGE_PROVIDER="cockroach"
+ENV EMBEDDING_PROVIDER="openrouter"
+ENV EMBEDDING_MODEL="openai/text-embedding-3-small"
+ENV EMBEDDING_BATCH_SIZE="200"
+ENV EMBEDDING_TIMEOUT="180s"
+
+# LLM models
+ENV LLM_MODEL="openrouter/free"
+ENV LLM_MODEL_REASONING="openrouter/free"
+
+# Optional LLM verifier (disabled by default)
+ENV LLM_VERIFIER_ENABLED="false"
+
+ENV RAG_MAX_CHUNK_TOKENS="4096"
+ENV MEMSTATE_ENABLED="true"
+EXPOSE 5230
+
+ENTRYPOINT ["./entrypoint.sh", "./memos"]

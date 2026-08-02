@@ -576,7 +576,15 @@ func (s *APIV1Service) UpsertAccessTokenToStore(ctx context.Context, user *store
 		if _, _, err := jwt.NewParser().ParseUnverified(b.AccessToken, bClaims); err != nil {
 			slog.Warn("failed to parse access token during dedup sort", "error", err)
 		}
-		if aClaims.IssuedAt.Unix() < bClaims.IssuedAt.Unix() {
+		aIat := int64(0)
+		if aClaims.IssuedAt != nil {
+			aIat = aClaims.IssuedAt.Unix()
+		}
+		bIat := int64(0)
+		if bClaims.IssuedAt != nil {
+			bIat = bClaims.IssuedAt.Unix()
+		}
+		if aIat < bIat {
 			return -1
 		}
 		return 1
