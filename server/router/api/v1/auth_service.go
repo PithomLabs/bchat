@@ -508,7 +508,6 @@ func (s *APIV1Service) HandleSelectTenant(c echo.Context) error {
 	accessTokenValue := "selection:" + req.SelectionToken
 	ctx := c.Request().Context()
 	matchedUser, description, err := s.Store.FindUserByAccessToken(ctx, accessTokenValue)
-	slog.Info("select-tenant debug", "token", accessTokenValue, "err", err, "user", matchedUser, "desc", description)
 	if err != nil || matchedUser == nil {
 		return echo.NewHTTPError(http.StatusUnauthorized, "invalid or expired selection token")
 	}

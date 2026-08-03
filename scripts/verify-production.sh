@@ -16,12 +16,18 @@ URL="${BCHAT_URL:-https://bchat-crdb.fly.dev}"
 USER="${BCHAT_USER:?BCHAT_USER required (memos admin username)}"
 PASS="${BCHAT_PASS:?BCHAT_PASS required}"
 KEEP=0
-[[ "${1:-}" == "--keep" ]] && KEEP=1
+for arg in "$@"; do
+  case $arg in
+    --keep) KEEP=1 ;;
+    --keep=*) KEEP="${arg#*=}" ;;
+  esac
+done
 
 SLUG="verify-$(date +%s)"
 COOKIE_JAR=$(mktemp)
 TMP_KB=$(mktemp)
-trap 'rm -f "$COOKIE_JAR" "$TMP_KB"' EXIT
+TMP_RESP=$(mktemp)
+trap 'rm -f "$COOKIE_JAR" "$TMP_KB" "$TMP_RESP"' EXIT
 
 pass() { echo -e "  \033[0;32mPASS\033[0m $1"; }
 fail() { echo -e "  \033[0;31mFAIL\033[0m $1"; exit 1; }
@@ -47,8 +53,8 @@ TENANTS=$(curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
   -H "Content-Type: application/json" \
   -d "{\"username\":\"$USER\",\"password\":\"$PASS\"}" \
   "$URL/api/v1/auth/tenants" || fail "auth/tenants failed")
-TOKEN=$(echo "$TENANTS" | grep -o '"selection_token":"[^"]*"' | head -1 | cut -d'"' -f4)
-TENANT_ID=$(echo "$TENANTS" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+TOKEN=$(echo "$TENANTS" | grep -o '"selection_token"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
+TENANT_ID=$(echo "$TENANTS" | grep -o '"id"[[:space:]]*:[[:space:]]*[0-9]*' | head -1 | cut -d: -f2)
 [[ -n "$TOKEN" && -n "$TENANT_ID" ]] || fail "no selection token / tenant id in response"
 curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
   -H "Content-Type: application/json" \
@@ -89,16 +95,42 @@ pass "KB imported + reindexed"
 
 # 6. RAG search (vector round-trip)
 echo "[6/7] RAG search"
+EXIT_CODE=0
 for i in $(seq 1 12); do
-  HITS=$(curl -fsS -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
+  HTTP_CODE=$(curl -fsS -w "%{http_code}" -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
     -H "Content-Type: application/json" \
-    -d '{"query":"smoke test"}' \
-    "$URL/api/v1/agent/$SLUG/rag/search" 2>/dev/null || echo "")
-  N=$(echo "$HITS" | grep -o '"hits"\|"items"' | head -1 | wc -l)
-  [[ "$N" -ge 1 ]] && break
+    -d '{"query":"smoke test","audience_type":"internal","file_type":"kb"}' \
+    "$URL/api/v1/agent/$SLUG/rag/search" -o "$TMP_RESP" 2>/dev/null || echo "000")
+
+  if [[ "$HTTP_CODE" -ge 400 ]]; then
+    echo "  Attempt $i: HTTP $HTTP_CODE"
+    cat "$TMP_RESP"
+    EXIT_CODE=1
+    sleep 5
+    continue
+  fi
+
+  TOTAL=$(jq -r '.total_results // 0' "$TMP_RESP" 2>/dev/null || echo "parse_error")
+  if [[ "$TOTAL" == "parse_error" ]]; then
+    echo "  Attempt $i: JSON parse failed"
+    cat "$TMP_RESP"
+    EXIT_CODE=2
+    sleep 5
+    continue
+  fi
+
+  if [[ "$TOTAL" -gt 0 ]]; then
+    echo "  Attempt $i: SUCCESS (total_results=$TOTAL)"
+    EXIT_CODE=0
+    break
+  fi
+
+  echo "  Attempt $i: 0 results (total_results=0)"
+  EXIT_CODE=3
   sleep 5
 done
-[[ "$N" -ge 1 ]] || fail "RAG search returned no hits"
+
+[[ "$EXIT_CODE" -eq 0 ]] || fail "RAG search failed after 12 attempts (exit=$EXIT_CODE: 1=HTTP, 2=JSON, 3=0 results)"
 pass "RAG search round-trip"
 
 # 7. cleanup (destroy default on)

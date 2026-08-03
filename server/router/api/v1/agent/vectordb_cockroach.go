@@ -5,16 +5,37 @@ package agent
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"time"
 
 	"github.com/cockroachdb/cockroach-go/v2/crdb"
 	"github.com/jackc/pgx/v5/pgconn"
 )
+
+// formatVectorString converts a float32 slice to CockroachDB vector string format "[1.0, 2.0, ...]"
+func formatVectorString(vec []float32) string {
+	if len(vec) == 0 {
+		return "[]"
+	}
+	var sb strings.Builder
+	sb.WriteString("[")
+	for i, v := range vec {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+			sb.WriteString("0")
+		} else {
+			fmt.Fprintf(&sb, "%g", v)
+		}
+	}
+	sb.WriteString("]")
+	return sb.String()
+}
 
 // CockroachVectorDB implements VectorDB using CockroachDB's native vector support.
 type CockroachVectorDB struct {
@@ -106,11 +127,12 @@ func (v *CockroachVectorDB) Validate(ctx context.Context) error {
 	}
 
 	// 3. Vector index (CRDB-specific syntax — NOT pgvector USING hnsw)
-	// NOTE: CREATE VECTOR INDEX does NOT support IF NOT EXISTS
+	// IF NOT EXISTS is supported for VECTOR INDEX in CRDB v26.1+ (docs confirmed).
 	// vector_ip_ops is NOT supported (CRDB issue #144016) — default to vector_l2_ops
-	// Check for "relation already exists" (42P07) or "feature not supported" (0A000) and treat as non-fatal
+	// SQLSTATE fallback kept as defense-in-depth until concurrent startup is verified.
+	// TODO(post-hackathon): remove SQLSTATE fallback after concurrent startup exercised.
 	_, err = v.db.ExecContext(ctx, `
-		CREATE VECTOR INDEX idx_agent_vectors_embedding
+		CREATE VECTOR INDEX IF NOT EXISTS idx_agent_vectors_embedding
 		ON agent_vectors (embedding)
 	`)
 	if err != nil {
@@ -181,9 +203,35 @@ func (v *CockroachVectorDB) ListChunks(ctx context.Context, tenantID int32) ([]D
 
 // Insert adds or updates chunks (single-row UPSERT via crdb.ExecuteTx).
 func (v *CockroachVectorDB) Insert(ctx context.Context, chunks []DocumentChunk) error {
+	if len(chunks) == 0 {
+		return nil
+	}
+
+	// Generate embeddings for chunks that don't have them
+	var textsToEmbed []string
+	var indicesToEmbed []int
+
+	for i, chunk := range chunks {
+		if len(chunk.Embedding) == 0 {
+			textsToEmbed = append(textsToEmbed, fmt.Sprintf("%s: %s", chunk.Title, chunk.Content))
+			indicesToEmbed = append(indicesToEmbed, i)
+		}
+	}
+
+	if len(textsToEmbed) > 0 {
+		embeddings, err := v.embedSvc.Embed(ctx, textsToEmbed)
+		if err != nil {
+			return fmt.Errorf("failed to generate embeddings: %w", err)
+		}
+
+		for i, idx := range indicesToEmbed {
+			chunks[idx].Embedding = embeddings[i]
+		}
+	}
+
 	for _, chunk := range chunks {
 		// Handle nil/empty embeddings gracefully — pass Go nil → SQL NULL
-		var embeddingValue interface{} = chunk.Embedding
+		var embeddingValue interface{} = formatVectorString(chunk.Embedding)
 		if len(chunk.Embedding) == 0 {
 			embeddingValue = nil
 		}
@@ -205,9 +253,35 @@ func (v *CockroachVectorDB) Insert(ctx context.Context, chunks []DocumentChunk) 
 
 // InsertWithCheckpoint adds chunks with progress tracking.
 func (v *CockroachVectorDB) InsertWithCheckpoint(ctx context.Context, chunks []DocumentChunk, opts InsertOptions) error {
+	if len(chunks) == 0 {
+		return nil
+	}
+
+	// Generate embeddings for chunks that don't have them
+	var textsToEmbed []string
+	var indicesToEmbed []int
+
+	for i, chunk := range chunks {
+		if len(chunk.Embedding) == 0 {
+			textsToEmbed = append(textsToEmbed, fmt.Sprintf("%s: %s", chunk.Title, chunk.Content))
+			indicesToEmbed = append(indicesToEmbed, i)
+		}
+	}
+
+	if len(textsToEmbed) > 0 {
+		embeddings, err := v.embedSvc.Embed(ctx, textsToEmbed)
+		if err != nil {
+			return fmt.Errorf("failed to generate embeddings: %w", err)
+		}
+
+		for i, idx := range indicesToEmbed {
+			chunks[idx].Embedding = embeddings[i]
+		}
+	}
+
 	for i, chunk := range chunks {
 		// Handle nil/empty embeddings gracefully — pass Go nil → SQL NULL
-		var embeddingValue interface{} = chunk.Embedding
+		var embeddingValue interface{} = formatVectorString(chunk.Embedding)
 		if len(chunk.Embedding) == 0 {
 			embeddingValue = nil
 		}
@@ -302,11 +376,13 @@ func (v *CockroachVectorDB) Search(ctx context.Context, query SearchQuery) (*Sea
 		}, nil
 	}
 
-	// 2. Marshal embedding to JSON for SQL
-	embeddingJSON, err := json.Marshal(queryEmbedding)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal embedding: %w", err)
-	}
+	// 2. Format embedding as CockroachDB vector literal string: [0.1,0.2,...]
+	// CockroachDB v25.2 does NOT support FormatBinary for VECTOR type (OID 90006).
+	// See GitHub issues #147844, #170485. Fix backported to 25.3 (PR #148843) but NOT 25.2.
+	// We pass the formatted string as a TEXT parameter to $1::VECTOR, which uses text format
+	// and bypasses the binary format bug. If upgrading to a CockroachDB version with the fix,
+	// native []float32 parameter binding can be used instead.
+	vecStr := formatVectorLiteral(queryEmbedding)
 
 	// 3. Build query with filters
 	contentTypeFilter := "''"
@@ -329,7 +405,7 @@ func (v *CockroachVectorDB) Search(ctx context.Context, query SearchQuery) (*Sea
 	`, contentTypeFilter)
 
 	// 4. Execute and scan into SearchResult
-	rows, err := v.db.QueryContext(ctx, sqlQuery, embeddingJSON, query.TenantID, query.TopK, query.MinScore)
+	rows, err := v.db.QueryContext(ctx, sqlQuery, vecStr, query.TenantID, query.TopK, query.MinScore)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute search: %w", err)
 	}
@@ -353,4 +429,22 @@ func (v *CockroachVectorDB) Search(ctx context.Context, query SearchQuery) (*Sea
 	result.SearchMode = "vector"
 
 	return &result, rows.Err()
+}
+
+// formatVectorLiteral formats a []float32 as a CockroachDB vector literal string: [0.1,0.2,...]
+// NOTE:
+// CockroachDB VECTOR parameters could not be bound correctly through pgx (see Bug 057).
+// Root cause: CockroachDB v25.2 does not support FormatBinary for VECTOR type (OID 90006).
+// Fix exists in master (PR #148719) and backported to 25.3 (PR #148843), but NOT 25.2.
+// formatVectorLiteral() intentionally emits only numeric vector literals for safe text-format interpolation.
+// If CockroachDB v25.2+ gains native VECTOR parameter binding (binary format support), revisit this implementation.
+func formatVectorLiteral(vec []float32) string {
+	if len(vec) == 0 {
+		return "[]"
+	}
+	parts := make([]string, len(vec))
+	for i, v := range vec {
+		parts[i] = fmt.Sprintf("%g", v)
+	}
+	return "[" + strings.Join(parts, ",") + "]"
 }

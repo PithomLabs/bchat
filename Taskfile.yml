@@ -183,7 +183,7 @@ tasks:
   fly:check:
     desc: Validate environment chain (.env -> Dockerfile -> fly.toml -> fly secrets)
     cmds:
-      - ./scripts/validate-env-chain.sh
+      - ./scripts/validate-env-chain.sh {{.CLI_ARGS}}
 
   fly:check:fix:
     desc: Fix missing/mismatched env vars in Dockerfile and fly.toml from .env
@@ -191,9 +191,22 @@ tasks:
       - ./scripts/fix-env-chain.sh
 
   fly:db-check:
-    desc: Validate database migrations before fly.io deployment
+    desc: Validate database migrations before fly.io deployment (auto-detects backend from fly.toml)
     cmds:
-      - ./scripts/validate-db-migrations.sh
+      - |
+        DOCKERFILE=$(grep -E '^\s*dockerfile\s*=' fly.toml | head -1 | sed -E "s/.*=\s*['\"]//; s/['\"].*//")
+        echo "Detected Dockerfile: $DOCKERFILE"
+        
+        if [[ "$DOCKERFILE" == *"cockroach"* ]]; then
+          echo "Running CockroachDB compatibility check..."
+          ./scripts/validate-cockroach-compat.sh
+        elif [[ "$DOCKERFILE" == *"pg"* ]]; then
+          echo "Running Postgres migration check..."
+          ./scripts/validate-pg-migrations.sh
+        else
+          echo "Running SQLite migration check..."
+          ./scripts/validate-db-migrations.sh
+        fi
 
   fly:pre-deploy:
     desc: Run all pre-deployment checks (env + database)
@@ -204,6 +217,54 @@ tasks:
         echo ""
         echo "=== All pre-deployment checks passed ==="
         echo "Safe to run: fly deploy"
+
+  fly:check:sqlite:
+    desc: Validate SQLite migrations before deployment
+    cmds:
+      - ./scripts/validate-db-migrations.sh
+
+  fly:check:postgres:
+    desc: Validate Postgres migrations before deployment
+    cmds:
+      - ./scripts/validate-pg-migrations.sh
+
+  fly:check:cockroach:
+    desc: Validate CockroachDB migrations before deployment
+    cmds:
+      - ./scripts/validate-cockroach-compat.sh
+
+  fly:pre-deploy:cockroach:
+    desc: Run all pre-deployment checks for CockroachDB
+    cmds:
+      - task: fly:check
+        vars: {CLI_ARGS: "fly_cockroach.toml"}
+      - task: fly:check:cockroach
+      - |
+        echo ""
+        echo "=== All pre-deployment checks passed ==="
+        echo "Safe to run: task deploy:cockroach"
+
+  fly:pre-deploy:postgres:
+    desc: Run all pre-deployment checks for Postgres
+    cmds:
+      - task: fly:check
+        vars: {CLI_ARGS: "fly_pg.toml"}
+      - task: fly:check:postgres
+      - |
+        echo ""
+        echo "=== All pre-deployment checks passed ==="
+        echo "Safe to run: task deploy:postgres"
+
+  fly:pre-deploy:sqlite:
+    desc: Run all pre-deployment checks for SQLite
+    cmds:
+      - task: fly:check
+        vars: {CLI_ARGS: "fly.toml"}
+      - task: fly:check:sqlite
+      - |
+        echo ""
+        echo "=== All pre-deployment checks passed ==="
+        echo "Safe to run: fly deploy -c fly.toml"
 
   fly:logs:rag:
     desc: Stream RAG and database initialization logs on Fly.io (Ctrl+C to exit)
@@ -238,7 +299,7 @@ tasks:
           echo "Loading environment from .env file..."
           set -a && . .env && set +a
         fi
-        RAG_PIPELINE_ENABLED=true LANCEDB_STORAGE_PROVIDER=cockroach TICKET_EMBEDDING_ENABLED=true ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
+        MEMOS_DRIVER=cockroach RAG_PIPELINE_ENABLED=true LANCEDB_STORAGE_PROVIDER=cockroach TICKET_EMBEDDING_ENABLED=true ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
 
   run:cockroach:seed:
     desc: Seed demo tickets for hackathon demo
@@ -277,20 +338,44 @@ tasks:
   # TODO(post-hackathon): profile-parameterized aliases — db:up PROFILE=cockroach,
   # db:reset PROFILE=cockroach (scales to SQLite/TiDB/PlanetScale)
   crdb:up:
-    desc: Start local CockroachDB compose cluster (docker compose)
+    desc: Start local CockroachDB compose cluster (waits for healthcheck)
     cmds:
-      - docker compose -f scripts/docker-compose.cockroach.yml up -d
+      - docker compose -f scripts/docker-compose.cockroach.yml up -d --wait
 
   crdb:down:
     desc: Stop local CockroachDB compose cluster
     cmds:
       - docker compose -f scripts/docker-compose.cockroach.yml down
 
+  crdb:init:
+    desc: Apply cluster settings to local CockroachDB (idempotent, safe to rerun)
+    cmds:
+      - |
+        set -e
+        echo "=== Waiting for CockroachDB SQL readiness ==="
+        for i in $(seq 1 30); do
+          if cockroach sql --url "postgresql://root@localhost:26257/bchat?sslmode=disable" -e "SELECT 1;" >/dev/null 2>&1; then
+            echo "CockroachDB SQL ready (attempt $i)"
+            break
+          fi
+          if [ "$i" -eq 30 ]; then
+            echo "ERROR: CockroachDB not ready after 30 attempts"
+            exit 1
+          fi
+          echo "  Waiting for SQL... (attempt $i/30)"
+          sleep 2
+        done
+        echo "=== Applying cluster settings ==="
+        cockroach sql --url "postgresql://root@localhost:26257/bchat?sslmode=disable" \
+          < scripts/crdb-init.sql
+        echo "=== Cluster settings applied ==="
+
   crdb:reset:
     desc: Wipe and restart local CockroachDB compose cluster (A1 state)
     cmds:
       - docker compose -f scripts/docker-compose.cockroach.yml down -v
-      - docker compose -f scripts/docker-compose.cockroach.yml up -d
+      - docker compose -f scripts/docker-compose.cockroach.yml up -d --wait
+      - task: crdb:init
 
   crdb:migrate:
     desc: Boot memos against CockroachDB (boot applies migrations)
@@ -333,18 +418,26 @@ tasks:
           V=$(run_sql "SELECT version();")
           echo "$V" | grep -qi cockroach || { echo "FAIL: version() is not Cockroach"; exit 1; }
           echo "OK: version() = Cockroach"
-          H=$(run_sql "SELECT count(*) FROM migration_history;")
+          H=$(run_sql "SELECT count(*) FROM migration_history;" | tail -1)
           echo "$H" | grep -q "1" || { echo "FAIL: migration_history count != 1"; exit 1; }
           echo "OK: migration_history = 1 row (A1)"
           C=$(run_sql "SHOW CREATE TABLE agent_tenants;")
           echo "$C" | grep -q "nextval" || { echo "FAIL: agent_tenants has no nextval default"; exit 1; }
           echo "OK: nextval() defaults present"
-          S=$(run_sql "SHOW CLUSTER SETTING feature.vector_index.enabled;")
-          echo "$S" | grep -q "true" || { echo "FAIL: feature.vector_index.enabled != true"; exit 1; }
+        S=$(run_sql "SHOW CLUSTER SETTING feature.vector_index.enabled;")
+        echo "$S" | grep -qE "^[[:space:]]*t$" || { echo "FAIL: feature.vector_index.enabled != true"; exit 1; }
           echo "OK: vector index enabled"
-          I=$(run_sql "SELECT count(*) FROM information_schema.statistics WHERE table_name='agent_vectors';")
+          I=$(run_sql "SELECT count(*) FROM information_schema.statistics WHERE table_name='agent_vectors';" | tail -1)
           echo "$I" | grep -qv "^0" || { echo "FAIL: agent_vectors has no indexes"; exit 1; }
           echo "OK: agent_vectors indexed"
+          JOBS=$(run_sql "SELECT count(*) FROM [SHOW JOBS] WHERE status = 'failed' AND job_type IN ('SCHEMA CHANGE', 'NEW SCHEMA CHANGE');" 2>/dev/null | tail -1)
+          if [ "$JOBS" != "0" ] && [ -n "$JOBS" ]; then
+            echo "FAIL: $JOBS failed schema job(s) found"
+            run_sql "SELECT job_id, job_type, status, error FROM [SHOW JOBS] WHERE status = 'failed' AND job_type IN ('SCHEMA CHANGE', 'NEW SCHEMA CHANGE') LIMIT 5;" 2>/dev/null
+            exit 1
+          else
+            echo "OK: no failed schema jobs"
+          fi
           if [ -n "${BCHAT_URL:-}" ]; then
             curl -fsS -o /dev/null "$BCHAT_URL/healthz" 2>/dev/null \
               || { echo "FAIL: /healthz not 200 at $BCHAT_URL"; exit 1; }
@@ -356,7 +449,29 @@ tasks:
         echo ""
         echo "P1-P6 verification complete!"
 
-  crdb:init:
+  crdb:verify-vectors:
+    desc: Verify agent_vectors table and vector index (P6 only — run after reindex)
+    cmds:
+      - |
+        echo "=== P6: Vector Index Verification ==="
+        if [ -z "${COCKROACH_DSN:-}" ]; then
+          echo "COCKROACH_DSN not set — skipping P6 checks"
+          exit 1
+        elif ! command -v cockroach &>/dev/null; then
+          echo "cockroach binary not found — skipping P6 checks"
+          exit 1
+        fi
+        run_sql() { cockroach sql --url "${COCKROACH_DSN}" -e "$1" 2>/dev/null; }
+        S=$(run_sql "SHOW CLUSTER SETTING feature.vector_index.enabled;")
+        echo "$S" | grep -qE "^[[:space:]]*t$" || { echo "FAIL: feature.vector_index.enabled != true (got: $S)"; exit 1; }
+        echo "OK: vector index enabled"
+        I=$(run_sql "SELECT count(*) FROM information_schema.statistics WHERE table_name='agent_vectors';" | tail -1)
+        echo "$I" | grep -qv "^0" || { echo "FAIL: agent_vectors has no indexes"; exit 1; }
+        echo "OK: agent_vectors indexed"
+        echo ""
+        echo "P6 verification complete!"
+
+  crdb:cluster:bootstrap:
     desc: Bootstrap a 2-region Basic cluster (console-first; see bugs/057/pre_code.md §5)
     cmds:
       - |
@@ -386,7 +501,7 @@ tasks:
 
   crdb:cluster:create:
     desc: Bootstrap a 2-region Basic cluster (console-first; see bugs/057/pre_code.md §5)
-    deps: [crdb:init]
+    deps: [crdb:cluster:bootstrap]
 
   crdb:cluster:delete:
     desc: Delete a CockroachDB cluster

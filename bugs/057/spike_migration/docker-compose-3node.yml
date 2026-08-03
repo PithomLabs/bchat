@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  cockroach-1:
+    image: cockroachdb/cockroach:v26.2.1
+    container_name: bchat-crdb-1
+    restart: unless-stopped
+    command: start --insecure --advertise-addr=cockroach-1 --join=cockroach-1,cockroach-2,cockroach-3 --locality=region=us-east-1
+    ports:
+      - "26257:26257"
+    volumes:
+      - bchat_crdb_1_data:/cockroach/cockroach-data
+    healthcheck:
+      test: ["CMD", "cockroach", "node", "status", "--insecure", "--host=localhost", "--port=26257"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bchat-crdb-network
+
+  cockroach-2:
+    image: cockroachdb/cockroach:v26.2.1
+    container_name: bchat-crdb-2
+    restart: unless-stopped
+    command: start --insecure --advertise-addr=cockroach-2 --join=cockroach-1,cockroach-2,cockroach-3 --locality=region=us-east-2
+    ports:
+      - "26258:26257"
+    volumes:
+      - bchat_crdb_2_data:/cockroach/cockroach-data
+    healthcheck:
+      test: ["CMD", "cockroach", "node", "status", "--insecure", "--host=localhost", "--port=26257"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bchat-crdb-network
+
+  cockroach-3:
+    image: cockroachdb/cockroach:v26.2.1
+    container_name: bchat-crdb-3
+    restart: unless-stopped
+    command: start --insecure --advertise-addr=cockroach-3 --join=cockroach-1,cockroach-2,cockroach-3 --locality=region=us-west-2
+    ports:
+      - "26259:26257"
+    volumes:
+      - bchat_crdb_3_data:/cockroach/cockroach-data
+    healthcheck:
+      test: ["CMD", "cockroach", "node", "status", "--insecure", "--host=localhost", "--port=26257"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bchat-crdb-network
+
+volumes:
+  bchat_crdb_1_data:
+  bchat_crdb_2_data:
+  bchat_crdb_3_data:
+
+networks:
+  bchat-crdb-network:
+    driver: bridge

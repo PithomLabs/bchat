@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"strings"
 
 	storepb "github.com/usememos/memos/proto/gen/store"
@@ -86,12 +88,18 @@ func (d *DB) FindUserByAccessToken(ctx context.Context, accessToken string) (*st
 	row := d.db.QueryRowContext(ctx, stmt, hashToken(accessToken))
 	user := &store.User{}
 	var description string
+	var allowedTenantIDsRaw *string
 	if err := row.Scan(
 		&user.ID, &user.CreatedTs, &user.UpdatedTs, &user.RowStatus, &user.Username,
 		&user.Role, &user.Email, &user.Nickname, &user.PasswordHash, &user.AvatarURL,
-		&user.Description, &user.AllowedTenantIDs, &description,
+		&user.Description, &allowedTenantIDsRaw, &description,
 	); err != nil {
 		return nil, "", err
+	}
+	if allowedTenantIDsRaw != nil {
+		if err := json.Unmarshal([]byte(*allowedTenantIDsRaw), &user.AllowedTenantIDs); err != nil {
+			return nil, "", fmt.Errorf("failed to unmarshal allowed_tenant_ids: %w", err)
+		}
 	}
 	return user, description, nil
 }

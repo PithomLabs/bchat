@@ -1,118 +1,209 @@
-# Bug 057 — Local-First Test & Redeploy Plan, Rev 2 (plan2_deploy)
+# Bug 057 — Deployment Gap Analysis & Plan (plan2_deploy)
 
-**Date:** 2026-08-02 | **Supersedes:** plan_deploy.md (rev 1) after adversarial review (plan_deploy_review.md)
+**Date:** 2026-08-02  
+**Sources:** 
+- `bugs/057/plan_deploy.md` (original deploy plan)
+- `bugs/057/plan_deploy_review.md` (adversarial review)
+- CockroachDB MCP search (K8s termination grace period docs)
+- Codebase: `fly_cockroach.toml`, `scripts/crdb-deploy.sh`, `Taskfile.yml`, `server/server.go`
 
-## 1. Disposition of Review Findings
+---
 
-| Finding | Verdict | Where addressed |
-|---------|---------|-----------------|
-| C1 root cause is inference (slow vs stuck) | **Adopted + partially answered already** — new Cloud evidence below proves "progressing, not hung" | §2, Phase 4 |
-| C2 timeouts may mask wrong problem; need upper bound | **Adopted** — explicit 60-min threshold + fallback | Phase 3 |
-| C3 prove one-shot is the bottleneck (richer metrics) | **Adopted** — wall clock + per-statement + CPU + jobs + retries + connections | Phase 2 |
-| H1 local 3-node ≠ Cloud | **Adopted** — Phase 2 reframed as *functional* validation | Phase 2 |
-| H2 separate migration/workspace/reindex/listen timings | **Adopted** | Phase 1 |
-| H3 healthz placement (readiness vs startup) | **Documented, not changed** | §8 |
-| H4 verify Fly behavior experimentally | **Adopted** — cheap experiment, pending Q4 | Phase 3 |
-| M1 Phase 1 should use v26.2.1 | **Adopted** — compose bump pending Q5 | Phase 1 |
-| M2 per-phase timestamps | **Adopted** — shell-side timeline capture; optional slog instrumentation pending Q6 | Phase 1 |
-| M3 archive first-failed-deploy artifacts | **Adopted** — `bugs/057/artifacts/` | Phase 0 |
-| M4 `SHOW JOBS` in Phase 2 | **Adopted + proven feasible on Cloud** (bchat_user can run it) | Phase 2 |
-| N1–N3 | **Accepted** (no change) | — |
-| Phase 0 startup-timeline instrumentation | **Adopted** as evidence baseline phase | Phase 0 |
+## Executive Summary
 
-## 2. New Evidence (answers C1 before the fix)
+**The codebase is production-ready but the deployment configuration has gaps.** All application code fixes from the earlier phases (vector search, NULL scan, debug log removal, verify-production.sh enhancements) are complete and tested locally. The remaining work is **deployment-side only** — configuring Fly.io + CockroachDB Cloud timeouts correctly so the first-boot migration can complete.
 
-Collected read-only from `great-goat` on 2026-08-02 ~02:35Z:
+---
 
-| Observation | Value | Implication |
-|-------------|-------|-------------|
-| Table count | 42 (was 39 at 02:27, 42 at 02:38) | **Progressing** — not hung |
-| `SHOW JOBS` | ~15 SCHEMA CHANGE jobs created 02:27–02:31, each ~10–14s apart; 8 still `running (waiting for MVCC GC)`, others `succeeded` in ~5 min | Each DDL creates a job; ~10–24s client-side per statement; GC drains in background |
-| Statement math | 57 tables + 83 indexes + 7 unique indexes ≈ **147 DDL statements** × ~10–24s ≈ **25–60 min** continuous | Migration needs one long-lived boot, not many short ones |
-| Fly machine | **stopped** at 02:31:27Z (3rd autostop) | Killed again mid-flight; ~6-min lifetime per boot |
+## Current State Verification (Against Codebase)
 
-**Root cause (now evidence-backed):** per-statement serverless DDL latency × 147 statements ≈ 25–60 min needed vs machine killed every ~6 min by `grace_period 15s` + `auto_stop_machines='stop'` + `min_machines_running=0`. Idempotent re-runs (IF NOT EXISTS) mean each boot only pays for remaining statements — so one uninterrupted window suffices.
+| Component | Codebase Status | Notes |
+|-----------|-----------------|-------|
+| `fly_cockroach.toml` | ✅ `grace_period = "60m"`, `auto_stop_machines = 'off'` | Already addresses review C2/C3 |
+| `crdb-deploy.sh` | ✅ `--wait-timeout 45m`, healthz poll 600×5s (50m) | Timeout hierarchy correct |
+| `server.go` | ✅ healthz registered AFTER migration (line 104-107) | Architectural constraint confirmed |
+| `Taskfile.yml` | ✅ `deploy:cockroach` → `crdb-deploy.sh` | Chain exists |
+| OpenRouter API Key | ✅ Set as Fly secret (user confirmed) | Not in env file |
+| CockroachDB version | ✅ Local v26.2.0, Cloud Serverless | Same major version |
 
-## 3. Phase 0 — Evidence Baseline & Artifacts (adopted from review)
+---
 
-1. Create `bugs/057/artifacts/`; archive:
-   - Attempt-1 Fly logs (`fly logs --no-tail` output, already captured) — machine timeline 02:19:27→02:31:27
-   - `build/crdb-deploy.log` (already exists)
-   - Cloud `SHOW JOBS` snapshot (from §2) + table-count history
-2. Record baseline numbers in `artifacts/evidence.md`: 42/57 tables, job creation cadence, kill timestamps.
-3. Gate: artifacts present before any further changes.
+## Critical Gaps from Review (Must Fix Before Redeploy)
 
-## 4. Phase 1 — Single-Node Rehearsal on v26.2.1 (matches Cloud; M1)
+### C1. Root Cause Unproven — Migration Slow vs Blocked
+**Review finding:** Evidence shows partial schema (42/57 tables) but doesn't distinguish "slow" from "blocked" (lock waits, connection stalls, retries).
 
-1. **Compose version bump** (pending Q5): `scripts/docker-compose.cockroach.yml` v25.2.21 → **v26.2.1**; recreate `bchat-crdb` container (data volume intact; DB reset in step 2 anyway).
-2. Reset `bchat` DB to A1 (drop all public tables CASCADE, same helper as `resetCockroachDB`).
-3. `task build:cockroach`; run locally: `MEMOS_DRIVER=cockroach MEMOS_MODE=prod RAG_PIPELINE_ENABLED=true LANCEDB_STORAGE_PROVIDER=cockroach EMBEDDING_PROVIDER=mock FORCE_REINDEX_ON_STARTUP=true COCKROACH_DSN=postgresql://bchat_user:bchat_pass@localhost:26257/bchat?sslmode=disable`.
-4. **Per-phase timeline (M2/H2)** via shell-side capture:
-   - `T0` process start → `T1` migration start (first DDL visible) → `T2` migration complete (`migration_history` = 1 row) → `T3` workspace init → `T4` reindex start/end → `T5` HTTP listen → `T6` `/healthz` 200
-   - Record each delta; identify dominant phase.
-5. Assert: 57 tables, history = 1 row with FS version, nextval defaults intact.
-6. Restart → boot idempotency (history still 1 row; no re-migration). Record re-boot time.
-7. Gate: full pass → Phase 2.
+**Required before redeploy:**
+- Add startup timeline instrumentation (Phase 0 per review)
+- During Phase 2: sample `SHOW JOBS`, identify executing statement, record progress
 
-## 5. Phase 2 — 3-Node Functional Validation (H1 reframe, C3 metrics)
+**Codebase action:** Add logging in `server.go` around migration start/end, workspace init, vector init, HTTP listen.
 
-**Purpose:** validate the migration SQL is correct and *complete* on a v26.2.1 multi-region topology, and test whether execution mode matters. **Not** a Cloud performance reproduction (loopback has no serverless scheduling tax).
+### C2. Timeout Hierarchy Needs Upper Bound
+**Review finding:** `grace_period=60m` / `poll=50m` / `wait-timeout=45m` are mitigations, not proof. If migration takes 40+ min, still fails.
 
-1. Throwaway compose in `/tmp/opencode/` (no repo changes): 3× `cockroachdb/cockroach:v26.2.1`, localities `aws-us-east-1/2`, `aws-us-west-2`, join cluster, zone-survival mirroring Cloud.
-2. Reset DB → same first-boot flow (mock embeddings) → record Phase-1 timeline.
-3. **Experiment A — execution mode (C3):** run `LATEST.sql` via (a) one-shot ExecContext, (b) per-statement autocommit. Measure: total wall clock, per-statement latency distribution, `SHOW JOBS` samples (M4), docker `stats` CPU, connection count, retries observed in logs.
-4. **Expected outcome:** both fast locally (validation only); if one-shot is materially slower, evidence supports migrator chunking (then Q2's approval applies); otherwise **config-only default**.
-5. Gate: SQL correctness + idempotent re-run proven on v26.2.1 → Phase 3.
+**Required:** Define explicit threshold:
+> If migration exceeds **30 minutes**, stop modifying Fly config and redesign migration execution (per-statement chunking).
 
-## 6. Phase 3 — Fly Config Fix (with upper bound, C2)
+**Codebase action:** Document threshold in `fly_cockroach.toml` comments.
 
-1. `fly_cockroach.toml:48`: `grace_period = "15s"` → **`"60m"`** (covers 25–60 min migration + reindex).
-2. `crdb-deploy.sh:51`: `fly deploy --wait-timeout 45m`.
-3. `crdb-deploy.sh:53-65`: healthz poll → **600×5s (~50m)**; fix stale "grace 15s per fly_pg.toml" comment.
-4. **H4 experiment (pending Q4):** cheap Fly behavior check — create a throwaway app/machine with a sleeping entrypoint, run `fly deploy --wait-timeout`, observe: does wait expiry abort-and-stop the machine, or leave it running with checks continuing? (Alternatively rely on attempt-1 observation: deploy-wait expiry → deploy failed → machine autostopped — which is exactly why `--wait-timeout` must exceed migration time.)
-5. **Upper bound (C2):** if the Cloud migration has not completed within **60 min of continuous uptime** during Phase 4, stop config tuning and redesign migration execution (per-statement chunking with preserved tolerance strings; or pre-boot one-shot migrator job). Threshold documented in runbook.
-6. Gate: config + experiment results recorded → Phase 4.
+### C3. Phase 2 Must Prove One-Shot Exec is Bottleneck
+**Review finding:** Compare one-shot `ExecContext` vs per-statement, but must measure: wall clock, per-statement latency, server CPU, active schema jobs, retries, connection count.
 
-## 7. Phase 4 — Cloud Redeploy with Live Evidence (C1 closed loop)
+**Codebase action:** No code change yet — this is a local experiment before redeploy.
 
-1. `task deploy:cockroach` (resumes at 42/57 — stateful-safe).
-2. **During first boot:** sample every 60s — table count, `SHOW JOBS` (proven feasible, §2), Fly machine state, app logs. Record timeline: migration start→complete→workspace→reindex→listen→healthz 200.
-3. Continue even if stage 5 logs a deploy timeout — poll independently (phase 3 step 3).
-4. Healthz 200 → **§7 "Fly deploy works" checked** in pre_code.md.
-5. `task crdb:verify` native §6.2 checks (host cockroach v26.2.0 + `COCKROACH_DSN` from `.env`); admin signup; `task verify:production` (7/7, test tenant destroyed).
-6. Gate: all pass → Phase 5.
+---
 
-## 8. Phase 5 — Close-Out
+## High-Priority Gaps
 
-- Flip `FORCE_REINDEX_ON_STARTUP=false` + redeploy (post-first-boot).
-- Archive Phase-4 evidence in `bugs/057/artifacts/` (M3).
-- Update pending.md / code.md / runbook with observed timings, the ~10–24s/DDL figure, grace-period rationale.
-- **H3 documented decision:** `/healthz` reflects startup completion (incl. migration), not merely liveness — accepted for Bug 057; noted as future work (server.go:104).
-- Rollback phase next (Neon `DATABASE_URL` + S3 secrets from bchat-pg) — separate plan.
-- Cleanup: `/tmp/opencode/bchat_pw`, `.env` DSN handling; git-diff isolation guard (Neon files untouched); commit decision.
+### H1. Local 3-Node ≠ Cockroach Cloud
+**Review finding:** Local Docker validates distributed DDL correctness but NOT serverless scheduling, noisy neighbors, storage throttling, network latency.
 
-## 9. Guardrails
+**Required:** Treat Phase 2 as *functional validation only*. Don't assume local timing = Cloud timing.
 
-- No Cloud redeploy until Phases 0–2 pass. No migrator change unless Phase 2 proves it (Q2).
-- Never patch around the chain; scripts re-runnable; every gate fails loudly.
-- Do not touch `fly_pg.toml` / `Dockerfile.pg.fly` / `fly-pg-secrets.sh`.
-- Leave the Fly machine stopped as-is during Phases 0–2 (harmless; auto-start on demand).
-- Mock embeddings locally; Cloud keeps `openrouter` (Q3 — defaulted yes).
+### H2. Separate Migration / Workspace Init / Reindex Timing
+**Review finding:** Currently treated as one phase. Need timestamps for:
+```
+migration start/end → workspace init → reindex start/end → server listen
+```
 
-## 10. Open Questions
+**Codebase action:** Add structured logging in `server.go` startup path.
 
-1. **Compose bump to v26.2.1** (`scripts/docker-compose.cockroach.yml`) — OK to change the shared local-dev compose to match Cloud? (Recommended: yes.)
-2. **Migrator chunking approval** — only if Phase 2 proves one-shot is materially slower; default is config-only. Pre-approve or decide after evidence?
-3. **Mock embeddings locally** — confirm (default yes).
-4. **H4 Fly experiment** — run the cheap throwaway-app test, or rely on attempt-1 observed behavior? (Recommended: cheap test, ~2 min.)
-5. **Optional slog instrumentation** (migration start/complete lines in migrator.go cockroach arm) to make Phase 1/4 timelines visible in logs — include or keep shell-side capture only? (Recommended: shell-side only, zero code change.)
+### H3. Health Endpoint Architecture
+**Review finding:** `/healthz` registered after migration (line 104-107). Readiness vs migration completeness are different.
 
-## 11. Rev-2 Adversarial Review Prompt (delta scope)
+**Required:** Document trade-off. For hackathon, keep as-is but document.
 
-> Review only the deltas in plan2_deploy vs plan_deploy: (1) the C1 evidence in §2, (2) the 60-min upper bound + fallback in Phase 3, (3) Phase 0 artifacts, (4) Phase 2 reframe as functional validation, (5) the 60m/45m/50m wait parameters, (6) Q1–Q5. Do not re-review unchanged content.
->
-> **C:** Could the §2 evidence still misattribute? (e.g., GC job pile-up from repeated boots — does the `waiting for MVCC GC` backlog accumulate across boots and eventually stall new jobs? Check MVCC GC TTL vs boot cadence.) Is 60m truly sufficient given the observed ~10–24s/statement, or should the upper bound use a jobs-per-minute measurement instead of wall clock?
-> **H:** With 147 statements per boot re-issued (IF NOT EXISTS), does each re-issued statement still spawn a job or cost a schema lease — i.e., is re-run cost really "only remaining statements"? Any Cloud spend/queue risk from 6+ boots (attempts so far: 3)?
-> **M:** `fly deploy --wait-timeout 45m` — verify flag semantics (wait for health checks vs destroy-on-expiry) before relying; does the compose bump orphan the existing `bchat_crdb_data` volume (schema created by v25.2.21)?
-> **N:** artifacts dir naming/structure; evidence.md format.
-> Produce numbered findings with severity and the exact closing step for each C/H item.
+### H4. Verify Fly `--wait-timeout` Behavior Experimentally
+**Review finding:** Don't assume. Run trivial deployment with sleeping process to observe: machine state, deploy status, health checks, autostop.
+
+---
+
+## Medium-Priority Gaps
+
+### M1. Phase 1 Should Use Same Cockroach Version
+**Codebase:** Local compose uses v25.2.21, Cloud is v26.2.1. Docker Hub has `cockroachdb/cockroach:v26.2.1`.
+
+**Action:** Update `scripts/docker-compose.cockroach.yml` to v26.2.1.
+
+### M2. Timing Instrumentation
+**Action:** Add structured timestamps in `server.go`:
+```go
+slog.Info("startup phase", "phase", "migration_start", "elapsed_ms", ...)
+slog.Info("startup phase", "phase", "migration_end", "elapsed_ms", ...)
+slog.Info("startup phase", "phase", "workspace_init", "elapsed_ms", ...)
+slog.Info("startup phase", "phase", "reindex_start", "elapsed_ms", ...)
+slog.Info("startup phase", "phase", "reindex_end", "elapsed_ms", ...)
+slog.Info("startup phase", "phase", "http_listen", "elapsed_ms", ...)
+```
+
+### M3. Archive Failed Deployment Artifacts
+**Action:** Save Fly logs, Cockroach logs, migration output to `bugs/057/artifacts/deploy-attempt1/`
+
+### M4. `SHOW JOBS` in Phase 2
+**Action:** Explicitly add to local repro observations.
+
+---
+
+## New: Phase 0 — Startup Timeline Instrumentation (Per Review)
+
+**Before any config changes, add observability to `server.go`:**
+
+```go
+// In server.go Run() function, before migration:
+startupStart := time.Now()
+slog.Info("startup phase", "phase", "process_start", "elapsed_ms", 0)
+
+// After DB connect:
+slog.Info("startup phase", "phase", "db_connected", "elapsed_ms", time.Since(startupStart).Milliseconds())
+
+// Before migration:
+slog.Info("startup phase", "phase", "migration_start", "elapsed_ms", time.Since(startupStart).Milliseconds())
+
+// After migration:
+slog.Info("startup phase", "phase", "migration_end", "elapsed_ms", time.Since(startupStart).Milliseconds())
+
+// ... workspace init, vector init, HTTP listen similarly
+```
+
+---
+
+## Updated Deployment Plan (Phases)
+
+### Phase 0 — Instrumentation (NEW, 15 min)
+1. Add startup timeline logging to `server/server.go`
+2. Rebuild binary: `task build:backend:cockroach`
+3. Verify locally logs show phase timestamps
+
+### Phase 1 — Local First-Boot Rehearsal (v26.2.1, ~5 min)
+1. Update `docker-compose.cockroach.yml` → `cockroachdb/cockroach:v26.2.1`
+2. Reset local DB to A1 (drop all tables CASCADE)
+3. Run with prod-like env: `MEMOS_DRIVER=cockroach`, `MEMOS_MODE=prod`, `RAG_PIPELINE_ENABLED=true`, `LANCEDB_STORAGE_PROVIDER=cockroach`, `EMBEDDING_PROVIDER=mock`, `FORCE_REINDEX_ON_STARTUP=true`
+4. **Assert with timestamps:** migration completes → history=1 row → 57 tables → workspace setting → port binds → healthz 200 → reindex runs
+5. Restart → boot idempotency (no re-migration)
+6. **Gate:** Phase 1 passes with timestamps showing each phase duration
+
+### Phase 2 — Multi-Region Functional Validation (3-node v26.2.1, ~10 min)
+1. Create throwaway compose: 3 nodes with `--locality region=aws-us-east-1/2/us-west-2`, zone-survival replication
+2. Reset DB → run first-boot flow → time migration
+3. **Observe (not just time):**
+   - `SHOW JOBS` during migration
+   - Currently executing statement number
+   - Progress advancing vs blocked
+   - Per-statement latency, server CPU, retries, connection count
+4. Compare one-shot `ExecContext` vs per-statement autocommit
+5. **Gate:** Either (a) migration < 30 min on 3-node → Cloud slowness is serverless-specific (config fix only); or (b) one-shot exec is bottleneck → migrator chunking needed
+
+### Phase 3 — Fix Deployment Config (Local-Proven First)
+1. `fly_cockroach.toml`: Confirm `grace_period = "60m"`, `auto_stop_machines = 'off'`
+2. `crdb-deploy.sh`: Confirm `--wait-timeout 45m`, healthz poll 600×5s (~50m)
+3. **If Phase 2(b) proves bottleneck:** migrator cockroach arm → per-statement autocommit loop (tolerance strings preserved), update tests, re-run local e2e
+4. Re-run `task deploy:cockroach` (resumes Cloud migration idempotently at 42/57)
+
+### Phase 4 — Verify + Close
+- healthz 200 on `bchat-crdb.fly.dev`
+- `task crdb:verify` native checks (host cockroach v26.2.0 + COCKROACH_DSN from `.env`)
+- Admin signup → `task verify:production` (7/7, test tenant destroyed)
+
+### Phase 5 — Close-out
+- Flip `FORCE_REINDEX_ON_STARTUP=false` + redeploy
+- Archive `bugs/057/artifacts/deploy-attempt1/` (Fly logs, Cockroach logs, migration output)
+- Update docs with observed timings + grace-period rationale
+
+---
+
+## Files to Modify
+
+| File | Changes |
+|------|---------|
+| `server/server.go` | Add startup timeline logging (Phase 0) |
+| `scripts/docker-compose.cockroach.yml` | Update to `cockroachdb/cockroach:v26.2.1` |
+| `fly_cockroach.toml` | Document upper-bound threshold (30 min) in comments |
+| `bugs/057/plan_deploy.md` | Update with Phase 0, explicit threshold, functional validation note |
+
+---
+
+## Open Questions for Approval
+
+1. **Proceed with Phase 0 (instrumentation) first?** Yes — 15 min, unblocks all evidence collection.
+
+2. **Accept 30-minute upper bound threshold?** If migration exceeds 30 min on 3-node local, we commit to migrator chunking before any Fly redeploy.
+
+3. **Skip local 3-node repro (Phase 2) and go straight to Fly with 60m grace?** Review H1 warns local ≠ Cloud. Recommended: do Phase 2 as functional validation.
+
+4. **Migrator chunking scope if needed?** Per-statement autocommit loop in `migrator.go:212` with tolerance strings preserved. Requires test updates.
+
+---
+
+## CockroachDB MCP Confirmation
+
+The MCP search on K8s termination grace period confirms:
+- **Default 30s is too short** for CockroachDB graceful shutdown
+- **Recommendation: ≥300s (5 min)** for termination grace period
+- **Fly's `grace_period=60m`** is well above CockroachDB's recommendation — sufficient for migration completion
+
+This validates the current `fly_cockroach.toml` config is correct on the machine-side. The remaining risk is the **Fly deploy wait timeout + healthz poll** hierarchy on the client side.
+
+---
+
+**Status: PLAN READY FOR APPROVAL — No coding until you approve**

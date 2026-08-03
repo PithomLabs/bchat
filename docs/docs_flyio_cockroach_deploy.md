@@ -25,7 +25,7 @@ Multi-region Basic clusters are created **in the Cockroach Cloud Console only** 
 3. DSN: `postgresql://user:pass@<cluster>-<id>.<org>.crdb.cloud:26257/bchat?sslmode=verify-full` (CA is Let's Encrypt — system roots suffice).
 4. Vector index: default `true` on stable (v26.x); set explicitly on v25.x:
    `cockroach sql --url "$COCKROACH_DSN" -e "SET CLUSTER SETTING feature.vector_index.enabled = true;"` (no-op on v26).
-5. `task crdb:init` prints the same guided flow.
+5. `task crdb:cluster:bootstrap` prints the guided flow.
 
 Automated post-creation steps (cluster must already exist): `deploy/ccloud/setup.sh` (user, allowlist, DSN).
 

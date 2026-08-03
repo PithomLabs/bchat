@@ -2,11 +2,13 @@
 # =============================================================================
 # Pre-deployment environment chain validation
 # Validates: .env → Dockerfile → fly.toml → fly secrets
+# Usage: ./scripts/validate-env-chain.sh [toml-file]
 # =============================================================================
 
 set -e
 
 # Configuration
+TOML_FILE="${1:-fly.toml}"
 SENSITIVE_VARS="OPENROUTER_API_KEY ENCRYPTION_MASTER_KEY"
 LOCAL_ONLY_VARS="LANCEDB_LOCAL_PATH"
 S3_ONLY_VARS="LANCEDB_S3_ENDPOINT LANCEDB_S3_REGION LANCEDB_S3_BUCKET"
@@ -48,16 +50,16 @@ done < .env
 echo "   Found ${#ENV_VARS[@]} variables"
 
 # -----------------------------------------------------------------------------
-# Step 2: Determine which Dockerfile to check from fly.toml
+# Step 2: Determine which Dockerfile to check from TOML file
 # -----------------------------------------------------------------------------
 echo ""
-echo "Step 2: Determining Dockerfile from fly.toml..."
-if [ ! -f fly.toml ]; then
-    echo -e "${RED}ERROR: fly.toml not found${NC}"
+echo "Step 2: Determining Dockerfile from $TOML_FILE..."
+if [ ! -f "$TOML_FILE" ]; then
+    echo -e "${RED}ERROR: $TOML_FILE not found${NC}"
     exit 1
 fi
 
-DOCKERFILE=$(grep -E '^\s*dockerfile\s*=' fly.toml | head -1 | sed -E "s/^\s*dockerfile\s*=\s*['\"]//; s/['\"]\s*$//")
+DOCKERFILE=$(grep -E '^\s*dockerfile\s*=' "$TOML_FILE" | head -1 | sed -E "s/^\s*dockerfile\s*=\s*['\"]//; s/['\"]\s*$//")
 if [ -z "$DOCKERFILE" ]; then
     echo -e "${RED}ERROR: No dockerfile specified in fly.toml [build]${NC}"
     exit 1
@@ -97,10 +99,10 @@ done < "$DOCKERFILE"
 echo "   Found ${#DOCKER_VARS[@]} ENV declarations"
 
 # -----------------------------------------------------------------------------
-# Step 4: Read fly.toml [env] vars
+# Step 4: Read TOML file [env] vars
 # -----------------------------------------------------------------------------
 echo ""
-echo "Step 4: Reading fly.toml [env] section..."
+echo "Step 4: Reading $TOML_FILE [env] section..."
 declare -A TOML_VARS
 IN_ENV_SECTION=0
 while IFS= read -r line; do
@@ -120,7 +122,7 @@ while IFS= read -r line; do
             TOML_VARS["$key"]="$value"
         fi
     fi
-done < fly.toml
+done < "$TOML_FILE"
 echo "   Found ${#TOML_VARS[@]} variables"
 
 # -----------------------------------------------------------------------------
@@ -145,10 +147,10 @@ echo ""
 echo "=== Validation Results ==="
 
 # -----------------------------------------------------------------------------
-# Check 6a: Non-sensitive .env vars should be in Dockerfile AND fly.toml with matching values
+# Check 6a: Non-sensitive .env vars should be in Dockerfile AND TOML file with matching values
 # -----------------------------------------------------------------------------
 echo ""
-echo "Check: .env -> Dockerfile + fly.toml (non-sensitive vars)"
+echo "Check: .env -> Dockerfile + $TOML_FILE (non-sensitive vars)"
 ENV_CHECK_ERRORS=0
 for key in "${!ENV_VARS[@]}"; do
     env_val="${ENV_VARS[$key]}"
@@ -178,20 +180,20 @@ for key in "${!ENV_VARS[@]}"; do
         ENV_CHECK_ERRORS=$((ENV_CHECK_ERRORS + 1))
     fi
 
-    # Check fly.toml
+    # Check TOML file
     if [ -z "${TOML_VARS[$key]+x}" ]; then
-        echo -e "  ${RED}MISSING in fly.toml: $key${NC}"
+        echo -e "  ${RED}MISSING in $TOML_FILE: $key${NC}"
         ERRORS=$((ERRORS + 1))
         ENV_CHECK_ERRORS=$((ENV_CHECK_ERRORS + 1))
     elif [ "${TOML_VARS[$key]}" != "$env_val" ]; then
-        echo -e "  ${RED}VALUE MISMATCH (.env vs fly.toml): $key${NC}"
-        echo "    .env:     $env_val"
-        echo "    fly.toml: ${TOML_VARS[$key]}"
+        echo -e "  ${RED}VALUE MISMATCH (.env vs $TOML_FILE): $key${NC}"
+        echo "    .env:       $env_val"
+        echo "    $TOML_FILE: ${TOML_VARS[$key]}"
         ERRORS=$((ERRORS + 1))
         ENV_CHECK_ERRORS=$((ENV_CHECK_ERRORS + 1))
     fi
 done
-[ $ENV_CHECK_ERRORS -eq 0 ] && echo -e "  ${GREEN}All .env vars properly reflected in Dockerfile and fly.toml${NC}"
+[ $ENV_CHECK_ERRORS -eq 0 ] && echo -e "  ${GREEN}All .env vars properly reflected in Dockerfile and $TOML_FILE${NC}"
 
 # -----------------------------------------------------------------------------
 # Check 6b: Sensitive vars must be in fly secrets
@@ -214,7 +216,7 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Check 6c: Sensitive vars must NOT be in Dockerfile or fly.toml (security)
+# Check 6c: Sensitive vars must NOT be in Dockerfile or TOML file (security)
 # -----------------------------------------------------------------------------
 echo ""
 echo "Check: Sensitive vars NOT exposed (security)"
@@ -226,7 +228,7 @@ for var in $SENSITIVE_VARS; do
         SECURITY_OK=0
     fi
     if [ -n "${TOML_VARS[$var]+x}" ]; then
-        echo -e "  ${RED}SECURITY: $var exposed in fly.toml!${NC}"
+        echo -e "  ${RED}SECURITY: $var exposed in $TOML_FILE!${NC}"
         ERRORS=$((ERRORS + 1))
         SECURITY_OK=0
     fi
