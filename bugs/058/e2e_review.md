@@ -174,13 +174,13 @@ echo "$I" | grep -qv "^0" || { echo "FAIL: agent_vectors has no indexes"; exit 1
 **Severity:** Medium  
 **Type:** Documentation gap
 
-The `verify-production.sh` script requires a valid admin user (`BCHAT_USER=admin BCHAT_PASS=admin123`), but `e2e.md` does not include a step to create this user. On a fresh database, the sign-in step fails with `400 invalid credentials`.
+The `verify-production.sh` script requires a valid admin user (`BCHAT_USER=admin BCHAT_PASS=<your-password>`), but `e2e.md` does not include a step to create this user. On a fresh database, the sign-in step fails with `400 invalid credentials`.
 
 **Workaround:** Create admin user via sign-up before running `verify-production.sh`:
 ```bash
 curl -fsS -c /tmp/cookie.txt -b /tmp/cookie.txt \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin123"}' \
+  -d '{"username":"admin","password":"<your-password>"}' \
   http://localhost:8081/api/v1/auth/signup
 ```
 

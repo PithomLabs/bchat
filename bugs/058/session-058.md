@@ -1349,7 +1349,7 @@ Now let me read the remaining plan files.
 238: # 3. Full local E2E
 239: export BCHAT_URL=http://localhost:5230
 240: export BCHAT_USER=admin
-241: export BCHAT_PASS=memos
+241: export BCHAT_PASS=<redacted>
 242: bash scripts/verify-production.sh --keep
 243: # All 7 steps PASS
 244: 
@@ -1375,7 +1375,7 @@ Now let me read the remaining plan files.
 264: # Golden State Checklist
 265: export BCHAT_URL=https://bchat-crdb.fly.dev
 266: export BCHAT_USER=admin
-267: export BCHAT_PASS=memos
+267: export BCHAT_PASS=<redacted>
 268: bash scripts/verify-production.sh --keep
 269: # All 7 steps PASS
 270: 
@@ -8256,7 +8256,7 @@ task crdb:verify
 # 7. Full E2E smoke
 export BCHAT_URL=http://localhost:5230
 export BCHAT_USER=admin
-export BCHAT_PASS=memos
+export BCHAT_PASS=<redacted>
 bash scripts/verify-production.sh --keep
 ```
 

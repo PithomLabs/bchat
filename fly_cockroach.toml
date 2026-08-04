@@ -20,8 +20,8 @@ primary_region = 'sjc'
   LLM_MODEL = "openrouter/free"
   LLM_MODEL_REASONING = "openrouter/free"
   LLM_VERIFIER_ENABLED = 'false'
-  # Initial A1 reindex only — set to 'false' after the first successful boot
-  FORCE_REINDEX_ON_STARTUP = 'true'
+  # First-boot reindex completed — disabled to avoid full reindex on every restart
+  FORCE_REINDEX_ON_STARTUP = 'false'
   RAG_STARTUP_REINDEX_DISABLED = 'true'
   TZ = 'UTC'
 
@@ -33,13 +33,9 @@ primary_region = 'sjc'
 [http_service]
   internal_port = 5230
   force_https = true
-  # CRITICAL (bugs/057 artifacts/dryrun): auto_stop_machines='stop' kills the
-  # machine ~5 min after the last active HTTP connection — during first-boot
-  # migration the app has no listener yet, so grace_period never protects it
-  # (attempt-1 died at ~6 min from autostop, not from health-check failures).
-  # 'off' keeps the machine alive through the ~25-60 min Cloud migration.
-  # Flip back to 'stop' after first successful boot (Phase 5).
-  auto_stop_machines = 'off'
+  # Phase 5: first-boot migration and reindex confirmed working.
+  # 'stop' allows machine to sleep when idle (cost savings).
+  auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
   processes = ['app']

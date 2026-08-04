@@ -2675,7 +2675,7 @@ Plan step: admin signup before verify:production. Creating the admin via API:
 **Input:**
 ```json
 {
-  "command": "curl -s -X POST https://bchat-crdb.fly.dev/api/v1/auth/signup -H \"Content-Type: application/json\" -d '{\"username\":\"admin\",\"password\":\"Memos@2026-admin\",\"email\":\"admin@bchat.local\"}' | head -c 300; echo",
+  "command": "curl -s -X POST https://bchat-crdb.fly.dev/api/v1/auth/signup -H \"Content-Type: application/json\" -d '{\"username\":\"admin\",\"password\":\"<redacted>\",\"email\":\"admin@bchat.local\"}' | head -c 300; echo",
   "timeout": 60000
 }
 ```
@@ -3352,7 +3352,7 @@ I should add a guard to the test or document it. Let me first re-create the admi
 **Input:**
 ```json
 {
-  "command": "curl -s -X POST https://bchat-crdb.fly.dev/api/v1/auth/signup -H \"Content-Type: application/json\" -d '{\"username\":\"admin\",\"password\":\"Memos@2026-admin\",\"email\":\"admin@bchat.local\"}' | head -c 120; echo",
+  "command": "curl -s -X POST https://bchat-crdb.fly.dev/api/v1/auth/signup -H \"Content-Type: application/json\" -d '{\"username\":\"admin\",\"password\":\"<redacted>\",\"email\":\"admin@bchat.local\"}' | head -c 120; echo",
   "timeout": 60000
 }
 ```
@@ -3372,7 +3372,7 @@ I should add a guard to the test or document it. Let me first re-create the admi
 **Input:**
 ```json
 {
-  "command": "cd /home/chaschel/Documents/go/bchat && BCHAT_URL=https://bchat-crdb.fly.dev BCHAT_USER=admin BCHAT_PASS=\"Memos@2026-admin\" timeout 600 bash scripts/verify-production.sh 2>&1 | tail -20",
+  "command": "cd /home/chaschel/Documents/go/bchat && BCHAT_URL=https://bchat-crdb.fly.dev BCHAT_USER=admin BCHAT_PASS=\"<redacted>\" timeout 600 bash scripts/verify-production.sh 2>&1 | tail -20",
   "timeout": 630000
 }
 ```
@@ -3397,7 +3397,7 @@ curl: (22) The requested URL returned error: 400
 **Input:**
 ```json
 {
-  "command": "curl -s -X POST https://bchat-crdb.fly.dev/api/v1/auth/signin -H \"Content-Type: application/json\" -d '{\"username\":\"admin\",\"password\":\"Memos@2026-admin\"}' | head -c 300; echo",
+  "command": "curl -s -X POST https://bchat-crdb.fly.dev/api/v1/auth/signin -H \"Content-Type: application/json\" -d '{\"username\":\"admin\",\"password\":\"<redacted>\"}' | head -c 300; echo",
   "timeout": 60000
 }
 ```

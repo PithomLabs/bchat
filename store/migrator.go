@@ -222,6 +222,11 @@ func (s *Store) preMigrate(ctx context.Context) error {
 					return errors.Errorf("failed to execute SQL file %s, err %s", filePath, err)
 				}
 			}
+			// Verify critical unique indexes exist after LATEST.sql execution.
+			// On CRDB Cloud Serverless, CREATE UNIQUE INDEX can time out during
+			// DDL backfills, leaving tables without constraints needed for
+			// ON CONFLICT upserts (SQLSTATE 42P10). See bugs/058.
+			s.verifyCockroachIndexes(ctx)
 		} else {
 			// Start a transaction to apply the latest schema.
 			tx, err := s.driver.GetDB().Begin()
@@ -253,6 +258,120 @@ func (s *Store) preMigrate(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// cockroachRequiredUniqueIndexes lists unique indexes that MUST exist for
+// ON CONFLICT upserts to work. If any are missing after LATEST.sql execution
+// (common on CRDB Cloud Serverless where DDL backfills can time out), the
+// verification step retries their creation and logs warnings.
+var cockroachRequiredUniqueIndexes = []struct {
+	Name  string
+	Table string
+	DDL   string
+}{
+	{
+		Name:  "idx_reindex_checkpoint_tenant_audience",
+		Table: "agent_reindex_checkpoints",
+		DDL:   "CREATE UNIQUE INDEX IF NOT EXISTS idx_reindex_checkpoint_tenant_audience ON agent_reindex_checkpoints(tenant_id, audience, file_type, version)",
+	},
+	{
+		Name:  "idx_rag_active_version_lookup",
+		Table: "agent_rag_active_versions",
+		DDL:   "CREATE UNIQUE INDEX IF NOT EXISTS idx_rag_active_version_lookup ON agent_rag_active_versions(tenant_id, audience_type, file_type)",
+	},
+	{
+		Name:  "idx_tickets_beads_id",
+		Table: "tickets",
+		DDL:   "CREATE UNIQUE INDEX IF NOT EXISTS idx_tickets_beads_id ON tickets(beads_id) WHERE beads_id IS NOT NULL",
+	},
+	{
+		Name:  "idx_tickets_creator_description_memo",
+		Table: "tickets",
+		DDL:   "CREATE UNIQUE INDEX IF NOT EXISTS idx_tickets_creator_description_memo ON tickets(creator_id, description) WHERE description LIKE '/m/%'",
+	},
+	{
+		Name:  "idx_bridge_handoffs_one_active",
+		Table: "bridge_handoffs",
+		DDL:   "CREATE UNIQUE INDEX IF NOT EXISTS idx_bridge_handoffs_one_active ON bridge_handoffs(external_session_id) WHERE active = TRUE",
+	},
+	{
+		Name:  "idx_agent_integrations_tenant_type",
+		Table: "agent_integrations",
+		DDL:   "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_integrations_tenant_type ON agent_integrations(tenant_id, integration_type)",
+	},
+}
+
+// verifyCockroachIndexes checks that all required unique indexes exist after
+// LATEST.sql execution. On CRDB Cloud Serverless, DDL backfills can time out,
+// leaving tables without unique constraints. This causes ON CONFLICT upserts
+// to fail with SQLSTATE 42P10. This function detects and repairs missing indexes.
+func (s *Store) verifyCockroachIndexes(ctx context.Context) {
+	db := s.driver.GetDB()
+
+	// Query existing unique indexes
+	rows, err := db.QueryContext(ctx, `
+		SELECT index_name FROM [SHOW INDEXES] WHERE non_unique = false AND index_name != 'primary'
+	`)
+	if err != nil {
+		slog.Warn("cockroach index verification: failed to list indexes",
+			"error", err,
+			"hint", "Will attempt to create all required indexes")
+		// If we can't list indexes, try creating all of them (IF NOT EXISTS is idempotent)
+		for _, idx := range cockroachRequiredUniqueIndexes {
+			if _, err := db.ExecContext(ctx, idx.DDL); err != nil {
+				slog.Warn("cockroach index verification: failed to create index",
+					"index", idx.Name,
+					"table", idx.Table,
+					"error", err)
+			} else {
+				slog.Info("cockroach index verification: created missing index",
+					"index", idx.Name,
+					"table", idx.Table)
+			}
+		}
+		return
+	}
+	defer rows.Close()
+
+	existing := make(map[string]bool)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			continue
+		}
+		existing[name] = true
+	}
+
+	// Check for missing indexes and retry creation
+	var missing int
+	for _, idx := range cockroachRequiredUniqueIndexes {
+		if !existing[idx.Name] {
+			missing++
+			slog.Warn("cockroach index verification: missing unique index",
+				"index", idx.Name,
+				"table", idx.Table,
+				"hint", "Retrying CREATE INDEX IF NOT EXISTS")
+			if _, err := db.ExecContext(ctx, idx.DDL); err != nil {
+				slog.Error("cockroach index verification: failed to create missing index",
+					"index", idx.Name,
+					"table", idx.Table,
+					"error", err)
+			} else {
+				slog.Info("cockroach index verification: created missing index",
+					"index", idx.Name,
+					"table", idx.Table)
+			}
+		}
+	}
+
+	if missing == 0 {
+		slog.Info("cockroach index verification: all required unique indexes present",
+			"count", len(cockroachRequiredUniqueIndexes))
+	} else {
+		slog.Warn("cockroach index verification: checked and repaired missing indexes",
+			"total", len(cockroachRequiredUniqueIndexes),
+			"missing", missing)
+	}
 }
 
 func (s *Store) getMigrationBasePath() string {

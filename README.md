@@ -2,7 +2,7 @@
 
 Multi-tenant AI chat agent platform. Each tenant gets a configurable agent powered by LLMs, with optional RAG for knowledge-grounded responses.
 
-Built on [Memos](https://github.com/usememos/memos) with [OpenRouter](https://openrouter.ai/) for LLM access and [LanceDB](https://lancedb.com/) for vector search.
+Built on [Memos](https://github.com/usememos/memos) with [OpenRouter](https://openrouter.ai/) for LLM access, and [LanceDB](https://lancedb.com/) or CockroachDB native vector columns for RAG vector search.
 
 ---
 
@@ -41,7 +41,7 @@ bchat is a multi-tenant AI chat agent platform. A single deployment powers unlim
 | Frontend | React 18, TypeScript, MobX, Vite |
 | UI | Joy UI (@mui/joy) |
 | LLM | OpenRouter API |
-| Vector DB | LanceDB (optional, for RAG) |
+| Vector DB | LanceDB (local/S3) or CockroachDB native vector columns |
 | Embeddings | OpenRouter text-embedding-3-small, local, or mock |
 
 ### Business Guide
@@ -238,7 +238,7 @@ EMBEDDING_PROVIDER=openrouter      # openrouter|local|mock
 EMBEDDING_MODEL=text-embedding-3-small
 EMBEDDING_BATCH_SIZE=10
 EMBEDDING_TIMEOUT=180s
-LANCEDB_STORAGE_PROVIDER=local     # local|s3
+LANCEDB_STORAGE_PROVIDER=local     # local|s3|cockroach
 LANCEDB_LOCAL_PATH=build/data/lancedb
 HYBRID_SEARCH_ENABLED=true         # Vector (70%) + BM25 (30%)
 ```

@@ -219,7 +219,7 @@ task crdb:verify
 # 7. Full E2E smoke test
 export BCHAT_URL=http://localhost:5230
 export BCHAT_USER=admin
-export BCHAT_PASS=memos
+export BCHAT_PASS=<redacted>
 bash scripts/verify-production.sh --keep
 ```
 

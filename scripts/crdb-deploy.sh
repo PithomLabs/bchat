@@ -52,7 +52,7 @@ fi
 # A wait-timeout expiry mid-migration is EXPECTED (stage-5 is informational only —
 # fly abandons waiting, the machine keeps migrating). Stage 6 decides success.
 stage "5/7 fly deploy (--wait-timeout 45m; informational)"
-if ! fly -a "$APP" deploy -c fly_cockroach.toml --wait-timeout 45m >>"$LOG" 2>&1; then
+if ! fly -a "$APP" deploy -c fly_cockroach.toml --ignorefile .dockerignore.cockroach --wait-timeout 45m 2>&1 | tee -a "$LOG"; then
   echo "--- fly deploy wait timed out (expected mid-migration) — continuing to stage 6 (authoritative poll)" | tee -a "$LOG"
 fi
 
@@ -72,6 +72,10 @@ done
 
 # 7. Production-facing verification (bugs/057 §6.2 + §6.3)
 stage "7/7 crdb:verify + verify:production"
+# Source credentials for verify:production (fly secrets are NOT readable at deploy time)
+if [ -f .env ]; then
+  set -a && . .env && set +a
+fi
 task crdb:verify >>"$LOG" 2>&1 || fail "crdb:verify (bugs/057 §6.2)"
 task verify:production >>"$LOG" 2>&1 || fail "verify:production (bugs/057 §6.3)"
 

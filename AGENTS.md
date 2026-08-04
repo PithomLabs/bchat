@@ -28,7 +28,7 @@ The chat agent must be **GENERAL PURPOSE**, not tenant-specific.
 | Frontend | React 18, TypeScript, MobX, Vite |
 | UI Components | Joy UI (@mui/joy) |
 | LLM Provider | OpenRouter API |
-| Vector Database | LanceDB (optional, for RAG) |
+| Vector Database | LanceDB (local/S3) or CockroachDB native vector columns |
 | Postgres Driver | pgx/v5 (sole driver — `lib/pq` is NOT used and must not be added) |
 | Embeddings | OpenRouter text-embedding-3-small, local sentence-transformers, or mock |
 
@@ -50,6 +50,7 @@ bchat/
 │           ├── parser.go       # KB/Policy/Script parsing
 │           ├── vectordb.go     # Vector database interface
 │           ├── vectordb_lance.go # LanceDB implementation
+│           ├── vectordb_cockroach.go # CockroachDB native vector implementation
 │           ├── embedding.go    # Embedding providers
 │           ├── chunker.go      # Document chunking
 │           ├── observer.go     # Observational memory
@@ -224,9 +225,11 @@ For detailed implementation patterns, see [Security Guidelines](#security-guidel
 ### Architecture
 
 ```
-Document Upload → Chunker → Embedding → LanceDB → [Query Time]
-                                                      ↓
-User Query → Embed → Vector Search → Top-K → LLM Prompt
+Document Upload → Chunker → Embedding → VectorDB → [Query Time]
+                           ↓                        ↓
+                    LanceDB (local/S3)    CockroachDB (native VECTOR columns)
+                           ↓                        ↓
+                    User Query → Embed → Vector Search → Top-K → LLM Prompt
 ```
 
 ### Key Components
@@ -237,6 +240,7 @@ User Query → Embed → Vector Search → Top-K → LLM Prompt
 | [`embedding.go`](server/router/api/v1/agent/embedding.go) | Embedding providers (openrouter, local, mock) |
 | [`vectordb.go`](server/router/api/v1/agent/vectordb.go) | Vector database interface |
 | [`vectordb_lance.go`](server/router/api/v1/agent/vectordb_lance.go) | LanceDB implementation |
+| [`vectordb_cockroach.go`](server/router/api/v1/agent/vectordb_cockroach.go) | CockroachDB native vector implementation |
 
 ### Embedding Providers
 
@@ -330,7 +334,7 @@ EMBEDDING_PROVIDER=openrouter
 EMBEDDING_MODEL=text-embedding-3-small
 EMBEDDING_BATCH_SIZE=10
 EMBEDDING_TIMEOUT=180s
-LANCEDB_STORAGE_PROVIDER=local
+LANCEDB_STORAGE_PROVIDER=local     # local|s3|cockroach
 LANCEDB_LOCAL_PATH=build/data/lancedb
 ```
 
@@ -354,6 +358,28 @@ LLM_VERIFIER_ENABLED=true      # Enable LLM verification
 # for Neon pgbouncer compatibility. No manual DSN tuning needed.
 DATABASE_URL="postgresql://user:pass@host/db?sslmode=require"
 ```
+
+### CockroachDB Configuration
+```bash
+# Driver selection
+MEMOS_DRIVER=cockroach
+
+# Vector storage (replaces LanceDB with native CRDB vector support)
+LANCEDB_STORAGE_PROVIDER=cockroach
+COCKROACH_DSN="postgresql://user:pass@host:26257/db?sslmode=verify-full"
+
+# RAG pipeline
+RAG_PIPELINE_ENABLED=true
+EMBEDDING_PROVIDER=openrouter
+EMBEDDING_MODEL=openai/text-embedding-3-small
+```
+
+**CockroachDB Cloud Basic (Serverless) Notes:**
+- First-boot `LATEST.sql` DDL backfills take 25-60 min on Cloud Basic
+- `CREATE UNIQUE INDEX` may time out silently, leaving tables without constraints
+- The app verifies and repairs missing indexes at startup (`verifyCockroachIndexes`)
+- Use Cloud Standard for production to avoid slow DDL
+- See `fly_cockroach.toml` for Fly.io deployment config
 
 ### Configuration Priority
 
@@ -747,6 +773,7 @@ grep -rn "agent-admin.my-key" web/src/
 | Mock embeddings not semantic | Use `openrouter` instead |
 | Migration not running | Check filename: `NN__snake_case.sql` |
 | CGO errors | Run `task setup:lancedb` first |
+| CRDB Cloud Basic: DDL backfill timeout | First-boot `LATEST.sql` can take 25-60 min on Cloud Basic (Serverless). `CREATE UNIQUE INDEX` may time out silently, leaving tables without constraints. The app now verifies and repairs missing indexes at startup (`verifyCockroachIndexes` in `store/migrator.go`). Use Cloud Standard for production to avoid slow DDL. |
 
 ---
 

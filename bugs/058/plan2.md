@@ -265,7 +265,7 @@ export LANCEDB_STORAGE_PROVIDER=cockroach
 export TICKET_EMBEDDING_ENABLED=true
 export BCHAT_URL=http://localhost:5230
 export BCHAT_USER=admin
-export BCHAT_PASS=memos
+export BCHAT_PASS=<redacted>
 ```
 
 ### Expected Outcomes

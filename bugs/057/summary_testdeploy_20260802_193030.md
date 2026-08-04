@@ -234,7 +234,7 @@ After manual fixes:
    ```bash
    export BCHAT_URL=https://bchat-crdb.fly.dev
    export BCHAT_USER=admin
-   export BCHAT_PASS=memos
+   export BCHAT_PASS=<redacted>
    bash scripts/verify-production.sh --keep
    ```
 

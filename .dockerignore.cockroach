@@ -1,0 +1,68 @@
+# =============================================================================
+# .dockerignore.cockroach — CockroachDB-only build (pure Go, no LanceDB)
+# Used by: fly deploy --ignorefile .dockerignore.cockroach
+# =============================================================================
+
+# Git
+.git/
+
+# Editor/IDE
+.kilo/
+.opencode/
+**/.vscode/
+**/.idea/
+
+# Build artifacts (NOT needed in context)
+build/
+!build/crontab
+memos
+main
+**/*.exe
+**/*.dll
+**/*.so
+**/*.dylib
+**/*.test
+**/*.out
+
+# LanceDB binaries (518 MB) — NOT needed for pure Go CockroachDB build
+lib/
+include/
+
+# External repos
+**/lancedb-go-main
+**/mastra-main
+
+# Docs/bugs
+docs/
+bugs/
+scratch/
+bin.zip
+data/
+
+# Database files
+**/*.db
+**/*.db-wal
+**/*.db-shm
+
+# Node
+**/node_modules
+**/dist
+**/logs
+**/*.log
+**/.npm
+**/.cache
+**/.next
+**/.nuxt
+**/out
+
+# Go
+**/.gut
+**/go.work
+
+# Env files
+**/.env
+**/.env.local
+**/.env.*.local
+
+# Agent build artifacts (202 MB) — not needed for Go build
+server/router/api/v1/agent/build/

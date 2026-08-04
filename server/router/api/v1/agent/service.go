@@ -167,6 +167,16 @@ func NewService(s *store.Store, p *profile.Profile) *Service {
 		} else {
 			slog.Info("CockroachDB vector store using dedicated connection pool")
 		}
+		// Startup health check: verify the vector DB is reachable and tables exist.
+		// This catches connectivity issues and missing schema early, rather than
+		// failing silently at first RAG query.
+		if err := vectorDB.Validate(context.Background()); err != nil {
+			slog.Error("Vector DB startup validation failed — RAG pipeline may not work",
+				"error", err,
+				"hint", "Check COCKROACH_DSN connectivity and agent_vectors table schema")
+		} else {
+			slog.Info("Vector DB startup validation passed")
+		}
 	}
 
 	// Log hybrid search configuration

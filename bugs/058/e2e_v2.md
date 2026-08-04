@@ -89,7 +89,7 @@ H=$(run_sql "SELECT count(*) FROM migration_history;" | tail -1)
 
 ### Problem
 
-The `verify-production.sh` script requires a valid admin user (`BCHAT_USER=admin BCHAT_PASS=admin123`), but `e2e.md` does not include a step to create this user. On a fresh database, the sign-in step fails with `400 invalid credentials`.
+The `verify-production.sh` script requires a valid admin user (`BCHAT_USER=admin BCHAT_PASS=<your-password>`), but `e2e.md` does not include a step to create this user. On a fresh database, the sign-in step fails with `400 invalid credentials`.
 
 ### Fix
 
@@ -98,7 +98,7 @@ Added admin user creation step before `verify-production.sh` in Phase 3:
 ```bash
 curl -fsS -X POST http://localhost:8081/api/v1/auth/signup \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin123","email":"admin@test.com"}'
+  -d '{"username":"admin","password":"<your-password>","email":"admin@test.com"}'
 ```
 
 **Note:** This step is required on a fresh database. If the user already exists, the endpoint will return an error, which is harmless.

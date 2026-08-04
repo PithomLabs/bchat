@@ -258,7 +258,7 @@ Version 0.35.0 has been started on port 8081
 ```bash
 curl -fsS -X POST http://localhost:8081/api/v1/auth/signup \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin123","email":"admin@test.com"}'
+  -d '{"username":"admin","password":"<your-password>","email":"admin@test.com"}'
 ```
 
 **Expected:** JSON response with `id: "1"`
@@ -268,7 +268,7 @@ curl -fsS -X POST http://localhost:8081/api/v1/auth/signup \
 #### Step 2: Data Path (verify-production.sh)
 
 ```bash
-BCHAT_URL=http://localhost:8081 BCHAT_USER=admin BCHAT_PASS=admin123 \
+BCHAT_URL=http://localhost:8081 BCHAT_USER=admin BCHAT_PASS=<your-password> \
   bash scripts/verify-production.sh
 ```
 
@@ -383,7 +383,7 @@ P1-P6 verification complete!
 #### Step 4: Application Verification
 
 ```bash
-BCHAT_URL=http://localhost:8081 BCHAT_USER=admin BCHAT_PASS=admin123 \
+BCHAT_URL=http://localhost:8081 BCHAT_USER=admin BCHAT_PASS=<your-password> \
   bash scripts/verify-production.sh
 ```
 

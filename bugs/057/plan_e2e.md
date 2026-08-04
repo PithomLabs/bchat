@@ -91,7 +91,7 @@ crdb:verify:
 Run the app-first smoke against the deployed Cloud instance. The signin payload fix is already in place (`scripts/verify-production.sh` line 40 uses `password_credentials` wrapper).
 
 ```bash
-BCHAT_URL=https://bchat-crdb.fly.dev BCHAT_USER=admin BCHAT_PASS="Memos@2026-admin" \
+BCHAT_URL=https://bchat-crdb.fly.dev BCHAT_USER=admin BCHAT_PASS="<redacted>" \
   bash scripts/verify-production.sh
 ```
 
@@ -99,7 +99,7 @@ BCHAT_URL=https://bchat-crdb.fly.dev BCHAT_USER=admin BCHAT_PASS="Memos@2026-adm
 
 **Use `--keep` for inspection:**
 ```bash
-BCHAT_URL=https://bchat-crdb.fly.dev BCHAT_USER=admin BCHAT_PASS="Memos@2026-admin" \
+BCHAT_URL=https://bchat-crdb.fly.dev BCHAT_USER=admin BCHAT_PASS="<redacted>" \
   bash scripts/verify-production.sh --keep
 ```
 

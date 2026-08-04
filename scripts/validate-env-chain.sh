@@ -9,7 +9,15 @@ set -e
 
 # Configuration
 TOML_FILE="${1:-fly.toml}"
-SENSITIVE_VARS="OPENROUTER_API_KEY ENCRYPTION_MASTER_KEY"
+# All sensitive vars (for skipping in consistency check — none should appear in Dockerfile/TOML)
+ALL_SENSITIVE_VARS="OPENROUTER_API_KEY ENCRYPTION_MASTER_KEY COCKROACH_DSN DATABASE_URL BCHAT_USER BCHAT_PASS"
+# Deployment-specific sensitive vars (for checking fly secrets)
+if [[ "$TOML_FILE" == *"cockroach"* ]]; then
+    SENSITIVE_VARS="OPENROUTER_API_KEY ENCRYPTION_MASTER_KEY COCKROACH_DSN BCHAT_USER BCHAT_PASS"
+else
+    # fly.toml and fly_pg.toml both use DATABASE_URL (Neon Postgres)
+    SENSITIVE_VARS="OPENROUTER_API_KEY ENCRYPTION_MASTER_KEY DATABASE_URL BCHAT_USER BCHAT_PASS"
+fi
 LOCAL_ONLY_VARS="LANCEDB_LOCAL_PATH"
 S3_ONLY_VARS="LANCEDB_S3_ENDPOINT LANCEDB_S3_REGION LANCEDB_S3_BUCKET"
 SKIP_IN_ENV="MEMOS_MODE MEMOS_PORT TZ LLM_VERIFIER_ENABLED"  # Runtime-only, not in .env
@@ -30,7 +38,7 @@ echo ""
 # -----------------------------------------------------------------------------
 # Step 1: Read .env vars (source of truth)
 # -----------------------------------------------------------------------------
-echo "Step 1: Reading .env (source of truth)..."
+echo "Step 1: Reading .env (local reference — NOT the deploy source of truth)..."
 if [ ! -f .env ]; then
     echo -e "${RED}ERROR: .env file not found${NC}"
     exit 1
@@ -132,9 +140,17 @@ echo ""
 echo "Step 5: Reading fly secrets..."
 declare -A FLY_SECRETS
 if command -v fly &> /dev/null; then
+    # Derive the target app from the TOML file's `app = '...'` line so we query the correct app
+    # (bare `fly secrets list` without --app resolves a default/app-from-working-dir and can miss secrets).
+    FLY_APP=$(grep -E "^app\s*=" "$TOML_FILE" | head -1 | sed -E "s/^app\s*=\s*['\"]//; s/['\"]\s*$//")
+    APP_ARG=""
+    if [ -n "$FLY_APP" ]; then
+        APP_ARG="--app $FLY_APP"
+        echo "   Target app (from $TOML_FILE): $FLY_APP"
+    fi
     while IFS= read -r secret; do
         [ -n "$secret" ] && FLY_SECRETS["$secret"]=1
-    done < <(fly secrets list 2>/dev/null | tail -n +2 | awk '{print $1}')
+    done < <(fly secrets list $APP_ARG 2>/dev/null | tail -n +2 | awk '{print $1}')
     echo "   Found ${#FLY_SECRETS[@]} secrets"
 else
     echo -e "   ${YELLOW}(flyctl not installed - skipping secrets check)${NC}"
@@ -150,13 +166,14 @@ echo "=== Validation Results ==="
 # Check 6a: Non-sensitive .env vars should be in Dockerfile AND TOML file with matching values
 # -----------------------------------------------------------------------------
 echo ""
-echo "Check: .env -> Dockerfile + $TOML_FILE (non-sensitive vars)"
+echo "Check: env-chain consistency (.env / Dockerfile / $TOML_FILE)"
+echo "  Note: $TOML_FILE is the deploy source of truth (git-committed). .env is local-only reference."
 ENV_CHECK_ERRORS=0
 for key in "${!ENV_VARS[@]}"; do
     env_val="${ENV_VARS[$key]}"
 
-    # Skip sensitive vars (should only be in fly secrets)
-    if [[ " $SENSITIVE_VARS " =~ " $key " ]]; then
+    # Skip sensitive vars (must live only in fly secrets, not Dockerfile/TOML)
+    if [[ " $ALL_SENSITIVE_VARS " =~ " $key " ]]; then
         continue
     fi
     # Skip context-inappropriate storage vars
@@ -167,33 +184,36 @@ for key in "${!ENV_VARS[@]}"; do
         continue
     fi
 
-    # Check Dockerfile
-    if [ -z "${DOCKER_VARS[$key]+x}" ]; then
-        echo -e "  ${RED}MISSING in Dockerfile: $key${NC}"
+    docker_val="${DOCKER_VARS[$key]-}"
+    toml_val="${TOML_VARS[$key]-}"
+    in_docker="${DOCKER_VARS[$key]+x}"
+    in_toml="${TOML_VARS[$key]+x}"
+
+    # ERROR only if the var is defined NOWHERE in the deploy chain (neither Dockerfile nor TOML).
+    if [ -z "$in_docker" ] && [ -z "$in_toml" ]; then
+        echo -e "  ${RED}MISSING in deploy chain (neither Dockerfile nor $TOML_FILE): $key${NC}"
         ERRORS=$((ERRORS + 1))
         ENV_CHECK_ERRORS=$((ENV_CHECK_ERRORS + 1))
-    elif [ "${DOCKER_VARS[$key]}" != "$env_val" ]; then
-        echo -e "  ${RED}VALUE MISMATCH (.env vs Dockerfile): $key${NC}"
-        echo "    .env:       $env_val"
-        echo "    Dockerfile: ${DOCKER_VARS[$key]}"
-        ERRORS=$((ERRORS + 1))
-        ENV_CHECK_ERRORS=$((ENV_CHECK_ERRORS + 1))
+        continue
     fi
 
-    # Check TOML file
-    if [ -z "${TOML_VARS[$key]+x}" ]; then
-        echo -e "  ${RED}MISSING in $TOML_FILE: $key${NC}"
-        ERRORS=$((ERRORS + 1))
-        ENV_CHECK_ERRORS=$((ENV_CHECK_ERRORS + 1))
-    elif [ "${TOML_VARS[$key]}" != "$env_val" ]; then
-        echo -e "  ${RED}VALUE MISMATCH (.env vs $TOML_FILE): $key${NC}"
-        echo "    .env:       $env_val"
-        echo "    $TOML_FILE: ${TOML_VARS[$key]}"
-        ERRORS=$((ERRORS + 1))
-        ENV_CHECK_ERRORS=$((ENV_CHECK_ERRORS + 1))
+    # Determine the deploy-effective value: TOML [env] overrides Dockerfile ENV at runtime.
+    if [ -n "$in_toml" ]; then
+        effective_src="$TOML_FILE"
+        effective_val="$toml_val"
+    else
+        effective_src="Dockerfile"
+        effective_val="$docker_val"
+    fi
+
+    # Compare .env against the deploy-effective value. A mismatch is expected when .env holds
+    # local-dev overrides (e.g. LANCEDB_STORAGE_PROVIDER=s3 locally, cockroach in prod) — WARN, not ERROR.
+    if [ "$effective_val" != "$env_val" ]; then
+        echo -e "  ${YELLOW}DIFF (.env local vs deploy-effective $effective_src): $key  .env=$env_val  $effective_src=$effective_val${NC}"
+        WARNINGS=$((WARNINGS + 1))
     fi
 done
-[ $ENV_CHECK_ERRORS -eq 0 ] && echo -e "  ${GREEN}All .env vars properly reflected in Dockerfile and $TOML_FILE${NC}"
+[ $ENV_CHECK_ERRORS -eq 0 ] && echo -e "  ${GREEN}All .env vars present somewhere in the deploy chain (Dockerfile or $TOML_FILE)${NC}"
 
 # -----------------------------------------------------------------------------
 # Check 6b: Sensitive vars must be in fly secrets

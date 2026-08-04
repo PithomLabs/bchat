@@ -178,7 +178,7 @@ Production-like environments (long-lived, named, or non-local DSN) do **not** se
 Run the app-first smoke against the deployed Cloud instance. The signin payload fix is already in place (`scripts/verify-production.sh` line 40 uses `password_credentials` wrapper).
 
 ```bash
-BCHAT_URL=https://bchat-crdb.fly.dev BCHAT_USER=admin BCHAT_PASS="Memos@2026-admin" \
+BCHAT_URL=https://bchat-crdb.fly.dev BCHAT_USER=admin BCHAT_PASS="<redacted>" \
   bash scripts/verify-production.sh
 ```
 
@@ -186,7 +186,7 @@ Expected: all 7 steps pass (healthz → signin → tenant select → onboard →
 
 Use `--keep` for inspection:
 ```bash
-BCHAT_URL=https://bchat-crdb.fly.dev BCHAT_USER=admin BCHAT_PASS="Memos@2026-admin" \
+BCHAT_URL=https://bchat-crdb.fly.dev BCHAT_USER=admin BCHAT_PASS="<redacted>" \
   bash scripts/verify-production.sh --keep
 ```
 
