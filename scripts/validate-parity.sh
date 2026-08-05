@@ -312,6 +312,25 @@ if [ -f "$COCKROACH_LATEST" ]; then
         SCHEMA_ISSUES=1
     fi
 fi
+
+# Check 2c: Postgres/Cockroach tenant_id nullability parity (skill tables)
+if [ -f "$POSTGRES_LATEST" ] && [ -f "$COCKROACH_LATEST" ]; then
+    echo ""
+    echo "Check 2c: Postgres/Cockroach tenant_id nullability parity"
+
+    # Extract skill table blocks: both agent_skill_executions and agent_skill_logs
+    pg_skill_tables=$(awk '/CREATE TABLE IF NOT EXISTS agent_skill_executions/,/CREATE INDEX IF NOT EXISTS idx_skill_log_execution/' "$POSTGRES_LATEST")
+    pg_null_count=$(echo "$pg_skill_tables" | grep -c 'tenant_id BIGINT DEFAULT NULL' || true)
+    cr_skill_tables=$(awk '/CREATE TABLE IF NOT EXISTS agent_skill_executions/,/CREATE INDEX IF NOT EXISTS idx_skill_log_execution/' "$COCKROACH_LATEST")
+    cr_null_count=$(echo "$cr_skill_tables" | grep -c 'tenant_id INT8 DEFAULT NULL' || true)
+
+    if [ "$pg_null_count" -lt 2 ] || [ "$cr_null_count" -lt 2 ]; then
+        echo "  FAIL: skill table tenant_id nullability diverged (postgres=$pg_null_count crdb=$cr_null_count, need >=2 each)"
+        SCHEMA_ISSUES=1
+    else
+        echo "  PASS: tenant_id nullability consistent (postgres=$pg_null_count, crdb=$cr_null_count)"
+    fi
+fi
 echo ""
 
 # --- Summary ---

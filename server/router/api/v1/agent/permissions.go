@@ -9,16 +9,17 @@ import (
 
 // Permission constants
 const (
-	PermTenantAdmin  = "tenant:admin"
-	PermTenantRead   = "tenant:read"
-	PermTenantWrite  = "tenant:write"
-	PermChatTest     = "chat:test"
-	PermChatLogs     = "chat:logs"
-	PermFilesUpload  = "files:upload"
-	PermFilesRestore = "files:restore"
-	PermAPIConfig    = "api:config"
+	PermTenantAdmin      = "tenant:admin"
+	PermTenantRead       = "tenant:read"
+	PermTenantWrite      = "tenant:write"
+	PermChatTest         = "chat:test"
+	PermChatLogs         = "chat:logs"
+	PermFilesUpload      = "files:upload"
+	PermFilesRestore     = "files:restore"
+	PermAPIConfig        = "api:config"
 	PermTicketInternalNotes = "ticket:internal_notes"
-	PermWildcard     = "*"
+	PermWorkflowStart    = "workflow:start"
+	PermWildcard         = "*"
 )
 
 // AllPermissions lists all valid permissions
@@ -26,7 +27,7 @@ var AllPermissions = []string{
 	PermTenantAdmin, PermTenantRead, PermTenantWrite,
 	PermChatTest, PermChatLogs,
 	PermFilesUpload, PermFilesRestore, PermAPIConfig,
-	PermTicketInternalNotes,
+	PermTicketInternalNotes, PermWorkflowStart,
 }
 
 // SourceGlobalRole is the permission source for global role grants.

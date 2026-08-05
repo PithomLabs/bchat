@@ -347,6 +347,15 @@ func (s *APIV1Service) RegisterAgentRoutes(echoServer *echo.Echo) {
 	authGroup.GET("/:slug/simulations", s.agentHandler.HandleListSimulations)
 	authGroup.GET("/:slug/simulations/:simulationId", s.agentHandler.HandleGetSimulation)
 
+	// Workflow execution routes (requires auth + workflow:start permission)
+	// Gated on non-MySQL drivers — MySQL stubs return errors for all skill execution methods
+	if s.Profile.Driver != "mysql" {
+		authGroup.POST("/:slug/workflows/start", s.agentHandler.HandleStartWorkflow)
+		authGroup.POST("/:slug/executions/:id/stop", s.agentHandler.HandleStopExecution)
+		authGroup.GET("/:slug/executions/:id", s.agentHandler.HandleGetExecution)
+		authGroup.GET("/:slug/executions", s.agentHandler.HandleListExecutions)
+	}
+
 	// Unified conversation history (combines simulations and chat sessions)
 	authGroup.GET("/:slug/conversations", s.agentHandler.HandleGetConversations)
 	authGroup.GET("/:slug/conversations/:conversationId", s.agentHandler.HandleGetConversation)

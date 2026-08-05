@@ -6715,3 +6715,197 @@ func (h *Handler) HandleUpdateTenantSettings(c echo.Context) error {
 		"record_transcripts": config.RecordTranscripts,
 	})
 }
+
+// ============================================================================
+// WORKFLOW EXECUTION ENDPOINTS
+// ============================================================================
+
+// StartWorkflowRequest is the request body for starting a workflow execution.
+type StartWorkflowRequest struct {
+	Trigger      string         `json:"trigger"`       // "api" or "chat"
+	InitialVars  map[string]any `json:"initial_vars"`  // initial CEL variables
+	ConversationID string       `json:"conversation_id,omitempty"`
+}
+
+// HandleStartWorkflow starts a detached workflow execution.
+// POST /api/v1/agent/:slug/workflows/start
+func (h *Handler) HandleStartWorkflow(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
+	if tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermWorkflowStart) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin or workflow:start permission")
+	}
+
+	var req StartWorkflowRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request")
+	}
+
+	if req.Trigger == "" {
+		req.Trigger = "api"
+	}
+
+	// Load config to get SkillGraph
+	config, err := h.service.LoadConfig(ctx, tenant.Slug, "external")
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to load config: "+err.Error())
+	}
+	if config.SkillGraph == nil || !config.SkillGraph.HasSkills {
+		return echo.NewHTTPError(http.StatusBadRequest, "No workflows defined for this tenant")
+	}
+
+	convID := req.ConversationID
+	if convID == "" {
+		convID = "api-" + uuid.New().String()[:8]
+	}
+
+	exec, err := h.service.StartDetachedExecution(ctx, &tenant.ID, convID, req.Trigger, config.SkillGraph, req.InitialVars)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to start workflow: "+err.Error())
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"execution_id": exec.ID,
+		"status":       exec.Status,
+		"trigger_path": exec.TriggerPath,
+	})
+}
+
+// HandleStopExecution stops a running workflow execution.
+// POST /api/v1/agent/:slug/executions/:id/stop
+func (h *Handler) HandleStopExecution(c echo.Context) error {
+	ctx := c.Request().Context()
+	execID := c.Param("id")
+
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
+	if tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermWorkflowStart) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin or workflow:start permission")
+	}
+
+	// Verify tenant ownership
+	exec, err := h.service.getExecution(ctx, execID)
+	if err != nil || exec == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Execution not found")
+	}
+	if exec.TenantID != nil && *exec.TenantID != tenant.ID && !h.isAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied")
+	}
+
+	if err := h.service.StopExecution(ctx, execID); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to stop execution: "+err.Error())
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"execution_id": execID,
+		"status":       "stopped",
+	})
+}
+
+// HandleGetExecution returns the status of a workflow execution.
+// GET /api/v1/agent/:slug/executions/:id
+func (h *Handler) HandleGetExecution(c echo.Context) error {
+	ctx := c.Request().Context()
+	execID := c.Param("id")
+
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
+	if tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermTenantRead) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin or tenant:read permission")
+	}
+
+	exec, err := h.service.getExecution(ctx, execID)
+	if err != nil || exec == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Execution not found")
+	}
+	if exec.TenantID != nil && *exec.TenantID != tenant.ID && !h.isAdmin(c) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied")
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"id":              exec.ID,
+		"status":          exec.Status,
+		"trigger_path":    exec.TriggerPath,
+		"current_node":    exec.CurrentNode,
+		"retry_count":     exec.RetryCount,
+		"created_at":      exec.CreatedAt,
+		"updated_at":      exec.UpdatedAt,
+		"completed_at":    exec.CompletedAt,
+		"checkpoint_data": exec.CheckpointData,
+		"completed_nodes": exec.CompletedNodes,
+		"failed_nodes":    exec.FailedNodes,
+	})
+}
+
+// HandleListExecutions lists workflow executions for a tenant.
+// GET /api/v1/agent/:slug/executions
+func (h *Handler) HandleListExecutions(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	tenant, err := getTenantOrFail(ctx, h.store, c)
+	if err != nil {
+		return err
+	}
+	if tenant == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "Tenant not found")
+	}
+
+	if !h.isAdmin(c) && !h.hasPermission(c, tenant.ID, PermTenantRead) {
+		return echo.NewHTTPError(http.StatusForbidden, "Permission denied: requires admin or tenant:read permission")
+	}
+
+	status := c.QueryParam("status")
+	limit := 50
+	if l := c.QueryParam("limit"); l != "" {
+		fmt.Sscanf(l, "%d", &limit)
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	if limit < 1 {
+		limit = 1
+	}
+
+	execs, err := h.service.listExecutionsByTenant(ctx, tenant.ID, status, limit)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to list executions: "+err.Error())
+	}
+
+	items := make([]map[string]any, 0, len(execs))
+	for _, exec := range execs {
+		items = append(items, map[string]any{
+			"id":           exec.ID,
+			"status":       exec.Status,
+			"trigger_path": exec.TriggerPath,
+			"current_node": exec.CurrentNode,
+			"created_at":   exec.CreatedAt,
+			"updated_at":   exec.UpdatedAt,
+			"completed_at": exec.CompletedAt,
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"items": items,
+		"total": len(items),
+	})
+}

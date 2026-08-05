@@ -1338,3 +1338,115 @@ func (s *Store) ClaimPendingEvents(ctx context.Context, limit int32) ([]*AgentEv
 func (s *Store) UpdateAgentEvent(ctx context.Context, update *AgentEvent) error {
 	return s.driver.UpdateAgentEvent(ctx, update)
 }
+
+// ============================================================================
+// SKILL EXECUTION TYPES
+// ============================================================================
+
+// SkillExecution represents a durable skill pipeline run.
+type SkillExecution struct {
+	ID                string         `json:"id"`
+	TenantID          *int32         `json:"tenant_id"`
+	ConversationID    string         `json:"conversation_id"`
+	SkillGraphJSON    string         `json:"skill_graph"`      // serialized SkillGraph
+	Status            string         `json:"status"`           // pending, running, completed, failed, stopped
+	TriggerPath       string         `json:"trigger_path"`     // chat, event, api, cron
+	CurrentNode       string         `json:"current_node"`
+	CheckpointData    map[string]any `json:"checkpoint_data"`
+	CompletedNodes    map[string]any `json:"completed_nodes"`
+	FailedNodes       map[string]any `json:"failed_nodes"`
+	ErrorMessage      string         `json:"error_message,omitempty"` // K-1
+	RetryCount        int            `json:"retry_count"`
+	MaxRetries        int            `json:"max_retries"`
+	ParentExecutionID *string        `json:"parent_execution_id,omitempty"`
+	ClaimedAt         *time.Time     `json:"claimed_at,omitempty"`
+	ClaimedBy         *string        `json:"claimed_by,omitempty"`
+	ClaimExpiresAt    *time.Time     `json:"claim_expires_at,omitempty"`
+	CreatedAt         time.Time      `json:"created_at"`
+	UpdatedAt         time.Time      `json:"updated_at"`
+	CompletedAt       *time.Time     `json:"completed_at,omitempty"`
+}
+
+// FindSkillExecution is the filter for querying skill executions.
+type FindSkillExecution struct {
+	ID             *string
+	TenantID       *int32
+	ConversationID *string
+	Status         *string
+	TriggerPath    *string
+}
+
+// SkillLog represents a single skill execution log entry (audit trail).
+type SkillLog struct {
+	ID           string         `json:"id"`
+	TenantID     *int32         `json:"tenant_id"`
+	ExecutionID  string         `json:"execution_id"`
+	SkillName    string         `json:"skill_name"`
+	Handler      string         `json:"handler"`
+	Status       string         `json:"status"`
+	Input        map[string]any `json:"input"`
+	Output       map[string]any `json:"output"`
+	ErrorMessage string         `json:"error_message,omitempty"`
+	DurationMs   int            `json:"duration_ms"`
+	StartedAt    time.Time      `json:"started_at"`
+	CompletedAt  *time.Time     `json:"completed_at,omitempty"`
+}
+
+// FindSkillLog is the filter for querying skill logs.
+type FindSkillLog struct {
+	ID          *string
+	TenantID    *int32
+	ExecutionID *string
+}
+
+// Store wrapper methods for SkillExecution
+
+func (s *Store) CreateSkillExecution(ctx context.Context, execution *SkillExecution) (*SkillExecution, error) {
+	return s.driver.CreateSkillExecution(ctx, execution)
+}
+
+func (s *Store) GetSkillExecution(ctx context.Context, find *FindSkillExecution) (*SkillExecution, error) {
+	return s.driver.GetSkillExecution(ctx, find)
+}
+
+func (s *Store) UpdateSkillExecution(ctx context.Context, execution *SkillExecution) error {
+	return s.driver.UpdateSkillExecution(ctx, execution)
+}
+
+func (s *Store) ListPendingSkillExecutions(ctx context.Context) ([]*SkillExecution, error) {
+	return s.driver.ListPendingSkillExecutions(ctx)
+}
+
+func (s *Store) ClaimSkillExecution(ctx context.Context, id string, workerID string, leaseSeconds int) (*SkillExecution, error) {
+	return s.driver.ClaimSkillExecution(ctx, id, workerID, leaseSeconds)
+}
+
+func (s *Store) ReleaseSkillClaim(ctx context.Context, id string) error {
+	return s.driver.ReleaseSkillClaim(ctx, id)
+}
+
+func (s *Store) ListSkillExecutions(ctx context.Context, find *FindSkillExecution, limit int) ([]*SkillExecution, error) {
+	return s.driver.ListSkillExecutions(ctx, find, limit)
+}
+
+func (s *Store) CompleteSkillExecution(ctx context.Context, id string) error {
+	return s.driver.CompleteSkillExecution(ctx, id)
+}
+
+func (s *Store) FailSkillExecution(ctx context.Context, id string, errorMsg string) error {
+	return s.driver.FailSkillExecution(ctx, id, errorMsg)
+}
+
+func (s *Store) StopSkillExecution(ctx context.Context, id string) error {
+	return s.driver.StopSkillExecution(ctx, id)
+}
+
+// Store wrapper methods for SkillLog
+
+func (s *Store) CreateSkillLog(ctx context.Context, log *SkillLog) error {
+	return s.driver.CreateSkillLog(ctx, log)
+}
+
+func (s *Store) ListSkillLogs(ctx context.Context, find *FindSkillLog) ([]*SkillLog, error) {
+	return s.driver.ListSkillLogs(ctx, find)
+}

@@ -83,16 +83,20 @@ type Service struct {
 	vectorDBMu          sync.RWMutex // Protects vectorDB access
 	reindexMu           sync.Map     // per-tenant mutex for reindex/rollback serialization
 	observerBuffer      *ObserverBuffer
+	skillRegistry       *SkillRegistry
+	activeCancellations map[string]context.CancelFunc
+	executionMu         sync.Mutex
 }
 
 // NewService creates a new agent service.
 func NewService(s *store.Store, p *profile.Profile) *Service {
 	svc := &Service{
-		store:          s,
-		profile:        p,
-		parser:         NewParser(),
-		memorySessions: NewMemorySessionStore(30 * time.Minute),
-		configCache:    NewConfigCache(5 * time.Minute),
+		store:               s,
+		profile:             p,
+		parser:              NewParser(),
+		memorySessions:      NewMemorySessionStore(30 * time.Minute),
+		configCache:         NewConfigCache(5 * time.Minute),
+		activeCancellations: make(map[string]context.CancelFunc),
 	}
 
 	// Initialize encryption service if master key is set
@@ -202,6 +206,53 @@ func NewService(s *store.Store, p *profile.Profile) *Service {
 			"block_after_fraction", omConfig.BlockAfter)
 	}
 
+	// Initialize skill registry with builtin handlers
+	svc.skillRegistry = NewSkillRegistry()
+	RegisterBuiltins(svc.skillRegistry)
+
+	// Wire GenerateFn for LLMHandler — resolves LLM config per-tenant at call time
+	if llmHandler, ok := svc.skillRegistry.Get("builtin:llm_call"); ok {
+		if llm, castOK := llmHandler.(*LLMHandler); castOK {
+			llm.GenerateFn = func(ctx context.Context, prompt string, vars map[string]any) (string, error) {
+				tenantID := int32(0)
+				if tid, ok := vars["tenant_id"]; ok {
+					switch v := tid.(type) {
+					case float64:
+						tenantID = int32(v)
+					case int:
+						tenantID = int32(v)
+					case int32:
+						tenantID = v
+					case string:
+						if parsed, err := strconv.ParseInt(v, 10, 32); err == nil {
+							tenantID = int32(parsed)
+						}
+					}
+				}
+				model, apiKey, err := svc.requireLLMConfig(ctx, tenantID)
+				if err != nil {
+					return "", fmt.Errorf("llm_call: %w", err)
+				}
+				client := openrouter.NewClient(apiKey)
+				resp, err := client.CreateChatCompletion(ctx, openrouter.ChatCompletionRequest{
+					Model: model,
+					Messages: []openrouter.ChatCompletionMessage{
+						{Role: openrouter.ChatMessageRoleUser, Content: openrouter.Content{Text: prompt}},
+					},
+				})
+				if err != nil {
+					return "", fmt.Errorf("llm_call api: %w", err)
+				}
+				if len(resp.Choices) == 0 {
+					return "", fmt.Errorf("llm_call: no response")
+				}
+				return resp.Choices[0].Message.Content.Text, nil
+			}
+		}
+	}
+
+	slog.Info("Skill registry initialized", "handlers", len(svc.skillRegistry.List()))
+
 	// Start ticket embedding cron job (every 5 minutes)
 	if os.Getenv("TICKET_EMBEDDING_ENABLED") == "true" {
 		go func() {
@@ -214,6 +265,12 @@ func NewService(s *store.Store, p *profile.Profile) *Service {
 			}
 		}()
 		slog.Info("Ticket embedding cron job started (every 5 minutes)")
+	}
+
+	// Start skill recovery worker (reclaims pending/abandoned executions)
+	// Gated on non-MySQL drivers — MySQL skill execution is stubbed
+	if svc.profile.Driver != "mysql" {
+		go svc.startRecoveryWorker(context.Background())
 	}
 
 	// Startup RAG reindex control.
@@ -1635,6 +1692,9 @@ type AudienceConfig struct {
 	// in KB.MD or POLICY.MD. When false, the tenant relies entirely on RAG retrieval
 	// from unstructured content (e.g., uploaded novels, plain text documents).
 	HasStructuredContent bool
+
+	// SkillGraph is the parsed DAG of skills from SCRIPT.MD (nil if no @skill annotations)
+	SkillGraph *SkillGraph
 }
 
 // VerificationRule represents a custom verification rule from POLICY.MD.
@@ -1900,6 +1960,15 @@ func (s *Service) LoadConfig(ctx context.Context, tenantSlug, audienceType strin
 		TenantID: &tenant.ID,
 	})
 
+	// Parse skill graph from script content (if @skill annotations present)
+	var skillGraph *SkillGraph
+	if script != nil && script.Content != "" {
+		_, graph, err := s.parser.ParseScriptWithSkills(script.Content)
+		if err == nil && graph != nil && graph.HasSkills {
+			skillGraph = graph
+		}
+	}
+
 	// Load active learned behaviors (tenant-level)
 	learningService := NewLearningService(s.store)
 	learnedBehaviors, _ := learningService.GetActiveLearnedBehaviors(ctx, tenant.ID)
@@ -1953,6 +2022,7 @@ func (s *Service) LoadConfig(ctx context.Context, tenantSlug, audienceType strin
 		RawKB:                rawKB,
 		RawPolicy:            rawPolicy,
 		HasStructuredContent: hasStructuredContent,
+		SkillGraph:           skillGraph,
 	}
 
 	s.configCache.Set(config)
@@ -3008,19 +3078,36 @@ func (s *Service) generateResponse(ctx context.Context, config *AudienceConfig, 
 		"model", model,
 		"message_count", len(messages))
 
-	resp, err := client.CreateChatCompletion(ctx, openrouter.ChatCompletionRequest{
-		Model:    model,
-		Messages: messages,
-	})
-	if err != nil {
-		slog.Error("LLM: OpenRouter call failed",
-			"error", err,
-			"session_id", session.ID)
-		return "", err
+	// C2: Compute tools once before the call — single LLM round trip
+	var tools []openrouter.Tool
+	if s.skillRegistry != nil && config.SkillGraph != nil && len(config.SkillGraph.Nodes) > 0 {
+		tools = s.skillRegistry.ToolsForSkills(config.SkillGraph.Nodes)
 	}
 
-	if len(resp.Choices) == 0 {
-		return "", fmt.Errorf("no response from LLM")
+	var resp openrouter.ChatCompletionResponse
+	if len(tools) > 0 {
+		// Skills present — route through tool-calling loop (single call with tools)
+		loopResp, loopErr := s.toolCallingLoop(ctx, client, model, messages, tools, config, session)
+		if loopErr != nil {
+			return "", loopErr
+		}
+		resp = *loopResp
+	} else {
+		// No skills — standard completion call
+		var err error
+		resp, err = client.CreateChatCompletion(ctx, openrouter.ChatCompletionRequest{
+			Model:    model,
+			Messages: messages,
+		})
+		if err != nil {
+			slog.Error("LLM: OpenRouter call failed",
+				"error", err,
+				"session_id", session.ID)
+			return "", err
+		}
+		if len(resp.Choices) == 0 {
+			return "", fmt.Errorf("no response from LLM")
+		}
 	}
 
 	// Trigger Observational Memory update asynchronously with threshold check and debouncing
@@ -3345,6 +3432,22 @@ func (s *Service) buildSystemPrompt(ctx context.Context, config *AudienceConfig,
 	}
 
 	// =========================================================================
+	// SECTION 7B: AUTOMATION WORKFLOWS (from SCRIPT.MD)
+	// =========================================================================
+	if config.SkillGraph != nil && len(config.SkillGraph.Nodes) > 0 {
+		sb.WriteString("=== AUTOMATION WORKFLOWS ===\n\n")
+		sb.WriteString("You have the following workflows available. When appropriate, call the relevant tool.\n\n")
+		for _, node := range config.SkillGraph.Nodes {
+			executorType, _ := parseHandler(node.Handler)
+			if executorType == "condition" {
+				continue // Skip condition nodes — not callable tools
+			}
+			sb.WriteString(fmt.Sprintf("- [skill] %s (%s)\n", node.Name, node.Handler))
+		}
+		sb.WriteString("\nTo trigger a full workflow, use the API endpoint (POST /workflow/start). Individual skill tools execute only that handler, not the downstream DAG.\n\n")
+	}
+
+	// =========================================================================
 	// SECTION 8: FAQS (Reference material)
 	// =========================================================================
 	if len(config.FAQs) > 0 && classification.Category != "emergency" {
@@ -3497,6 +3600,87 @@ func (s *Service) recalcContentTokens(ctx context.Context, tc *store.TenantConfi
 		"content_tokens", totalTokens,
 		"retrieval_mode", tc.RetrievalMode,
 	)
+}
+
+// toolCallingLoop processes LLM tool calls in a loop until the model produces a final text response.
+func (s *Service) toolCallingLoop(
+	ctx context.Context,
+	client *openrouter.Client,
+	model string,
+	messages []openrouter.ChatCompletionMessage,
+	tools []openrouter.Tool,
+	config *AudienceConfig,
+	session *store.AgentSession,
+) (*openrouter.ChatCompletionResponse, error) {
+	maxIterations := 10
+	for i := 0; i < maxIterations; i++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		resp, err := client.CreateChatCompletion(ctx, openrouter.ChatCompletionRequest{
+			Model:    model,
+			Messages: messages,
+			Tools:    tools,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("tool call iteration %d: %w", i, err)
+		}
+		if len(resp.Choices) == 0 {
+			return nil, fmt.Errorf("no response from LLM at iteration %d", i)
+		}
+
+		msg := resp.Choices[0].Message
+		if len(msg.ToolCalls) == 0 {
+			return &resp, nil
+		}
+
+		// Append assistant message with tool calls
+		messages = append(messages, msg)
+
+		// Execute each tool call
+		for _, tc := range msg.ToolCalls {
+			handlerName := tc.Function.Name
+			h, ok := s.skillRegistry.Get(handlerName)
+			if !ok {
+				// Try with builtin: prefix
+				h, ok = s.skillRegistry.Get("builtin:" + handlerName)
+			}
+
+			var result string
+			if ok {
+				args := make(map[string]string)
+				if tc.Function.Arguments != "" {
+					json.Unmarshal([]byte(tc.Function.Arguments), &args)
+				}
+				// N5-3: inject tenant_id for tenant-aware handlers
+				if config.TenantID != 0 {
+					args["tenant_id"] = strconv.Itoa(int(config.TenantID))
+				}
+				vars := map[string]any{"tenant_id": config.TenantID}
+				result, err = h.Execute(ctx, args, vars)
+				if err != nil {
+					result = fmt.Sprintf("error: %v", err)
+				}
+			} else {
+				result = fmt.Sprintf("unknown tool: %s", handlerName)
+			}
+
+			messages = append(messages, openrouter.ChatCompletionMessage{
+				Role:       openrouter.ChatMessageRoleTool,
+				Content:    openrouter.Content{Text: result},
+				ToolCallID: tc.ID,
+			})
+
+			slog.Debug("tool call executed",
+				"tool", handlerName,
+				"result_len", len(result))
+		}
+	}
+
+	return nil, fmt.Errorf("tool calling loop exceeded %d iterations", maxIterations)
 }
 
 // generateRAGResponse generates a response using RAG retrieval for context.

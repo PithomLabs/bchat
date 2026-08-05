@@ -921,6 +921,34 @@ export AWS_SECRET_ACCESS_KEY=tsec_xxxxxxxxxxxxx
 
 ---
 
+### SKILL_RECOVERY_ENABLED
+
+Enable the skill execution recovery worker that reclaims pending/abandoned workflow executions.
+
+| Property | Value |
+|----------|-------|
+| Type | Boolean |
+| Default | `false` |
+
+```bash
+export SKILL_RECOVERY_ENABLED=true
+```
+
+### SKILL_WHOLE_RUN_TIMEOUT
+
+Maximum total duration per execution attempt. If the sum of all step durations exceeds this value, the execution fails. Each retry/resume attempt gets its own fresh budget. Must be a positive Go duration (e.g. `15m`, `1h`, `300s`).
+
+| Property | Value |
+|----------|-------|
+| Type | Duration |
+| Default | `15m` |
+
+```bash
+export SKILL_WHOLE_RUN_TIMEOUT=30m
+```
+
+---
+
 ## Configuration Presets
 
 ### Development with OpenRouter (Recommended)

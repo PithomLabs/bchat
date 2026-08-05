@@ -297,4 +297,20 @@ type Driver interface {
 	ListAgentEvents(ctx context.Context, find *FindAgentEvent) ([]*AgentEvent, error)
 	ClaimPendingEvents(ctx context.Context, limit int32) ([]*AgentEvent, error)
 	UpdateAgentEvent(ctx context.Context, update *AgentEvent) error
+
+	// Skill Execution methods
+	CreateSkillExecution(ctx context.Context, execution *SkillExecution) (*SkillExecution, error)
+	GetSkillExecution(ctx context.Context, find *FindSkillExecution) (*SkillExecution, error)
+	UpdateSkillExecution(ctx context.Context, execution *SkillExecution) error
+	ListSkillExecutions(ctx context.Context, find *FindSkillExecution, limit int) ([]*SkillExecution, error)
+	ListPendingSkillExecutions(ctx context.Context) ([]*SkillExecution, error)
+	ClaimSkillExecution(ctx context.Context, id string, workerID string, leaseSeconds int) (*SkillExecution, error)
+	ReleaseSkillClaim(ctx context.Context, id string) error
+	CompleteSkillExecution(ctx context.Context, id string) error
+	FailSkillExecution(ctx context.Context, id string, errorMsg string) error
+	StopSkillExecution(ctx context.Context, id string) error
+
+	// Skill Log methods
+	CreateSkillLog(ctx context.Context, log *SkillLog) error
+	ListSkillLogs(ctx context.Context, find *FindSkillLog) ([]*SkillLog, error)
 }

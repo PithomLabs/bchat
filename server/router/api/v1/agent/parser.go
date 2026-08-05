@@ -90,10 +90,71 @@ func ContentHash(content string) string {
 
 // annotationBlock represents a parsed annotation block
 type annotationBlock struct {
-	annotationType string            // e.g., "service", "exclusion", "faq"
+	annotationType string            // e.g., "service", "exclusion", "faq", "skill", "trigger", "signal"
 	params         map[string]string // parsed parameters
 	title          string            // the heading/title line after annotation
 	content        string            // the content until next annotation or section
+	lineStart      int               // 1-based line number of the annotation
+}
+
+// SkillDefinition represents a single skill node in a SCRIPT.MD annotation.
+type SkillDefinition struct {
+	Name       string            `json:"name"`
+	Handler    string            `json:"handler"`     // e.g. "builtin:classify_intent" or "llm:respond"
+	DependsOn  []string          `json:"depends_on"`
+	Timeout    string            `json:"timeout"`
+	MaxRetries int               `json:"max_retries"`
+	Condition  string            `json:"condition"`   // CEL guard expression
+	LineStart  int               `json:"line_start"`
+	Params     map[string]string `json:"params,omitempty"` // handler-specific parameters
+}
+
+// TriggerDefinition represents a @trigger annotation (start signal).
+type TriggerDefinition struct {
+	Type      string `json:"type"`       // "event", "api", "chat"
+	EventType string `json:"event_type"` // for event triggers
+}
+
+// StopSignalDefinition represents a @signal annotation (stop signal).
+type StopSignalDefinition struct {
+	Condition string `json:"condition"` // CEL expression
+	EmitEvent string `json:"emit_event"` // AgentEvent type to emit on stop
+}
+
+// SkillGraph represents the full DAG of skills parsed from SCRIPT.MD.
+type SkillGraph struct {
+	Nodes       map[string]*SkillDefinition `json:"nodes"`
+	EntryPoints []string                    `json:"entry_points"`
+	Trigger     *TriggerDefinition          `json:"trigger,omitempty"`
+	Stop        *StopSignalDefinition       `json:"stop,omitempty"`
+	HasSkills   bool                        `json:"has_skills"`
+	ContentHash string                      `json:"content_hash"`
+}
+
+// ValidationError describes a DAG validation failure with a line reference.
+type ValidationError struct {
+	Message string
+	Line    int
+}
+
+func (e *ValidationError) Error() string {
+	return e.Message
+}
+
+// parseCommaSeparated splits a comma-delimited string, trims whitespace, and filters empty values.
+func parseCommaSeparated(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // extractAnnotationBlocks finds all <!-- @type: params --> blocks and their content
@@ -163,13 +224,14 @@ func extractAnnotationBlocks(content string) []annotationBlock {
 			params:         parseParams(params),
 			title:          title,
 			content:        actualContent,
+			lineStart:      strings.Count(content[:match[0]], "\n") + 1,
 		})
 	}
 
 	return blocks
 }
 
-// parseParams parses "key: value, key2: value2" format
+// parseParams parses "key: value, key2: value2" format, respecting quoted values.
 func parseParams(s string) map[string]string {
 	params := make(map[string]string)
 	s = strings.TrimSpace(s)
@@ -177,8 +239,8 @@ func parseParams(s string) map[string]string {
 		return params
 	}
 
-	// First param might not have a key (just the code)
-	parts := strings.Split(s, ",")
+	// Split on commas, but respect quoted values
+	parts := splitRespectingQuotes(s, ',')
 	for i, part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "" {
@@ -197,6 +259,35 @@ func parseParams(s string) map[string]string {
 	}
 
 	return params
+}
+
+// splitRespectingQuotes splits a string by delimiter, ignoring delimiters inside quotes.
+func splitRespectingQuotes(s string, delim rune) []string {
+	var parts []string
+	var current strings.Builder
+	inQuote := false
+	quoteChar := rune(0)
+
+	for _, c := range s {
+		if c == '"' || c == '\'' {
+			if !inQuote {
+				inQuote = true
+				quoteChar = c
+			} else if c == quoteChar {
+				inQuote = false
+			}
+			current.WriteRune(c)
+		} else if c == delim && !inQuote {
+			parts = append(parts, current.String())
+			current.Reset()
+		} else {
+			current.WriteRune(c)
+		}
+	}
+	if current.Len() > 0 {
+		parts = append(parts, current.String())
+	}
+	return parts
 }
 
 // ParseKB parses a KB.MD file and extracts structured data.
@@ -1109,6 +1200,158 @@ func buildScriptSummary(sections []ScriptSection) string {
 	}
 
 	return sb.String()
+}
+
+// ParseScriptWithSkills parses SCRIPT.MD and extracts @skill, @trigger, and @signal annotations.
+// The returned SkillGraph is the DAG used by the execution engine.
+func (p *Parser) ParseScriptWithSkills(content string) (*ParsedScript, *SkillGraph, error) {
+	parsed, err := p.ParseScript(content)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	graph := &SkillGraph{Nodes: make(map[string]*SkillDefinition)}
+	graph.ContentHash = ContentHash(content)
+
+	blocks := extractAnnotationBlocks(content)
+	for _, block := range blocks {
+		switch block.annotationType {
+		case "skill":
+			name := block.params["code"] // first positional value stored as "code" by parseParams
+			if name == "" {
+				continue
+			}
+			skill := &SkillDefinition{
+				Name:      name,
+				Handler:   block.params["handler"],
+				DependsOn: parseCommaSeparated(block.params["depends_on"]),
+				Timeout:   block.params["timeout"],
+				Condition: block.params["condition"],
+				LineStart: block.lineStart,
+				Params:    block.params,
+			}
+			if skill.MaxRetries == 0 {
+				skill.MaxRetries = 3
+			}
+			graph.Nodes[skill.Name] = skill
+			graph.HasSkills = true
+
+		case "trigger":
+			// graph.Trigger is parsed but currently unconsumed by the execution engine.
+			// The only start path is the API endpoint (HandleStartWorkflow), which
+			// uses req.Trigger as a free-form string. The system prompt in service.go
+			// tells the LLM "the system will execute the workflow steps automatically"
+			// when a skill tool is called — this is FALSE; toolCallingLoop executes
+			// only the single selected handler, not the downstream DAG.
+			// TODO: wire graph.Trigger into event-driven start, or fix the prompt.
+			graph.Trigger = &TriggerDefinition{
+				Type:      block.params["type"],
+				EventType: block.params["event_type"],
+			}
+
+		case "signal":
+			if block.params["condition"] != "" {
+				graph.Stop = &StopSignalDefinition{
+					Condition: block.params["condition"],
+					EmitEvent: block.params["emit_event"],
+				}
+			}
+		}
+	}
+
+	if graph.HasSkills {
+		if valErr := graph.Validate(); valErr != nil {
+			return nil, nil, fmt.Errorf("invalid skill graph at line %d: %s", valErr.Line, valErr.Message)
+		}
+	}
+
+	return parsed, graph, nil
+}
+
+// Validate checks the SkillGraph for cycles and missing dependencies.
+func (g *SkillGraph) Validate() *ValidationError {
+	// Check for cycles
+	if cycle := g.detectCycle(); cycle != nil {
+		return &ValidationError{
+			Message: fmt.Sprintf("cycle detected: %s", strings.Join(cycle, " → ")),
+			Line:    g.Nodes[cycle[0]].LineStart,
+		}
+	}
+
+	// Check all depends_on references exist
+	for name, skill := range g.Nodes {
+		for _, dep := range skill.DependsOn {
+			if _, exists := g.Nodes[dep]; !exists {
+				return &ValidationError{
+					Message: fmt.Sprintf("skill %q depends on %q which does not exist", name, dep),
+					Line:    skill.LineStart,
+				}
+			}
+		}
+	}
+
+	// Identify entry points (nodes with no dependencies)
+	for name, skill := range g.Nodes {
+		if len(skill.DependsOn) == 0 {
+			g.EntryPoints = append(g.EntryPoints, name)
+		}
+	}
+
+	return nil
+}
+
+// detectCycle performs topological sort and returns the cycle path if one exists.
+func (g *SkillGraph) detectCycle() []string {
+	const (
+		white = 0 // unvisited
+		gray  = 1 // in current DFS path
+		black = 2 // fully visited
+	)
+	color := make(map[string]int, len(g.Nodes))
+	for name := range g.Nodes {
+		color[name] = white
+	}
+	parent := make(map[string]string)
+
+	var dfs func(string) []string
+	dfs = func(node string) []string {
+		color[node] = gray
+		for _, dep := range g.Nodes[node].DependsOn {
+			if _, ok := g.Nodes[dep]; !ok {
+				continue
+			}
+			if color[dep] == gray {
+				// Reconstruct cycle
+				cycle := []string{dep, node}
+				cur := node
+				for cur != dep {
+					cur = parent[cur]
+					if cur == "" {
+						break
+					}
+					cycle = append([]string{cur}, cycle...)
+				}
+				return cycle
+			}
+			if color[dep] == white {
+				parent[dep] = node
+				if cycle := dfs(dep); cycle != nil {
+					return cycle
+				}
+			}
+		}
+		color[node] = black
+		return nil
+	}
+
+	for name := range g.Nodes {
+		if color[name] == white {
+			if cycle := dfs(name); cycle != nil {
+				return cycle
+			}
+		}
+	}
+	return nil
 }
 
 // ValidateScript validates the parsed script for completeness.
