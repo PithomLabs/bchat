@@ -114,6 +114,7 @@ tasks:
         if [ -f .env ]; then
           echo "Loading environment from .env file..."
           set -a && . .env && set +a
+          [ -f .env.local ] && set -a && . .env.local && set +a
         fi
         ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
 
@@ -125,6 +126,7 @@ tasks:
         if [ -f .env ]; then
           echo "Loading environment from .env file..."
           set -a && . .env && set +a
+          [ -f .env.local ] && set -a && . .env.local && set +a
         fi
         FORCE_REINDEX_ON_STARTUP=false RAG_PIPELINE_ENABLED=true EMBEDDING_MODEL=openai/text-embedding-3-small LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
 
@@ -136,6 +138,7 @@ tasks:
         if [ -f .env ]; then
           echo "Loading environment from .env file..."
           set -a && . .env && set +a
+          [ -f .env.local ] && set -a && . .env.local && set +a
         fi
         RAG_PIPELINE_ENABLED=true LANCEDB_STORAGE_PROVIDER=s3 ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
 
@@ -148,6 +151,7 @@ tasks:
         if [ -f .env ]; then
           echo "Loading environment from .env file..."
           set -a && . .env && set +a
+          [ -f .env.local ] && set -a && . .env.local && set +a
         fi
         FORCE_REINDEX_ON_STARTUP=true RAG_PIPELINE_ENABLED=true EMBEDDING_MODEL=qwen/qwen3-embedding-8b EMBEDDING_BATCH_SIZE=32 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
 
@@ -158,6 +162,7 @@ tasks:
         if [ -f .env ]; then
           echo "Loading environment from .env file..."
           set -a && . .env && set +a
+          [ -f .env.local ] && set -a && . .env.local && set +a
         fi
         LD_LIBRARY_PATH={{.LANCEDB_LIB_DIR}}:$LD_LIBRARY_PATH RAG_PIPELINE_ENABLED=true EMBEDDING_MODEL=qwen/qwen3-embedding-8b EMBEDDING_BATCH_SIZE=10 LANCEDB_STORAGE_PROVIDER=local ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
 
@@ -169,6 +174,7 @@ tasks:
         if [ -f .env ]; then
           echo "Loading environment from .env file..."
           set -a && . .env && set +a
+          [ -f .env.local ] && set -a && . .env.local && set +a
         fi
         RAG_PIPELINE_ENABLED=true \
         EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L12-v2 \
@@ -298,8 +304,25 @@ tasks:
         if [ -f .env ]; then
           echo "Loading environment from .env file..."
           set -a && . .env && set +a
+          [ -f .env.local ] && set -a && . .env.local && set +a
         fi
         MEMOS_DRIVER=cockroach RAG_PIPELINE_ENABLED=true LANCEDB_STORAGE_PROVIDER=cockroach TICKET_EMBEDDING_ENABLED=true ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
+
+  run:cockroach:local:
+    desc: Hermetic local CockroachDB run (fresh bchat_test DB; never touches cloud; sources .env.local)
+    deps: [build:backend:cockroach]
+    cmds:
+      - |
+        if [ -f .env ]; then
+          echo "Loading environment from .env file..."
+          set -a && . .env && set +a
+        fi
+        [ -f .env.local ] && set -a && . .env.local && set +a
+        bash scripts/init-local-cockroach-db.sh
+        echo "=== Starting memos on hermetic bchat_test (port ${MEMOS_PORT:-5230}) ==="
+        MEMOS_DRIVER=cockroach RAG_PIPELINE_ENABLED=true LANCEDB_STORAGE_PROVIDER=cockroach \
+        TICKET_EMBEDDING_ENABLED=true RAG_STARTUP_REINDEX_DISABLED=true MEMOS_PORT=5230 \
+        ./build/memos --mode dev --data {{.ROOT_DIR}}/build/data
 
   run:cockroach:seed:
     desc: Seed demo tickets for hackathon demo
@@ -308,6 +331,7 @@ tasks:
         if [ -f .env ]; then
           echo "Loading environment from .env file..."
           set -a && . .env && set +a
+          [ -f .env.local ] && set -a && . .env.local && set +a
         fi
         go run cmd/seed/seed_demo_tickets.go
 
@@ -370,6 +394,7 @@ tasks:
         if [ -f .env ]; then
           echo "Loading environment from .env file..."
           set -a && . .env && set +a
+          [ -f .env.local ] && set -a && . .env.local && set +a
         fi
         COCKROACH_DSN="${COCKROACH_DSN}" ./build/memos --driver=cockroach --mode dev --data {{.ROOT_DIR}}/build/data
 

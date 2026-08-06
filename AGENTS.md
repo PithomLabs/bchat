@@ -312,6 +312,12 @@ task run:rag:l12         # L12 embeddings via OpenRouter
 task validate:schema     # Validate database schema
 ```
 
+### Local CockroachDB (hermetic, production-safe)
+
+- **Never** run local dev against the cloud cluster. In non-prod mode (`dev`/`demo`) the binary **refuses to start** with a non-loopback cockroach/postgres DSN (`internal/profile` guard; override only with `MEMOS_ALLOW_REMOTE_DSN=true`).
+- Run tasks source `.env` then overlay `.env.local` (gitignored; template: `.env.local.example`). Local runs must set `COCKROACH_DSN` to the local node's `bchat_test` DB — never the cloud URL from `.env`.
+- `task run:cockroach:local` = fresh hermetic `bchat_test` (drop+create via `scripts/init-local-cockroach-db.sh`) + server on port **5230** + log capture. Use it instead of `task run:cockroach` for local testing.
+
 ---
 
 ## Environment Variables

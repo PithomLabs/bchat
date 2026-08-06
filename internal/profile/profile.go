@@ -3,6 +3,8 @@ package profile
 import (
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -108,5 +110,31 @@ func (p *Profile) Validate() error {
 		}
 	}
 
+	if p.IsDev() && (p.Driver == "cockroach" || p.Driver == "postgres") && os.Getenv("MEMOS_ALLOW_REMOTE_DSN") != "true" {
+		if !isLoopbackDSN(p.DSN) {
+			return errors.Errorf("refusing to start in %s mode: DSN host %q is not loopback (localhost/127.0.0.1/::1). Local dev runs must not touch remote databases; set MEMOS_ALLOW_REMOTE_DSN=true to override", p.Mode, dsnHost(p.DSN))
+		}
+	}
+
 	return nil
+}
+
+func isLoopbackDSN(dsn string) bool {
+	u, err := url.Parse(dsn)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	host := u.Host
+	if h, _, err := net.SplitHostPort(u.Host); err == nil {
+		host = h
+	}
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
+func dsnHost(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil || u.Host == "" {
+		return dsn
+	}
+	return u.Host
 }

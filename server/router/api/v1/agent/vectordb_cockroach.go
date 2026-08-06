@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"regexp"
 	"strings"
 	"time"
 
@@ -314,14 +315,15 @@ func (v *CockroachVectorDB) Delete(ctx context.Context, tenantID int32, audience
 }
 
 // DeleteByVersion removes chunks for a specific version.
+// Matches both bare fileType and the chunker's "<fileType>_section" content_type.
 func (v *CockroachVectorDB) DeleteByVersion(ctx context.Context, tenantID int32, audienceType, fileType string, version int32) error {
-	_, err := v.db.ExecContext(ctx, `DELETE FROM agent_vectors WHERE tenant_id = $1 AND content_type = $2 AND source_version = $3`, tenantID, fileType, version)
+	_, err := v.db.ExecContext(ctx, `DELETE FROM agent_vectors WHERE tenant_id = $1 AND content_type IN ($2, $3) AND source_version = $4`, tenantID, fileType, fileType+"_section", version)
 	return err
 }
 
 // PurgePreVersionedChunks removes chunks that predate versioning.
 func (v *CockroachVectorDB) PurgePreVersionedChunks(ctx context.Context, tenantID int32, audienceType, fileType string) error {
-	_, err := v.db.ExecContext(ctx, `DELETE FROM agent_vectors WHERE tenant_id = $1 AND content_type = $2 AND (source_version IS NULL OR source_version <= 1)`, tenantID, fileType)
+	_, err := v.db.ExecContext(ctx, `DELETE FROM agent_vectors WHERE tenant_id = $1 AND content_type IN ($2, $3) AND (source_version IS NULL OR source_version <= 1)`, tenantID, fileType, fileType+"_section")
 	return err
 }
 
@@ -336,8 +338,9 @@ func (v *CockroachVectorDB) DeleteByIDPrefix(ctx context.Context, tenantID int32
 }
 
 // ListIndexedVersions returns distinct source_version values.
+// Matches both bare fileType and the chunker's "<fileType>_section" content_type.
 func (v *CockroachVectorDB) ListIndexedVersions(ctx context.Context, tenantID int32, audienceType, fileType string) ([]int32, error) {
-	rows, err := v.db.QueryContext(ctx, `SELECT DISTINCT source_version FROM agent_vectors WHERE tenant_id = $1 AND content_type = $2 ORDER BY source_version`, tenantID, fileType)
+	rows, err := v.db.QueryContext(ctx, `SELECT DISTINCT source_version FROM agent_vectors WHERE tenant_id = $1 AND content_type IN ($2, $3) ORDER BY source_version`, tenantID, fileType, fileType+"_section")
 	if err != nil {
 		return nil, err
 	}
@@ -384,28 +387,14 @@ func (v *CockroachVectorDB) Search(ctx context.Context, query SearchQuery) (*Sea
 	// native []float32 parameter binding can be used instead.
 	vecStr := formatVectorLiteral(queryEmbedding)
 
-	// 3. Build query with filters
-	contentTypeFilter := "''"
-	if len(query.ContentTypes) > 0 {
-		quoted := make([]string, len(query.ContentTypes))
-		for i, ct := range query.ContentTypes {
-			quoted[i] = fmt.Sprintf("'%s'", ct)
-		}
-		contentTypeFilter = strings.Join(quoted, ",")
+	// 3. Build the search query with all validation/normalization in one place
+	sqlQuery, args, err := buildCockroachSearchQuery(query, vecStr)
+	if err != nil {
+		return nil, err
 	}
 
-	sqlQuery := fmt.Sprintf(`
-		SELECT id, title, content, content_type, metadata, source_version, created_at,
-		       1 - (embedding <=> $1::VECTOR) AS similarity
-		FROM agent_vectors
-		WHERE tenant_id = $2 AND content_type IN (%s)
-		  AND (embedding <=> $1::VECTOR) <= 1 - $4
-		ORDER BY embedding <=> $1::VECTOR
-		LIMIT $3
-	`, contentTypeFilter)
-
 	// 4. Execute and scan into SearchResult
-	rows, err := v.db.QueryContext(ctx, sqlQuery, vecStr, query.TenantID, query.TopK, query.MinScore)
+	rows, err := v.db.QueryContext(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute search: %w", err)
 	}
@@ -429,6 +418,61 @@ func (v *CockroachVectorDB) Search(ctx context.Context, query SearchQuery) (*Sea
 	result.SearchMode = "vector"
 
 	return &result, rows.Err()
+}
+
+// contentTypesRe validates caller-supplied content type values before they are
+// interpolated into SQL (admin RAG search passes user-supplied fileType values).
+var contentTypesRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// buildCockroachSearchQuery builds the SQL statement and arguments for a vector
+// similarity search. It centralizes validation and normalization:
+//   - TopK <= 0 defaults to 10 (matches LanceVectorDB behavior).
+//   - Empty ContentTypes emits no content_type predicate at all — "search all
+//     types", the documented intent of the chat retrieval path (RetrieveContextForQuery).
+//   - Non-empty ContentTypes are validated against an allowlist and expanded so
+//     a bare type (e.g. "kb") also matches the chunker's "<type>_section" rows
+//     (chunker.go stores ContentType as fileType + "_section").
+func buildCockroachSearchQuery(query SearchQuery, vecStr string) (string, []interface{}, error) {
+	if query.TopK <= 0 {
+		query.TopK = 10
+	}
+
+	where := "tenant_id = $2 AND (embedding <=> $1::VECTOR) <= 1 - $4"
+	if len(query.ContentTypes) > 0 {
+		seen := make(map[string]struct{}, len(query.ContentTypes)*2)
+		var types []string
+		for _, ct := range query.ContentTypes {
+			if !contentTypesRe.MatchString(ct) {
+				return "", nil, fmt.Errorf("invalid content_type value")
+			}
+			for _, t := range []string{ct, ct + "_section"} {
+				if strings.HasSuffix(ct, "_section") && t != ct {
+					continue
+				}
+				if _, ok := seen[t]; ok {
+					continue
+				}
+				seen[t] = struct{}{}
+				types = append(types, t)
+			}
+		}
+		quoted := make([]string, len(types))
+		for i, t := range types {
+			quoted[i] = fmt.Sprintf("'%s'", t)
+		}
+		where += fmt.Sprintf(" AND content_type IN (%s)", strings.Join(quoted, ", "))
+	}
+
+	sqlQuery := fmt.Sprintf(`
+		SELECT id, title, content, content_type, metadata, source_version, created_at,
+		       1 - (embedding <=> $1::VECTOR) AS similarity
+		FROM agent_vectors
+		WHERE %s
+		ORDER BY embedding <=> $1::VECTOR
+		LIMIT $3
+	`, where)
+
+	return sqlQuery, []interface{}{vecStr, query.TenantID, query.TopK, query.MinScore}, nil
 }
 
 // formatVectorLiteral formats a []float32 as a CockroachDB vector literal string: [0.1,0.2,...]
